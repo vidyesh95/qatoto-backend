@@ -501,3 +501,39 @@ function makeTeardownFileDownloadHandler(segment: "documents" | "fabrication-fil
 export const downloadTeardownDocument = makeTeardownFileDownloadHandler("documents");
 export const downloadTeardownManufacturingFile =
   makeTeardownFileDownloadHandler("fabrication-files");
+
+/**
+ * `GET /blueprints/teardowns/:teardownSlug/assembly-model` and `.../part-models/:partId`.
+ *
+ * The same shape as the two file downloads beside them, gated the same way and for the same reason.
+ * A `.glb` is fetched by a WebGL viewer rather than saved by a person, which changes nothing about
+ * the gate: a quarantine withholds the geometry, and the only address the viewer has is this route.
+ */
+function makeTeardownModelDownloadHandler(scope: "assembly" | "part") {
+  return async function downloadTeardownModel(req: Request, res: Response): Promise<void> {
+    const resolved = await teardownPublicReadService.resolveDownloadableTeardownModel({
+      teardownSlug: firstParam(req.params.teardownSlug ?? ""),
+      partId: scope === "part" ? firstParam(req.params.partId ?? "") : null,
+    });
+    if (resolved === null) {
+      respondTeardownFileNotFound(res);
+      return;
+    }
+
+    const presigned = await presignTeardownFileDownload(resolved.objectStorageKey);
+    if (!presigned.success) {
+      res.status(presigned.error.type === "NOT_CONFIGURED" ? 503 : 502).json({
+        status: "error",
+        statusCode: presigned.error.type === "NOT_CONFIGURED" ? 503 : 502,
+        message: "That model could not be fetched right now.",
+      });
+      return;
+    }
+
+    res.setHeader("Cache-Control", "no-store");
+    res.redirect(302, presigned.value.downloadUrl);
+  };
+}
+
+export const downloadTeardownAssemblyModel = makeTeardownModelDownloadHandler("assembly");
+export const downloadTeardownPartModel = makeTeardownModelDownloadHandler("part");

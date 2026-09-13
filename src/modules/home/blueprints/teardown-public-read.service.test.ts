@@ -297,6 +297,9 @@ function buildCompositeAssemblyRow(overrides: Record<string, unknown> = {}): Rec
     explosionAxisX: 0,
     explosionAxisY: 1,
     explosionAxisZ: 0,
+    modelSource: "pasted_link",
+    modelObjectStorageKey: null,
+    modelContentSha256: null,
     modelUrl: "/dummy/models/controller.glb",
     modelByteSize: 482_000,
     ...overrides,
@@ -709,6 +712,36 @@ describe("the quarantine withholding", () => {
     // ⚠️ AND THE OBJECT KEY NEVER REACHES THE WIRE. It names the bucket layout, which is ours.
     expect(JSON.stringify(result.value)).not.toContain("teardowns/user_1/uploads");
     expect(pasted?.url).toBe("/dummy/documents/controller-schematic.pdf");
+  });
+
+  /**
+   * ⚠️ AN UPLOADED MODEL IS SERVED AS A ROUTE, exactly as an uploaded document is. `assembly` is in
+   * `withheldPayload()`, so a quarantine is meant to take the geometry away — and it can only do
+   * that if the viewer's only address for the `.glb` is a route that re-checks the gate. A stored
+   * public URL would keep serving the model to anyone who saved it.
+   */
+  it("serves an uploaded assembly model as a route, and never leaks its object key", async () => {
+    databaseState.teardownRows = [buildTeardownRow()];
+    seedFullTree();
+    databaseState.childRowsByTable.teardown_assembly = [
+      buildCompositeAssemblyRow({
+        modelSource: "uploaded",
+        modelUrl: null,
+        modelObjectStorageKey: `teardowns/user_1/uploads/${"a".repeat(64)}.glb`,
+        modelContentSha256: "a".repeat(64),
+      }),
+    ];
+    const { getPublicTeardownBySlug } = await importService();
+
+    const result = await getPublicTeardownBySlug("solar-cold-storage-controller-teardown");
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.value.assembly?.kind).toBe("composite");
+    expect(result.value.assembly?.kind === "composite" && result.value.assembly.model.url).toBe(
+      "/blueprints/teardowns/solar-cold-storage-controller-teardown/assembly-model",
+    );
+    expect(JSON.stringify(result.value)).not.toContain("uploads/");
   });
 
   /** A `flagged` teardown is listed AND served whole — flagging is not quarantining. */

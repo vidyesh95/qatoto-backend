@@ -393,6 +393,25 @@ router.get(
   teardownController.downloadTeardownManufacturingFile,
 );
 
+/*
+ * THE TWO MODEL DOWNLOADS. `assembly-model` is three segments and DOES add a literal under
+ * `/teardowns/:teardownSlug/`, which is a different namespace from `/teardowns/` itself — it cannot
+ * collide with a slug, only with another sub-route, and there is none.
+ *
+ * Gated identically to the file downloads: `assembly` is in `withheldPayload()`, so a quarantine
+ * takes the geometry away and this route is the only address the viewer has for it.
+ */
+router.get(
+  "/teardowns/:teardownSlug/assembly-model",
+  teardownFileDownloadLimiter,
+  teardownController.downloadTeardownAssemblyModel,
+);
+router.get(
+  "/teardowns/:teardownSlug/part-models/:partId",
+  teardownFileDownloadLimiter,
+  teardownController.downloadTeardownPartModel,
+);
+
 /** GET /blueprints/teardowns/:teardownSlug — one readable teardown. DECLARED LAST of the five. */
 router.get("/teardowns/:teardownSlug", teardownController.getPublicTeardown);
 

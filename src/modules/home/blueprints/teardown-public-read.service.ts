@@ -388,6 +388,7 @@ function buildWalkthroughVideo(row: TeardownRow): PublicTeardownView["walkthroug
 function buildAssembly(
   assemblyRow: typeof teardownAssembly.$inferSelect | undefined,
   partRows: readonly (typeof teardownPart.$inferSelect)[],
+  teardownSlug: string,
 ): PublicTeardownView["assembly"] {
   if (assemblyRow === undefined || partRows.length === 0) return null;
 
@@ -416,7 +417,12 @@ function buildAssembly(
   switch (assemblyRow.kind) {
     case "composite": {
       // Non-null on this arm: `teardown_assembly_kind_shape_ck` ties the model to the discriminator.
-      if (assemblyRow.modelUrl === null || assemblyRow.modelByteSize === null) return null;
+      const assemblyModelUrl = resolveTeardownModelAddress(
+        teardownSlug,
+        "assembly-model",
+        assemblyRow,
+      );
+      if (assemblyModelUrl === null || assemblyRow.modelByteSize === null) return null;
       const parts = partRows.flatMap((partRow) =>
         partRow.nodeName === null
           ? []
@@ -427,22 +433,27 @@ function buildAssembly(
       return {
         kind: "composite",
         explosionAxis,
-        model: { url: assemblyRow.modelUrl, byteSize: assemblyRow.modelByteSize },
+        model: { url: assemblyModelUrl, byteSize: assemblyRow.modelByteSize },
         parts,
       };
     }
     case "individual_parts": {
-      const parts = partRows.flatMap((partRow) =>
-        partRow.modelUrl === null || partRow.modelByteSize === null
-          ? []
-          : [
-              {
-                ...basePartFields(partRow),
-                model: { url: partRow.modelUrl, byteSize: partRow.modelByteSize },
-                placement: buildPlacement(partRow),
-              },
-            ],
-      );
+      const parts = partRows.flatMap((partRow) => {
+        const partModelUrl = resolveTeardownModelAddress(
+          teardownSlug,
+          "part-models",
+          partRow,
+          partRow.id,
+        );
+        if (partModelUrl === null || partRow.modelByteSize === null) return [];
+        return [
+          {
+            ...basePartFields(partRow),
+            model: { url: partModelUrl, byteSize: partRow.modelByteSize },
+            placement: buildPlacement(partRow),
+          },
+        ];
+      });
       if (parts.length === 0) return null;
 
       return { kind: "individual_parts", explosionAxis, parts };
@@ -540,6 +551,87 @@ function withheldPayload(): Pick<
 }
 
 /**
+ * Resolves an uploaded MODEL to the object key its bytes live at — or `null`, for every reason.
+ *
+ * ⚠️ THE SAME **LIST** GATE THE FILE DOWNLOADS USE, and for the same reason: `assembly` is in
+ * `withheldPayload()`, so a quarantine is supposed to take the geometry away. Serving the `.glb`
+ * from a route that only checked READABLE would leave the model reachable while the page hid it —
+ * the exact split this design exists to close.
+ *
+ * ⚠️ ONE `null` FOR EVERY REASON, and the caller answers 404 to all of them.
+ */
+export async function resolveDownloadableTeardownModel(input: {
+  readonly teardownSlug: string;
+  readonly partId: string | null;
+}): Promise<{ readonly objectStorageKey: string } | null> {
+  const [teardownRow] = await db
+    .select({ id: teardown.id })
+    .from(teardown)
+    .where(and(eq(teardown.slug, input.teardownSlug), listVisibleTeardownCondition()))
+    .limit(1);
+  if (!teardownRow) return null;
+
+  const [assemblyRow] = await db
+    .select({ id: teardownAssembly.id, objectStorageKey: teardownAssembly.modelObjectStorageKey })
+    .from(teardownAssembly)
+    .where(eq(teardownAssembly.teardownId, teardownRow.id))
+    .limit(1);
+  if (!assemblyRow) return null;
+
+  if (input.partId === null) {
+    return assemblyRow.objectStorageKey === null
+      ? null
+      : { objectStorageKey: assemblyRow.objectStorageKey };
+  }
+
+  const [partRow] = await db
+    .select({ objectStorageKey: teardownPart.modelObjectStorageKey })
+    .from(teardownPart)
+    .where(and(eq(teardownPart.assemblyId, assemblyRow.id), eq(teardownPart.id, input.partId)))
+    .limit(1);
+  return partRow?.objectStorageKey === null || partRow === undefined
+    ? null
+    : { objectStorageKey: partRow.objectStorageKey };
+}
+
+/**
+ * The address a viewer fetches a model from, on whichever arm it arrived.
+ *
+ * ⚠️ AN UPLOADED MODEL'S ADDRESS IS COMPUTED, exactly as a document's is, and for the same reason:
+ * a presigned URL expires in 300 seconds so it cannot be stored, and the stored object key is not a
+ * URL. `assembly` is in `withheldPayload()`, so routing the model through a gated route is what
+ * makes a quarantine take the geometry away rather than merely stop naming it.
+ *
+ * `null` for a row that is neither, which the shape CHECK makes unreachable — the caller drops it
+ * rather than reaching for `as`.
+ */
+function resolveTeardownModelAddress(
+  teardownSlug: string,
+  segment: "assembly-model" | "part-models",
+  row: {
+    readonly modelSource: "pasted_link" | "uploaded" | null;
+    readonly modelUrl: string | null;
+    readonly modelObjectStorageKey: string | null;
+  },
+  partId?: string,
+): string | null {
+  switch (row.modelSource) {
+    case "pasted_link":
+      return row.modelUrl;
+    case "uploaded":
+      return partId === undefined
+        ? `/blueprints/teardowns/${teardownSlug}/${segment}`
+        : `/blueprints/teardowns/${teardownSlug}/${segment}/${partId}`;
+    case null:
+      return null;
+    default: {
+      const exhaustiveCheck: never = row.modelSource;
+      throw new Error(`Unhandled teardown model source: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
  * The address a reader follows for one file, whichever way it arrived.
  *
  * ⚠️ THE UPLOADED ARM'S ADDRESS IS COMPUTED, NEVER STORED, and that is forced rather than chosen: a
@@ -607,7 +699,7 @@ function buildTeardownView(row: TeardownRow, childRows: TeardownChildRows): Publ
     row.moderationState === "quarantined"
       ? withheldPayload()
       : {
-          assembly: buildAssembly(assemblyRow, partRows),
+          assembly: buildAssembly(assemblyRow, partRows, row.slug),
           assemblySteps: childRows.stepRows
             .filter((candidate) => candidate.teardownId === row.id)
             .map((stepRow) => ({

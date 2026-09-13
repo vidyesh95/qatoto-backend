@@ -200,9 +200,25 @@ export async function submitTeardown(input: {
    * Every staged upload this document names. Collected before the transaction so an unknown id is a
    * cheap refusal rather than a rollback.
    */
-  const namedUploadIds = [...submission.documents, ...submission.manufacturingFiles].flatMap(
-    (file) => (file.source === "uploaded" ? [file.uploadId] : []),
-  );
+  /*
+   * ⚠️ THE ASSEMBLY'S MODELS COUNT TOO, and leaving them out is the quiet failure this comment
+   * exists to prevent: an unclaimed upload is exactly what `sweep-orphan-teardown-uploads` deletes
+   * after a day, so a `.glb` that was never claimed would vanish while the submission sat in the
+   * review queue — and the publish would then throw on a row that no longer exists.
+   */
+  const namedModelUploadIds =
+    submission.assembly === null
+      ? []
+      : submission.assembly.kind === "composite"
+        ? [submission.assembly.model.modelUploadId]
+        : submission.assembly.parts.map((part) => part.model.modelUploadId);
+
+  const namedUploadIds = [
+    ...[...submission.documents, ...submission.manufacturingFiles].flatMap((file) =>
+      file.source === "uploaded" ? [file.uploadId] : [],
+    ),
+    ...namedModelUploadIds,
+  ];
 
   try {
     const outcome = await db.transaction(async (transaction) => {
