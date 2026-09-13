@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
 
-import { and, count, eq, isNull } from "drizzle-orm";
+import { and, count, eq, isNotNull, isNull } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { teardownSubmissionFileUpload } from "#src/db/schema.js";
 import {
+  teardown,
+  teardownAssembly,
+  teardownDocument,
+  teardownManufacturingFile,
+  teardownPart,
+  teardownSubmissionFileUpload,
+} from "#src/db/schema.js";
+import { logger } from "#src/lib/logger.js";
+import {
+  deleteTeardownFile,
   teardownFileObjectKey,
   uploadTeardownFile,
   type ObjectStorageError,
@@ -167,4 +176,120 @@ async function findExistingUploadId(objectKey: string): Promise<string | null> {
     .where(eq(teardownSubmissionFileUpload.objectStorageKey, objectKey))
     .limit(1);
   return existing?.id ?? null;
+}
+
+/**
+ * Every stored object an author's teardown files occupy, deleted on erasure.
+ *
+ * ⚠️ THIS EXISTS BECAUSE THIS FAMILY IS THE ONE THAT ACTUALLY ORPHANS. Most object-storage families
+ * do not: a research paper's `uploader_user_id` is `null_out`, so the row outlives the account and
+ * the bytes stay referenced; commerce and product documents have no `user` foreign key at all and
+ * belong to an organization. Video documents and data exports are purged by their own named steps.
+ * Teardown files are different only because `teardown.author_user_id` and
+ * `teardown_submission_file_upload.uploaded_by_user_id` are BOTH `delete_rows` — so the rows go, and
+ * without this the keys on them become unreachable bytes nothing can find.
+ *
+ * ⚠️ AND IT IS AN ERASURE OBLIGATION, NOT HOUSEKEEPING. A `.step` file or a datasheet is content the
+ * author uploaded; deleting the row while keeping the bytes has not erased it.
+ *
+ * FOUR SOURCES, because a file's key can sit on four tables by the time it is published: the staging
+ * row, the two child file tables, and the two assembly tables' model columns.
+ *
+ * ⚠️ LOGS RATHER THAN THROWS ON A FAILED DELETE — `deleteStoredVideoDocumentsForCreator`'s rule, and
+ * the reason is the person asking. A storage outage must not dead-letter an erasure and leave
+ * somebody's deletion request stuck behind a bucket. S3 `DeleteObject` succeeds on an absent key, so
+ * a resumed scrub re-running this step is safe.
+ */
+/**
+ * The keys, without touching storage — what the erasure DRY RUN reports.
+ *
+ * ⚠️ THE PREVIEW MUST NOT DELETE. `anonymizeAccount` runs every step with `isEnabled` false to show
+ * a person what an erasure would do before they confirm it, so the counting path and the deleting
+ * path have to be separable. Sharing the collection is what stops the two disagreeing about the
+ * number.
+ */
+export async function countStoredTeardownFilesForAuthor(authorUserId: string): Promise<number> {
+  return (await collectTeardownFileObjectKeys(authorUserId)).size;
+}
+
+async function collectTeardownFileObjectKeys(authorUserId: string): Promise<ReadonlySet<string>> {
+  const stagedRows = await db
+    .select({ objectStorageKey: teardownSubmissionFileUpload.objectStorageKey })
+    .from(teardownSubmissionFileUpload)
+    .where(eq(teardownSubmissionFileUpload.uploadedByUserId, authorUserId));
+
+  const documentRows = await db
+    .select({ objectStorageKey: teardownDocument.objectStorageKey })
+    .from(teardownDocument)
+    .innerJoin(teardown, eq(teardown.id, teardownDocument.teardownId))
+    .where(
+      and(eq(teardown.authorUserId, authorUserId), isNotNull(teardownDocument.objectStorageKey)),
+    );
+
+  const fabricationRows = await db
+    .select({ objectStorageKey: teardownManufacturingFile.objectStorageKey })
+    .from(teardownManufacturingFile)
+    .innerJoin(teardown, eq(teardown.id, teardownManufacturingFile.teardownId))
+    .where(
+      and(
+        eq(teardown.authorUserId, authorUserId),
+        isNotNull(teardownManufacturingFile.objectStorageKey),
+      ),
+    );
+
+  const assemblyRows = await db
+    .select({ objectStorageKey: teardownAssembly.modelObjectStorageKey })
+    .from(teardownAssembly)
+    .innerJoin(teardown, eq(teardown.id, teardownAssembly.teardownId))
+    .where(
+      and(
+        eq(teardown.authorUserId, authorUserId),
+        isNotNull(teardownAssembly.modelObjectStorageKey),
+      ),
+    );
+
+  const partRows = await db
+    .select({ objectStorageKey: teardownPart.modelObjectStorageKey })
+    .from(teardownPart)
+    .innerJoin(teardownAssembly, eq(teardownAssembly.id, teardownPart.assemblyId))
+    .innerJoin(teardown, eq(teardown.id, teardownAssembly.teardownId))
+    .where(
+      and(eq(teardown.authorUserId, authorUserId), isNotNull(teardownPart.modelObjectStorageKey)),
+    );
+
+  /*
+   * ⚠️ DEDUPLICATED, BECAUSE THE KEY IS CONTENT-ADDRESSED. One author uploading the same bytes twice
+   * converges on one object, and a published file's key is COPIED from its staging row rather than
+   * moved — so the same key legitimately appears on two of the reads above. Deleting it twice is
+   * harmless, but counting it twice would make the step log say something false.
+   */
+  const objectKeys = new Set<string>();
+  for (const row of [
+    ...stagedRows,
+    ...documentRows,
+    ...fabricationRows,
+    ...assemblyRows,
+    ...partRows,
+  ]) {
+    if (row.objectStorageKey !== null) objectKeys.add(row.objectStorageKey);
+  }
+
+  return objectKeys;
+}
+
+export async function deleteStoredTeardownFilesForAuthor(authorUserId: string): Promise<number> {
+  const objectKeys = await collectTeardownFileObjectKeys(authorUserId);
+
+  for (const objectKey of objectKeys) {
+    const removed = await deleteTeardownFile(objectKey);
+    if (!removed.success) {
+      logger.error("blueprints: teardown file left in storage after account anonymization", {
+        authorUserId,
+        objectKey,
+        reason: removed.error.type,
+      });
+    }
+  }
+
+  return objectKeys.size;
 }

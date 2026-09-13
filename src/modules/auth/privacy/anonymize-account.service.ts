@@ -460,6 +460,7 @@ export function planFreeTextSteps(userId: string): readonly StepPlan[] {
 export const PLANNED_ANONYMIZATION_STEP_NAMES: readonly string[] = [
   ...planFreeTextSteps("step-name-probe").map((step) => step.stepName),
   "purge_video_document_objects",
+  "purge_teardown_file_objects",
   "purge_showcase_launch_images",
   "purge_data_exports",
   ...DELETE_ROW_KEYS,
@@ -604,6 +605,34 @@ export async function anonymizeAccount(
     if (!stillPending.success) return stillPending;
 
     rowsByStep["purge_video_document_objects"] = await purgeVideoDocumentObjects(
+      requestId,
+      userId,
+      isEnabled,
+    );
+  }
+
+  /**
+   * --- 1.5b. Teardown files, before the loop below deletes the rows that name them.
+   *
+   * ⚠️ THIS FAMILY IS THE ONE THAT ACTUALLY ORPHANS, AND THE COMPARISON IS THE POINT. Most
+   * object-storage families need no step here: a research paper's `uploader_user_id` is `null_out`,
+   * so the row outlives the account and its bytes stay referenced; commerce and product documents
+   * have no `user` foreign key at all and belong to an organization. Deleting either would be data
+   * loss rather than erasure. Teardown files differ only because `teardown.author_user_id` AND
+   * `teardown_submission_file_upload.uploaded_by_user_id` are both `delete_rows`.
+   *
+   * ⚠️ AND IT IS AN ERASURE OBLIGATION RATHER THAN HOUSEKEEPING. A datasheet or a `.step` file is
+   * content the author uploaded; deleting the row and keeping the bytes has not erased it.
+   *
+   * THE SAME POSITION ARGUMENT AS 1.5: the keys live on rows the loop below deletes, so this has to
+   * read them first. A storage failure logs and continues, for the reason 1.6 gives — an erasure
+   * stuck behind a bucket is the worse outcome for the person who asked for it.
+   */
+  if (!completedSteps.has("purge_teardown_file_objects")) {
+    const stillPending = await assertStillPending(requestId);
+    if (!stillPending.success) return stillPending;
+
+    rowsByStep["purge_teardown_file_objects"] = await purgeTeardownFileObjects(
       requestId,
       userId,
       isEnabled,
@@ -802,6 +831,40 @@ async function purgeVideoDocumentObjects(
  * Deletes every showcase launch heading image and write-up image this person uploaded, and
  * reports how many. DRY RUN COUNTS RATHER THAN DELETES, like the step above.
  */
+/**
+ * Deletes the bucket objects an author's teardown files occupy.
+ *
+ * ⚠️ COUNTED IN OBJECTS, NOT ROWS, and the step log says `teardown_submission_file_upload` because a
+ * key can sit on four other tables too. The number is deduplicated: the key is content-addressed and
+ * a published file's key is COPIED from its staging row rather than moved, so one object is
+ * legitimately named twice.
+ */
+async function purgeTeardownFileObjects(
+  requestId: string,
+  userId: string,
+  isEnabled: boolean,
+): Promise<number> {
+  const { deleteStoredTeardownFilesForAuthor, countStoredTeardownFilesForAuthor } =
+    await import("#src/modules/home/blueprints/teardown-upload.service.js");
+
+  if (!isEnabled) return countStoredTeardownFilesForAuthor(userId);
+
+  const purgedObjectCount = await deleteStoredTeardownFilesForAuthor(userId);
+
+  await db.insert(anonymizationStepLog).values({
+    requestId,
+    stepName: "purge_teardown_file_objects",
+    tableName: "teardown_submission_file_upload",
+    rowsAffected: purgedObjectCount,
+  });
+
+  if (purgedObjectCount > 0) {
+    logger.info("purged teardown file objects during anonymization", { userId, purgedObjectCount });
+  }
+
+  return purgedObjectCount;
+}
+
 async function purgeShowcaseLaunchImages(
   requestId: string,
   userId: string,

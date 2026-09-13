@@ -775,11 +775,12 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
      * and has not yet attached to anything. `original_file_name` is free text the author typed,
      * and deleting the row is what reaches it.
      *
-     * ⚠️ THE BUCKET OBJECT IS NOT DELETED BY THIS, and that gap is platform-wide rather than this
-     * table's: nothing in this module calls any `object-storage.ts` delete, for papers, commerce
-     * documents, video documents or product documents either. The orphan sweep reaches an
-     * unclaimed upload within a day; a claimed one cascades with the submission and leaves its
-     * bytes behind, exactly as the other four families do.
+     * ⚠️ THE BUCKET OBJECT IS DELETED BY `purge_teardown_file_objects`, NOT BY THIS ENTRY, and the
+     * two have to be read together. `delete_rows` here takes the row; the keys on it would become
+     * unreachable bytes without that step, because this family is the one where BOTH owning columns
+     * — here and `teardown.author_user_id` — delete rather than null out. Research papers null out
+     * and outlive the account; commerce and product documents have no user reference at all. Those
+     * need no purge precisely because their rows survive.
      */
     "teardown_submission_file_upload.uploaded_by_user_id": { kind: "delete_rows" },
     /**

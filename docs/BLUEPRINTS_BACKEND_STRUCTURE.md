@@ -768,12 +768,33 @@ is unique, so a retry converges on the same object and the same row and is answe
 the existing receipt rather than a 409 — `attachVideoDocument`'s argument that the storage layer
 being idempotent by construction is stronger than a replayed response.
 
-⚠️ **THE BUCKET OBJECT SURVIVES AN ERASURE, and that gap is platform-wide rather than this feature's.**
-Nothing in `src/modules/auth/privacy/` calls any `object-storage.ts` delete — not for papers,
-commerce documents, video documents or product documents either. The manifest entry is
-`delete_rows` and the orphan sweep reaches an unclaimed upload within a day; a claimed one cascades
-with its submission and leaves its bytes, exactly as the other four families do. Worth closing once,
-for all five.
+⚠️ **THE BUCKET OBJECT IS DELETED ON ERASURE, BY ITS OWN NAMED STEP — and an earlier version of this
+paragraph said the opposite, which is worth recording because it was wrong in a way that discouraged
+the fix.** It claimed nothing in `src/modules/auth/privacy/` deletes object storage and that the gap
+was "platform-wide". Both halves were false, and the mistake was grepping for the `deleteX` function
+names rather than for the purge STEPS, which call through service wrappers.
+
+What is actually true:
+
+| Family | Disposition on erasure | Orphan? |
+| --- | --- | --- |
+| Research papers | `research_program_paper.uploader_user_id` is **`null_out`** | No — the paper belongs to the program and outlives the uploader |
+| Commerce / product documents | no `user` foreign key at all | No — owned by an organization, so nothing is orphaned |
+| Video documents | `purge_video_document_objects` | No — purged explicitly |
+| Data exports | `purge_data_exports` | No — purged explicitly |
+| Showcase images | `purge_showcase_launch_images` | No — purged explicitly (Cloudinary) |
+| **Teardown files** | `teardown.author_user_id` and `teardown_submission_file_upload.uploaded_by_user_id` are **both `delete_rows`** | **Yes, and `purge_teardown_file_objects` is why this step exists** |
+
+⚠️ **THIS FAMILY IS THE EXCEPTION, AND UPLOADS CREATED IT.** Most families need no purge because
+their rows SURVIVE the erasure, so their bytes stay referenced and deleting them would be data loss
+rather than hygiene. Teardown files differ only because both owning columns are `delete_rows` — the
+rows go, and without the step the keys on them become unreachable bytes nothing can find.
+
+⚠️ **AND IT IS AN ERASURE OBLIGATION RATHER THAN HOUSEKEEPING.** A datasheet or a `.step` file is
+content the author uploaded; deleting the row while keeping the bytes has not erased it. The step
+runs BEFORE the row deletes, because the keys live on the rows being deleted, and it logs rather than
+throws on a storage failure — an erasure stuck behind a bucket is the worse outcome for the person
+who asked for it.
 
 ---
 

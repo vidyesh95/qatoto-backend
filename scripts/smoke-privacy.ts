@@ -37,13 +37,50 @@ import { eq, sql } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db, pool } from "#src/db/index.js";
-import { account, accountDeletionRequest, session, user } from "#src/db/schema.js";
+import {
+  account,
+  accountDeletionRequest,
+  session,
+  teardownSubmissionFileUpload,
+  user,
+} from "#src/db/schema.js";
 import { auth } from "#src/lib/auth.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import { isObjectStorageConfigured, presignTeardownFileDownload } from "#src/lib/object-storage.js";
 import { requestAccountDeletion } from "#src/modules/auth/privacy/account-deletion.service.js";
 import { anonymizeAccount } from "#src/modules/auth/privacy/anonymize-account.service.js";
+import { uploadTeardownSubmissionFile } from "#src/modules/home/blueprints/teardown-upload.service.js";
 
 let failureCount = 0;
+
+/** A minimal PDF that clears `validatePdfBytes`' own 512-byte floor. */
+function buildSmokePrivacyPdfBytes(): Buffer {
+  const lines = [
+    "%PDF-1.7",
+    "1 0 obj",
+    "<< /Type /Catalog >>",
+    "endobj",
+    ...Array.from({ length: 80 }, () => "% padding"),
+    "trailer",
+    "<< /Root 1 0 R >>",
+    "%%EOF",
+  ];
+  return Buffer.from(lines.join("\n") + "\n", "latin1");
+}
+
+/**
+ * Asks the bucket directly whether an object is still there.
+ *
+ * ⚠️ A PRESIGN IS NOT A TEST OF EXISTENCE — signing is arithmetic over the key and the credentials,
+ * so it succeeds for a key that was never written. This fetches the signed URL and reads the STATUS:
+ * a 404 or 403 means gone, a 200 means the erasure left the bytes behind.
+ */
+async function teardownFileObjectExists(objectKey: string): Promise<boolean> {
+  const presigned = await presignTeardownFileDownload(objectKey);
+  if (!presigned.success) return false;
+  const probe = await fetch(presigned.value.downloadUrl, { method: "GET" });
+  return probe.ok;
+}
 
 function check(label: string, passed: boolean, detail: string): void {
   console.log(`${passed ? "PASS" : "FAIL"}  ${label} — ${detail}`);
@@ -410,6 +447,39 @@ async function main(): Promise<void> {
       INSERT INTO showcase_launch_team_member (id, launch_id, position, display_name, handle, role)
       VALUES (${randomUUID()}, ${fixtureLaunchId}, 0, ${subjectName}, ${subjectHandle}, 'Engineer')`);
 
+    /*
+     * ⚠️ A TEARDOWN FILE THE SUBJECT UPLOADED, BECAUSE THIS IS THE ONE FAMILY THAT ORPHANS.
+     *
+     * Most object-storage families need no purge: a research paper's `uploader_user_id` is
+     * `null_out` so the row outlives the account and its bytes stay referenced, and commerce and
+     * product documents have no user reference at all. Teardown files differ because BOTH owning
+     * columns are `delete_rows` — so without `purge_teardown_file_objects` the row goes and the
+     * bytes stay, which is not an erasure. Only a real bucket call can show the difference.
+     */
+    let uploadedObjectKey: string | undefined;
+    if (isObjectStorageConfigured()) {
+      const uploaded = await uploadTeardownSubmissionFile({
+        uploaderUserId: subjectId,
+        declaredFormat: "pdf",
+        fileBytes: buildSmokePrivacyPdfBytes(),
+        originalFileName: "subject-datasheet.pdf",
+      });
+      check(
+        "a teardown file uploads for the subject",
+        uploaded.success,
+        uploaded.success ? uploaded.value.uploadId : JSON.stringify(uploaded.error),
+      );
+      if (uploaded.success) {
+        const [storedRow] = await db
+          .select({ objectStorageKey: teardownSubmissionFileUpload.objectStorageKey })
+          .from(teardownSubmissionFileUpload)
+          .where(eq(teardownSubmissionFileUpload.id, uploaded.value.uploadId));
+        uploadedObjectKey = storedRow?.objectStorageKey;
+      }
+    } else {
+      console.log("      (object storage is not configured — the teardown file half is skipped)");
+    }
+
     const scrubbed = await anonymizeAccount(forScrub.value.requestId);
     check("the scrub ran", scrubbed.success, JSON.stringify(scrubbed));
     if (!scrubbed.success) return;
@@ -611,6 +681,21 @@ async function main(): Promise<void> {
       const burned = await db.execute(
         sql`SELECT expires_at FROM handle_reservations WHERE user_id = ${subjectId}`,
       );
+      /*
+       * ⚠️ THE BYTES, NOT THE ROW. The row is gone either way — `delete_rows` on
+       * `teardown_submission_file_upload.uploaded_by_user_id` sees to that, and asserting its
+       * absence would still pass with `purge_teardown_file_objects` deleted. Asking the bucket is
+       * the only thing that separates "erased" from "unreferenced but still sitting there".
+       */
+      if (uploadedObjectKey !== undefined) {
+        const stillStored = await teardownFileObjectExists(uploadedObjectKey);
+        check(
+          "THE UPLOADED FILE'S BYTES ARE GONE FROM THE BUCKET, not just its row",
+          !stillStored,
+          stillStored ? `${uploadedObjectKey} SURVIVED the erasure` : "the object was deleted",
+        );
+      }
+
       check(
         "the handle is burned forever",
         burned.rows.length === 1,
