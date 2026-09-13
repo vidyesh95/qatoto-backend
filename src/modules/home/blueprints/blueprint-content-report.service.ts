@@ -445,6 +445,7 @@ export async function dismissBlueprintContentReport(input: {
         targetKind: blueprintContentReport.targetKind,
         teardownId: blueprintContentReport.teardownId,
         caseStudyId: blueprintContentReport.caseStudyId,
+        showcaseLaunchId: blueprintContentReport.showcaseLaunchId,
       })
       .from(blueprintContentReport)
       .where(eq(blueprintContentReport.id, input.reportId))
@@ -474,7 +475,13 @@ export async function dismissBlueprintContentReport(input: {
       payload: {
         reportId: existing.id,
         targetKind: existing.targetKind,
-        targetId: existing.teardownId ?? existing.caseStudyId,
+        /*
+         * ⚠️ ALL THREE ARMS, OR THE ENTRY NAMES NO TARGET AT ALL. `num_nonnulls(...) = 1` on the
+         * report guarantees exactly one of these is set, so the coalesce chain has to list every
+         * column the enum admits — a chain one short writes `null` for that arm, silently, into a
+         * hash-linked chain that is kept forever and cannot be corrected in place.
+         */
+        targetId: existing.teardownId ?? existing.caseStudyId ?? existing.showcaseLaunchId,
         hasResolutionNote: true,
       },
       occurredAt: decidedAt,

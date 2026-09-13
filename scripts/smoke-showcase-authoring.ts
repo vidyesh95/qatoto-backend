@@ -39,11 +39,12 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import sharp from "sharp";
 
 import { db, pool } from "#src/db/index.js";
 import {
+  blueprintContentReport,
   blueprintModerationAction,
   platformAuditEntry,
   showcaseLaunch,
@@ -57,6 +58,7 @@ import {
   showcaseWriteUpImagePublicId,
 } from "#src/lib/cloudinary.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import { dismissBlueprintContentReport } from "#src/modules/home/blueprints/blueprint-content-report.service.js";
 import { applyShowcaseLaunchModerationVerb } from "#src/modules/home/blueprints/blueprint-moderation.service.js";
 import { decideShowcaseLaunch } from "#src/modules/home/blueprints/showcase-launch-moderation.service.js";
 import {
@@ -490,6 +492,48 @@ async function main(): Promise<void> {
       !noteLeaked,
       noteLeaked ? "THE NOTE TEXT LEAKED INTO platform_audit_entry" : "no note text in any payload",
     );
+
+    /*
+     * ⚠️ A DISMISSAL'S AUDIT ENTRY MUST NAME ITS TARGET, and this assertion exists because the
+     * three-arm version of that payload was written with a two-arm coalesce chain. A chain one
+     * column short does not fail — it writes `null` for the missing arm, into a hash-linked chain
+     * that is kept forever and cannot be corrected in place. Only a real dismissal of a real
+     * showcase report shows it, which is why the proof lives here rather than in a route test.
+     */
+    const [filedReport] = await db
+      .insert(blueprintContentReport)
+      .values({
+        targetKind: "showcase",
+        showcaseLaunchId: submittedLaunchId,
+        reason: "not_the_stated_product",
+        reporterUserId: moderatorUserId,
+      })
+      .returning({ id: blueprintContentReport.id });
+
+    if (filedReport !== undefined) {
+      const dismissal = await dismissBlueprintContentReport({
+        reportId: filedReport.id,
+        resolutionNote: "Reviewed; the launch is what it says it is.",
+        staff: { staffUserId: moderatorUserId, platformRole: "admin" },
+      });
+      check(
+        "a report against a showcase launch can be dismissed",
+        dismissal.success,
+        dismissal.success ? "dismissed" : JSON.stringify(dismissal.error),
+      );
+
+      const [dismissalEntry] = await db
+        .select({ payloadJson: platformAuditEntry.payloadJson })
+        .from(platformAuditEntry)
+        .where(eq(platformAuditEntry.eventKind, "blueprint_content_report_dismissed"))
+        .orderBy(desc(platformAuditEntry.occurredAt))
+        .limit(1);
+      check(
+        "the dismissal's audit entry NAMES the showcase launch — not a null target",
+        dismissalEntry?.payloadJson.includes(submittedLaunchId) === true,
+        dismissalEntry?.payloadJson ?? "(no audit entry)",
+      );
+    }
 
     const restoreResult = await applyShowcaseLaunchModerationVerb({
       targetId: submittedLaunchId,
