@@ -22,11 +22,17 @@ import type { Result } from "#src/types/index.js";
  * `comment_count`: the contract calls that arm "a numbered lesson with no discussion surface". The
  * absence is the decision, so there is no `case_study` branch anywhere in this file to forget.
  *
- * THE SHAPE IS `video_comment`'s, DELIBERATELY AND DOWN TO THE FIELD NAMES. One level of threading
- * discriminated by `depth`; delete is a TOMBSTONE rather than a row delete, because deleting a
- * parent outright would cascade its replies away and silently remove the conversation under it;
- * and `CommentView` is field-identical to the video one so a single frontend component can serve
- * both surfaces.
+ * THE TABLE SHAPE IS `video_comment`'s, deliberately and down to the column names: one level of
+ * threading discriminated by `depth`, and delete is a TOMBSTONE rather than a row delete, because
+ * deleting a parent outright would cascade its replies away and silently remove the conversation
+ * under it.
+ *
+ * ⚠️ THE AUTHOR SHAPE IS THE BLUEPRINTS SURFACE'S, NOT THE VIDEO ONE'S. An earlier draft of this
+ * file served `{id, handle, name, imageUrl}` so one frontend component could render video and
+ * blueprint comments alike — but the blueprints frontend already spells a person ONE way, as
+ * `BlueprintAuthorSchema` (`displayName` / `handle` / `avatarUrl`), and every byline on a teardown,
+ * a case study and a launch uses it. A second spelling reachable only from the comment thread would
+ * be the third name for one concept on a surface that has already settled on one.
  *
  * ⚠️ `body` IS `null` ON A TOMBSTONE, NEVER `""`. An empty string reads as "they wrote nothing";
  * null reads as "there is nothing to read", which is the true statement. A tombstone also carries
@@ -48,14 +54,13 @@ export type BlueprintCommentError =
   | { readonly type: "BLUEPRINT_COMMENT_ALREADY_DELETED"; readonly commentId: string }
   | { readonly type: "BLUEPRINT_CURSOR_MALFORMED" };
 
+/** Matches `BlueprintAuthorSchema` on the frontend — the one spelling of a person on this surface. */
 export interface BlueprintCommentAuthorView {
-  readonly id: string;
+  readonly displayName: string;
   readonly handle: string | null;
-  readonly name: string;
-  readonly imageUrl: string | null;
+  readonly avatarUrl: string | null;
 }
 
-/** Field-identical to the video `CommentView`, so one component can render both. */
 export interface BlueprintCommentView {
   readonly commentId: string;
   readonly parentCommentId: string | null;
@@ -102,10 +107,9 @@ function toCommentView(row: CommentRow): BlueprintCommentView {
     row.isDeleted || row.authorId === null || row.authorName === null
       ? null
       : {
-          id: row.authorId,
+          displayName: row.authorName,
           handle: row.authorHandle,
-          name: row.authorName,
-          imageUrl: row.authorImageUrl,
+          avatarUrl: row.authorImageUrl,
         };
 
   return {
@@ -387,12 +391,21 @@ export async function createBlueprintComment(
         });
     }
 
-    const [author] = await transaction
-      .select({ id: user.id, handle: user.handle, name: user.name, imageUrl: user.image })
+    const [authorRow] = await transaction
+      .select({ handle: user.handle, name: user.name, imageUrl: user.image })
       .from(user)
       .where(eq(user.id, input.authorUserId));
 
-    return { kind: "created", comment: inserted, author: author ?? null } as const;
+    const author: BlueprintCommentAuthorView | null =
+      authorRow === undefined
+        ? null
+        : {
+            displayName: authorRow.name,
+            handle: authorRow.handle,
+            avatarUrl: authorRow.imageUrl,
+          };
+
+    return { kind: "created", comment: inserted, author } as const;
   });
 
   switch (outcome.kind) {

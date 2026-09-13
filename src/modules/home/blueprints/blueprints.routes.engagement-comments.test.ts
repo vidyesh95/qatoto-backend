@@ -62,7 +62,7 @@ const LIVE_COMMENT = {
   parentCommentId: null,
   body: "The gearbox comes out in one piece.",
   isDeleted: false,
-  author: { id: "u_1", handle: "ada", name: "Ada", imageUrl: null },
+  author: { displayName: "Ada", handle: "ada", avatarUrl: null },
   likeCount: 0,
   replyCount: 0,
   createdAt: CREATED_AT,
