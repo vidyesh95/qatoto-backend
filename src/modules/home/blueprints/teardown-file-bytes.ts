@@ -59,7 +59,15 @@ export type TeardownUploadFormat = (typeof TEARDOWN_UPLOAD_FORMATS)[number];
  */
 export const MAX_TEARDOWN_FABRICATION_FILE_BYTES = 50 * 1024 * 1024;
 
-/** Below this nothing can carry a conforming header, whatever the format. Not a quality bar. */
+/**
+ * Below this a CAD text format cannot carry a conforming header. Not a quality bar.
+ *
+ * ⚠️ IT APPLIES TO `step`, `stl` AND `dxf` ONLY, AND THE ORDERING MATTERS. `pdf` and `glb` are
+ * delegated to validators that carry their own floors — 512 and 48 bytes — and a conforming minimal
+ * `.glb` is 49 bytes, so applying this 64-byte floor to it refused a valid file. Found by a smoke
+ * run, not by a unit test: the fixture there is the smallest legal model, which is exactly the
+ * shape a made-up floor rejects.
+ */
 const MINIMUM_TEARDOWN_FILE_BYTES = 64;
 
 /** The fixed part of a binary STL: 80-byte comment header plus a uint32 triangle count. */
@@ -173,13 +181,6 @@ export function validateTeardownFileBytes(
     return { byteSize: validated.byteSize, format: "pdf" };
   }
 
-  if (bytes.length < MINIMUM_TEARDOWN_FILE_BYTES) {
-    return { type: "TOO_SMALL", byteSize: bytes.length };
-  }
-  if (bytes.length > MAX_TEARDOWN_FABRICATION_FILE_BYTES) {
-    return { type: "TOO_LARGE", byteSize: bytes.length };
-  }
-
   if (declaredFormat === "glb") {
     /*
      * ⚠️ DELEGATED TO `validateGlbBytes`, NEVER RE-IMPLEMENTED — the same rule the `pdf` arm
@@ -211,6 +212,13 @@ export function validateTeardownFileBytes(
       }
     }
     return { byteSize: validated.byteSize, format: "glb" };
+  }
+
+  if (bytes.length < MINIMUM_TEARDOWN_FILE_BYTES) {
+    return { type: "TOO_SMALL", byteSize: bytes.length };
+  }
+  if (bytes.length > MAX_TEARDOWN_FABRICATION_FILE_BYTES) {
+    return { type: "TOO_LARGE", byteSize: bytes.length };
   }
 
   switch (declaredFormat) {

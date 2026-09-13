@@ -33,6 +33,10 @@ import { eq } from "drizzle-orm";
 import { db, pool } from "#src/db/index.js";
 import {
   teardown,
+  teardownAssembly,
+  teardownAssemblyStep,
+  teardownFastener,
+  teardownPart,
   teardownSubmission,
   teardownSubmissionFileUpload,
   user,
@@ -43,6 +47,7 @@ import { decideTeardown } from "#src/modules/home/blueprints/teardown-moderation
 import {
   getPublicTeardownBySlug,
   resolveDownloadableTeardownFile,
+  resolveDownloadableTeardownModel,
 } from "#src/modules/home/blueprints/teardown-public-read.service.js";
 import type { TeardownSubmissionInput } from "#src/modules/home/blueprints/teardown-submission.schemas.js";
 import {
@@ -73,9 +78,29 @@ function buildSmokePdfBytes(): Buffer {
   return Buffer.from(lines.join("\n") + "\n", "latin1");
 }
 
+/**
+ * The smallest conforming binary glTF: a 12-byte container header plus one JSON chunk.
+ *
+ * ⚠️ THE DECLARED TOTAL LENGTH MUST EQUAL THE BYTES PRODUCED, because that equality IS
+ * `validateGlbBytes`' truncation check. A fixture that got it wrong would be refused by the
+ * validator rather than proving the upload path.
+ */
+function buildSmokeGlbBytes(): Buffer {
+  const json = Buffer.from('{"asset":{"version":"2.0"}}  ', "latin1");
+  const glb = Buffer.alloc(12 + 8 + json.length);
+  glb.writeUInt32LE(0x46546c67, 0);
+  glb.writeUInt32LE(2, 4);
+  glb.writeUInt32LE(glb.length, 8);
+  glb.writeUInt32LE(json.length, 12);
+  glb.writeUInt32LE(0x4e4f534a, 16);
+  json.copy(glb, 20);
+  return glb;
+}
+
 function buildSubmission(
   subjectProductName: string,
   uploadedUploadId: string | undefined,
+  uploadedModelId: string | undefined,
 ): TeardownSubmissionInput {
   return {
     subjectKind: "existing_physical_product",
@@ -153,9 +178,66 @@ function buildSubmission(
      * but `TeardownSubmissionInput` is the OUTPUT type, where a defaulted field is required. The
      * assembly half of this smoke is driven separately below, against a real upload.
      */
-    assembly: null,
-    assemblySteps: [],
-    fasteners: [],
+    /*
+     * ⚠️ A COMPOSITE ASSEMBLY, PRESENT ONLY WHEN THE MODEL UPLOADED. Its parts name a node inside
+     * the shared `.glb` and carry no model of their own — the arm the CHECK calls `composite`.
+     */
+    assembly:
+      uploadedModelId === undefined
+        ? null
+        : {
+            kind: "composite" as const,
+            explosionAxis: [0, 1, 0] as [number, number, number],
+            model: { modelUploadId: uploadedModelId },
+            parts: [
+              {
+                id: "part-1",
+                label: "Gearbox housing",
+                parentPartId: null,
+                material: "PA66-GF30",
+                manufacturingMethod: "injection_molded" as const,
+                explosionDirection: [0, 1, 0] as [number, number, number],
+                explosionDistanceMm: 12,
+                layerIndex: 0,
+                stressRating: 0.4,
+                calloutText: null,
+                nodeName: "gearbox_housing",
+              },
+              {
+                id: "part-2",
+                label: "Trigger",
+                parentPartId: "part-1",
+                material: "ABS",
+                manufacturingMethod: "injection_molded" as const,
+                explosionDirection: [0, 1, 0] as [number, number, number],
+                explosionDistanceMm: 8,
+                layerIndex: 1,
+                stressRating: 0.2,
+                calloutText: null,
+                nodeName: "trigger",
+              },
+            ],
+          },
+    assemblySteps:
+      uploadedModelId === undefined
+        ? []
+        : [
+            {
+              stepNumber: 1,
+              title: "Remove the four case screws",
+              description: "Torx T10, two of them under the label.",
+              focusedPartId: "part-1",
+            },
+          ],
+    fasteners: [
+      {
+        standardCode: "ISO 14581",
+        sizeLabel: "M3 x 12",
+        drive: "torx" as const,
+        quantity: 4,
+        supplier: null,
+      },
+    ],
     walkthroughVideo: {
       source: "youtube",
       youtubeVideoId: "dQw4w9WgXcQ",
@@ -206,6 +288,7 @@ async function main(): Promise<void> {
   let submissionId: string | undefined;
   let publishedTeardownId: string | undefined;
   let uploadedUploadId: string | undefined;
+  let uploadedModelId: string | undefined;
 
   try {
     /*
@@ -261,13 +344,45 @@ async function main(): Promise<void> {
         repeatResult.success ? repeatResult.value.uploadId : JSON.stringify(repeatResult.error),
       );
 
-      /* A file the author does not own cannot be claimed — proven at submit, below. */
+      /*
+       * ⚠️ A `.glb` GOES THROUGH THE SAME ROUTE AS A PDF, which is the point of sharing it: one
+       * staging table, one ceiling, one sweep and one download gate rather than a second of each.
+       */
+      const modelResult = await uploadTeardownSubmissionFile({
+        uploaderUserId: authorRow.id,
+        declaredFormat: "glb",
+        fileBytes: buildSmokeGlbBytes(),
+        originalFileName: "controller-assembly.glb",
+      });
+      check(
+        "a .glb uploads through the same route as a document",
+        modelResult.success,
+        modelResult.success ? modelResult.value.uploadId : JSON.stringify(modelResult.error),
+      );
+      if (modelResult.success) uploadedModelId = modelResult.value.uploadId;
+
+      /*
+       * ⚠️ AND A FILE THAT IS NOT WHAT IT CLAIMS IS REFUSED. The multipart mimetype gate cannot
+       * catch this — a browser sends `application/octet-stream` for both — so the declared format
+       * plus the byte check is the whole control.
+       */
+      const mislabelled = await uploadTeardownSubmissionFile({
+        uploaderUserId: authorRow.id,
+        declaredFormat: "glb",
+        fileBytes: buildSmokePdfBytes(),
+        originalFileName: "not-a-model.glb",
+      });
+      check(
+        "a PDF declared as a .glb is refused on its bytes",
+        !mislabelled.success && mislabelled.error.type === "TEARDOWN_UPLOAD_REJECTED",
+        mislabelled.success ? "it was ACCEPTED" : mislabelled.error.type,
+      );
     }
 
     // --- 1. The submit.
     const submitResult = await submitTeardown({
       authorUserId: authorRow.id,
-      submission: buildSubmission(subjectProductName, uploadedUploadId),
+      submission: buildSubmission(subjectProductName, uploadedUploadId, uploadedModelId),
     });
     check(
       "a submission is accepted and lands pending_review",
@@ -304,7 +419,7 @@ async function main(): Promise<void> {
     // --- 3. One live survey per unit.
     const duplicateResult = await submitTeardown({
       authorUserId: authorRow.id,
-      submission: buildSubmission(` ${subjectProductName.toUpperCase()} `, undefined),
+      submission: buildSubmission(` ${subjectProductName.toUpperCase()} `, undefined, undefined),
     });
     check(
       "a second live survey of the same unit is refused",
@@ -556,6 +671,116 @@ async function main(): Promise<void> {
           : "the read failed",
       );
 
+      await db
+        .update(teardown)
+        .set({ moderationState: "published" })
+        .where(eq(teardown.id, publishedTeardownId));
+    }
+
+    /*
+     * --- 6c. THE ASSEMBLY, WHICH ONLY A REAL TRANSACTION CAN PROVE.
+     *
+     * ⚠️ FOUR TABLES IN ONE TRANSACTION, WITH A COMPOSITE SELF-FOREIGN-KEY CHECKED PER STATEMENT.
+     * No vitest can reach this: the suite mocks `#src/db/index.js` wholesale, so it can prove the
+     * controller CALLS the publish and nothing about whether the inserts are legal. The part
+     * ordering in particular fails as a 23503 or not at all.
+     */
+    if (uploadedModelId !== undefined && publishedTeardownId !== undefined) {
+      const [storedAssembly] = await db
+        .select({
+          id: teardownAssembly.id,
+          kind: teardownAssembly.kind,
+          modelSource: teardownAssembly.modelSource,
+          modelUrl: teardownAssembly.modelUrl,
+          modelObjectStorageKey: teardownAssembly.modelObjectStorageKey,
+          modelByteSize: teardownAssembly.modelByteSize,
+        })
+        .from(teardownAssembly)
+        .where(eq(teardownAssembly.teardownId, publishedTeardownId));
+      check(
+        "the publish wrote the assembly on its uploaded arm",
+        storedAssembly?.kind === "composite" &&
+          storedAssembly.modelSource === "uploaded" &&
+          storedAssembly.modelUrl === null &&
+          storedAssembly.modelObjectStorageKey !== null,
+        `${storedAssembly?.kind ?? "(absent)"}, source ${storedAssembly?.modelSource ?? "(null)"}`,
+      );
+      check(
+        "and copied the MEASURED model size rather than a declared one",
+        (storedAssembly?.modelByteSize ?? 0) > 0,
+        String(storedAssembly?.modelByteSize),
+      );
+
+      /*
+       * ⚠️ PARENTS BEFORE CHILDREN IS WHY THIS INSERTED AT ALL. `part-2` names `part-1` as its
+       * parent through a composite self-FK checked per statement, so the reverse order is a 23503.
+       */
+      const storedParts = await db
+        .select({ id: teardownPart.id, parentPartId: teardownPart.parentPartId })
+        .from(teardownPart)
+        .where(eq(teardownPart.assemblyId, storedAssembly?.id ?? ""));
+      check(
+        "both parts landed, child naming parent — the depth sort is what makes this legal",
+        storedParts.length === 2 &&
+          storedParts.some((part) => part.id === "part-2" && part.parentPartId === "part-1"),
+        `${String(storedParts.length)} parts`,
+      );
+
+      const storedSteps = await db
+        .select({ stepNumber: teardownAssemblyStep.stepNumber })
+        .from(teardownAssemblyStep)
+        .where(eq(teardownAssemblyStep.teardownId, publishedTeardownId));
+      check(
+        "the assembly step landed, focused on a part in this assembly",
+        storedSteps.length === 1,
+        `${String(storedSteps.length)} steps`,
+      );
+
+      const storedFasteners = await db
+        .select({ sizeLabel: teardownFastener.sizeLabel })
+        .from(teardownFastener)
+        .where(eq(teardownFastener.teardownId, publishedTeardownId));
+      check(
+        "the fastener landed",
+        storedFasteners.length === 1,
+        `${String(storedFasteners.length)} fasteners`,
+      );
+
+      const modelAddress =
+        publicTeardown.assembly?.kind === "composite"
+          ? publicTeardown.assembly.model.url
+          : "(no composite assembly)";
+      check(
+        "the model's public address is a route on this server, not a stored link",
+        modelAddress === `/blueprints/teardowns/${publicSlug}/assembly-model`,
+        modelAddress,
+      );
+
+      const modelBeforeQuarantine = await resolveDownloadableTeardownModel({
+        teardownSlug: publicSlug,
+        partId: null,
+      });
+      check(
+        "the model download gate resolves it while the teardown is published",
+        modelBeforeQuarantine !== null,
+        modelBeforeQuarantine === null ? "refused" : "resolved",
+      );
+
+      await db
+        .update(teardown)
+        .set({ moderationState: "quarantined" })
+        .where(eq(teardown.id, publishedTeardownId));
+      const modelDuringQuarantine = await resolveDownloadableTeardownModel({
+        teardownSlug: publicSlug,
+        partId: null,
+      });
+      check(
+        "A QUARANTINE TAKES THE GEOMETRY AWAY TOO — no presign is mintable for the model",
+        modelDuringQuarantine === null,
+        modelDuringQuarantine === null
+          ? "refused, as designed"
+          : "STILL RESOLVED — the gate is open",
+      );
       await db
         .update(teardown)
         .set({ moderationState: "published" })
