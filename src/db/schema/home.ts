@@ -3694,17 +3694,39 @@ export const teardownCommentLike = pgTable(
  * decides a SUBMISSION: publish it or send it back. These decide a row that is already public, and
  * on the teardown arm that is literally a different table with a different id.
  *
- * ⚠️ NO `showcase` VALUE IN THE TARGET ENUM. `showcase_launch_moderation_state_ck` admits
- * `pending_review | published | rejected` and the public feed gate is a bare `eq(published)`, so
- * offering the label would enqueue a complaint the lever cannot answer — the rule
- * `user_report_reason` states about `child_safety`. Adding it later is a CHECK widening, a gate
- * rewrite, and an index predicate change, which is a feature rather than an enum value.
+ * ⚠️ THE `showcase` VALUE LANDED, AND THE BULLET IT REPLACES IS WORTH KEEPING IN MIND. This block
+ * used to read "NO `showcase` VALUE IN THE TARGET ENUM", because `showcase_launch_moderation_state_ck`
+ * admitted only `pending_review | published | rejected` and the public feed gate was a bare
+ * `eq(published)` — so offering the label would have enqueued a complaint the lever could not
+ * answer, which is the rule `user_report_reason` states about `child_safety`. That paragraph also
+ * priced the work: "a CHECK widening, a gate rewrite, and an index predicate change, which is a
+ * feature rather than an enum value." All three were done together, in that order, and the label
+ * was added LAST. The reasoning is recorded rather than deleted because it is what keeps the next
+ * label from arriving before its lever.
+ *
+ * ⚠️ `quarantined` IS STILL TEARDOWN-ONLY, and the showcase arm did not change that. A quarantine
+ * withholds a publisher's files under a THIRD-PARTY rights claim, and a showcase launch is the
+ * maker's own work by construction — `showcase_launch_statements_ck` requires
+ * `built_it_ourselves` and `results_are_our_own`, so a rights claim there alleges the attestation
+ * was a lie. That is a fraud finding, whose answers are `flag` then `reject`, not a temporary
+ * withholding pending somebody else's dispute. There is also nothing representable to withhold:
+ * `heading_image_url` is NOT NULL, and by the exact analogy `withheldPayload()` draws for a
+ * teardown's `thumbnailUrl`, it would survive — leaving a write-up full of dead image references,
+ * which is a broken page rather than a redaction.
  */
 
-/** The two arms a moderation verb can reach. Deliberately not three — see the block comment. */
+/**
+ * The three arms a moderation verb can reach.
+ *
+ * ⚠️ REACHING AN ARM IS NOT THE SAME AS OFFERING EVERY VERB ON IT. `quarantine` is teardown-only
+ * and is refused in three independent places — see `blueprint_moderation_action_quarantine_arm_ck`
+ * below, `resolveBlueprintTransition`'s arm guard, and the two per-arm state CHECKs that have no
+ * such label.
+ */
 export const blueprintContentTargetKindEnum = pgEnum("blueprint_content_target_kind", [
   "teardown",
   "case_study",
+  "showcase",
 ]);
 
 export const blueprintModerationActionKindEnum = pgEnum("blueprint_moderation_action_kind", [

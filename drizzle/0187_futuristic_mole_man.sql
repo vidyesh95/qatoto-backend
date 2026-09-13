@@ -1,0 +1,1 @@
+ALTER TYPE "public"."blueprint_content_target_kind" ADD VALUE 'showcase';
