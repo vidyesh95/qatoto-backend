@@ -5,12 +5,14 @@ import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   blueprintCommentCreateLimiter,
+  blueprintContentReportLimiter,
   blueprintCommentLikeLimiter,
   blueprintCommentUpdateLimiter,
   blueprintEngagementReadLimiter,
   blueprintHeroImageUploadLimiter,
   blueprintHeroWriteLimiter,
   blueprintLikeLimiter,
+  blueprintReportModerationLimiter,
   blueprintSaveLimiter,
   blueprintUpvoteLimiter,
   blueprintViewBeaconBurstLimiter,
@@ -25,6 +27,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as blueprintContentReportController from "#src/modules/home/blueprints/blueprint-content-report.controller.js";
 import * as blueprintEngagementController from "#src/modules/home/blueprints/blueprint-engagement.controller.js";
 import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
 import * as caseStudyController from "#src/modules/home/blueprints/case-study.controller.js";
@@ -505,6 +508,78 @@ router.get(
   requireAuth,
   blueprintEngagementReadLimiter,
   blueprintEngagementController.getBlueprintViewerState,
+);
+
+/*
+ * READER REPORTS.
+ *
+ * ⚠️ BY SLUG, WHICH IS THE OPPOSITE OF THE MODERATION VERBS, AND BOTH ARE RIGHT. The reporter is
+ * standing on a public page and the slug is the only handle they have; the moderator is working a
+ * queue that hands them an id.
+ *
+ * ⚠️ AUTHENTICATED AND IDENTIFIED, NOT BARE. The bare rule is about READS whose payload is identical
+ * for every visitor. Beyond that: the partial unique index — one report per person per target — is
+ * the anti-brigading control, and AN ANONYMOUS REPORT CANNOT BE DEDUPLICATED. An anonymous intake
+ * would make the queue's depth something anybody could manufacture.
+ *
+ * ⚠️ NO IDEMPOTENCY KEY, and it would be redundant: the partial unique index already makes a
+ * double-submit a 409 rather than a second row.
+ *
+ * ⚠️ RESOLVED UNDER THE READABLE GATE, so a QUARANTINED teardown still accepts a report —
+ * `claim-targets`' reasoning exactly: a second rights holder may have an entirely different
+ * objection, and refusing would use one quarantine to blunt the control that produced it.
+ */
+
+router.post(
+  "/teardowns/:teardownSlug/reports",
+  requireAuth,
+  blueprintContentReportLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  blueprintContentReportController.makeCreateReportHandler("teardown", "teardownSlug"),
+);
+
+router.post(
+  "/case-studies/:caseStudySlug/reports",
+  requireAuth,
+  blueprintContentReportLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  blueprintContentReportController.makeCreateReportHandler("case_study", "caseStudySlug"),
+);
+
+/**
+ * GET /blueprints/reports/mine — a flat list under a hard cap.
+ *
+ * ⚠️ IT EXISTS BECAUSE "a report that vanishes is indistinguishable from one nobody read."
+ * Deliberately narrow: no moderator identity (naming them makes a takedown personal), no
+ * resolution note, and no count of who else reported the same target (that makes brigading
+ * measurable). What it carries is the status.
+ */
+router.get("/reports/mine", requireAuth, blueprintContentReportController.listMyBlueprintReports);
+
+/**
+ * GET /blueprints/admin/content-reports — the moderator queue, oldest first.
+ *
+ * ⚠️ A NEW ROUTE RATHER THAN AN ARM OF THE THREE REVIEW QUEUES. Those are keyed on
+ * `pending_review` and backed by partial indexes on exactly that predicate; a report is about a row
+ * that already PASSED that decision. And widening the case-study queue in particular would widen
+ * the ONE route in this router that serves a withheld company's real name.
+ */
+router.get(
+  "/admin/content-reports",
+  requireAuth,
+  blueprintContentReportController.listBlueprintReportQueue,
+);
+
+router.post(
+  "/admin/content-reports/:reportId/dismiss",
+  requireAuth,
+  blueprintReportModerationLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  idempotency({ required: true }),
+  blueprintContentReportController.dismissBlueprintReport,
 );
 
 router.patch(

@@ -24,6 +24,8 @@ import { user } from "#src/db/schema/_core.js";
 import {
   animeAudioModeEnum,
   animeSeriesStatusEnum,
+  blueprintContentReportReasonEnum,
+  blueprintContentReportStatusEnum,
   contentReviewActionKindEnum,
   playlistVideoOrderEnum,
   playlistVisibilityEnum,
@@ -3744,6 +3746,17 @@ export const blueprintModerationAction = pgTable(
     /** Roles are revocable, so a join would tell a later reader the wrong thing. */
     moderatorRoleSnapshot: text("moderator_role_snapshot").notNull(),
     reasonNote: text("reason_note").notNull(),
+    /**
+     * The report this decision answered, when there was one.
+     *
+     * ⚠️ NULLABLE, AND THE COMMONEST CASE IS NULL. The primary quarantine path is an EMAILED rights
+     * claim — blueprints doc §3.7: "nothing posts to Qatoto, by that flow's own explicit decision"
+     * — so a NOT NULL column here would make the case this lever exists for unrecordable.
+     * `set null` so a purged report does not take the decision with it.
+     */
+    reportId: text("report_id").references(() => blueprintContentReport.id, {
+      onDelete: "set null",
+    }),
     /** `unique`: one decision, one entry in the hash-linked chain. */
     auditEntryId: text("audit_entry_id").notNull().unique(),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
@@ -3778,6 +3791,100 @@ export const blueprintModerationAction = pgTable(
     check(
       "blueprint_moderation_action_quarantine_arm_ck",
       sql`action_kind <> 'content_quarantined' OR target_kind = 'teardown'`,
+    ),
+  ],
+);
+
+/**
+ * A reader's report about one published blueprint.
+ *
+ * ⚠️ ITS OWN TABLE, NOT A WIDENED `user_report`. This codebase has made that call five times
+ * already and written it down once: "each moderation queue gets its own table rather than a
+ * widened `target_kind`, because a queue's columns, its reasons and its verdict are its own."
+ * `user_report` is not reusable even if one wanted to — `reported_user_id` is NOT NULL onto
+ * `user(id)`, and a teardown is not a user.
+ *
+ * ⚠️ A REPORT NEVER MOVES A STATE BY ITSELF, and three independent rules say so:
+ *
+ *   1. `flagged` is in EVERY gate on both arms, so an auto-flag would change NOTHING a visitor
+ *      sees. It would only stamp an unreviewed accusation on somebody's work.
+ *   2. `platform_audit_entry.actorUserId` is NOT NULL. An automatic transition names nobody, which
+ *      is why commerce had to build a whole second apparatus (`action_source = 'automatic'`) to
+ *      record authorless actions. This surface has none, and so needs none.
+ *   3. `user-reports.service.ts`: "a number that could trip an automatic action would make
+ *      brigading measurable and then effective."
+ *
+ * Filing one therefore writes NO audit entry either — §5's inclusion rule for that chain is STAFF
+ * action, exactly as "Submitting records nothing."
+ */
+export const blueprintContentReport = pgTable(
+  "blueprint_content_report",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    targetKind: blueprintContentTargetKindEnum("target_kind").notNull(),
+    /** `cascade` on both: a report about a deleted blueprint is noise. */
+    teardownId: text("teardown_id").references(() => teardown.id, { onDelete: "cascade" }),
+    caseStudyId: text("case_study_id").references(() => caseStudy.id, { onDelete: "cascade" }),
+    reason: blueprintContentReportReasonEnum("reason").notNull(),
+    /** The one free-text field, and it lives here BECAUSE an erasure can reach it. */
+    detailText: text("detail_text"),
+    /** `set null`: a departing reporter must not erase evidence about somebody else's work. */
+    reporterUserId: text("reporter_user_id").references(() => user.id, { onDelete: "set null" }),
+    status: blueprintContentReportStatusEnum("status").default("open").notNull(),
+    /** `restrict`: a moderator cannot be deleted out from under a decision they made. */
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    resolvedAt: timestamp("resolved_at", { precision: 3 }),
+    resolutionNote: text("resolution_note"),
+    /** `precision: 3` — the queue is keyset-paged on `(created_at, id)` with a millisecond cursor. */
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    /**
+     * ⚠️ ONE REPORT PER PERSON PER TARGET, and this is the anti-brigading control rather than a
+     * tidiness rule. It is what makes `ALREADY_REPORTED` an honest answer instead of a guess, and
+     * it is why the intake route needs an identified reporter: an anonymous report cannot be
+     * deduplicated, so an anonymous intake would make the queue's depth a thing anybody could
+     * manufacture.
+     */
+    uniqueIndex("blueprint_content_report_teardown_reporter_uidx")
+      .on(table.teardownId, table.reporterUserId)
+      .where(sql`teardown_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    uniqueIndex("blueprint_content_report_case_study_reporter_uidx")
+      .on(table.caseStudyId, table.reporterUserId)
+      .where(sql`case_study_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    /** The queue, oldest first: the report that has waited longest is the one owed an answer. */
+    index("blueprint_content_report_queue_idx").on(table.status, table.createdAt, table.id),
+    index("blueprint_content_report_target_idx").on(
+      table.targetKind,
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
+    /**
+     * ⚠️ `= 1`, NOT `<= 1`, WHICH IS THE OPPOSITE OF `blueprint_moderation_action_target_ck` AND
+     * CORRECT ON BOTH. These foreign keys CASCADE, so a report whose target is gone is gone too and
+     * a targetless report cannot exist. The action table's targets are `set null`, because a
+     * DECISION has to outlive its subject.
+     */
+    check(
+      "blueprint_content_report_target_ck",
+      sql`num_nonnulls(teardown_id, case_study_id) = 1
+          AND (target_kind = 'teardown') = (teardown_id IS NOT NULL)
+          AND (target_kind = 'case_study') = (case_study_id IS NOT NULL)`,
+    ),
+    check(
+      "blueprint_content_report_detail_ck",
+      sql`detail_text IS NULL OR char_length(detail_text) BETWEEN 1 AND 2000`,
+    ),
+    check(
+      "blueprint_content_report_resolution_ck",
+      sql`(resolved_by_user_id IS NULL) = (resolved_at IS NULL)
+          AND (status = 'open') = (resolved_at IS NULL)
+          AND (resolution_note IS NULL OR char_length(resolution_note) BETWEEN 1 AND 2000)`,
     ),
   ],
 );

@@ -720,6 +720,31 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
      * scrub. The submission must go first. `anonymize-account.service.ts` orders it explicitly.
      */
     /**
+     * The reporter: `null_out`, not `delete_rows`.
+     *
+     * ⚠️ A REPORT IS EVIDENCE ABOUT SOMEBODY ELSE'S WORK, so a departing reporter must not be able
+     * to erase it. `commerce_content_report.reporter_user_id` reaches the same verdict and the
+     * schema states it on the column: "SET NULL: a deleted account must not erase the report it
+     * filed." The `detail_text` they wrote is free text and is handled by the text-PII register.
+     *
+     * ⚠️ A SIDE EFFECT WORTH NAMING: nulling the reporter releases that person's slot in
+     * `blueprint_content_report_teardown_reporter_uidx`, because the index is partial on
+     * `reporter_user_id IS NOT NULL`. That is correct — the anti-brigading rule is one report per
+     * LIVING account per target — but it does mean the queue can gain a second report about the
+     * same row from a new account. It is not a loophole anybody can drive: it costs an erasure.
+     */
+    "blueprint_content_report.reporter_user_id": { kind: "null_out" },
+    /**
+     * The resolver: `retain`, for the reason every moderation decision is retained. A dismissal is
+     * an enforcement decision taken about somebody else's work, and one nobody can attribute cannot
+     * be appealed or defended.
+     */
+    "blueprint_content_report.resolved_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "Names the moderator who dismissed or actioned a report about another person's work; an unattributable decision cannot be appealed or defended.",
+    },
+    /**
      * ⚠️ `retain`, AND IT IS THE ONLY LAWFUL DISPOSITION HERE — the column is NOT NULL, so a
      * `null_out` would not merely be wrong, it would raise 23502 and dead-letter the scrub.
      *

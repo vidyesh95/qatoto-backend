@@ -458,3 +458,96 @@ moderators looked at this" indistinguishable from "three moderators acted".
 teardown by a `COALESCE` over the join, and `publicSlug` is COMPUTED from it — so `/teardowns/mine`
 picks a flag up for free and stops rendering a "View the page" link with nothing extra written
 anywhere. The alternative is a second state machine writing back into the paperwork.
+
+---
+
+## 10. Reader reports
+
+```
+POST /blueprints/teardowns/:teardownSlug/reports
+POST /blueprints/case-studies/:caseStudySlug/reports
+GET  /blueprints/reports/mine
+GET  /blueprints/admin/content-reports              moderate_content, oldest first
+POST /blueprints/admin/content-reports/:reportId/dismiss
+```
+
+### 10.1 A report never moves a state, and never will
+
+⚠️ **Filing one writes no state change and no audit entry.** Three independent rules, any one of
+which would be enough:
+
+1. `flagged` is in **every** gate on both arms, so an auto-flag would change **nothing a visitor
+   sees**. It would only stamp an unreviewed accusation on somebody's work.
+2. `platform_audit_entry.actorUserId` is NOT NULL, and an automatic transition names nobody — which
+   is exactly why commerce had to build a second apparatus (`action_source = 'automatic'`) to record
+   authorless actions. This surface has none and needs none.
+3. `user-reports.service.ts`: *"a number that could trip an automatic action would make brigading
+   measurable and then effective."*
+
+**Reconciling §2's "a report moves a published row to `flagged`, full stop":** read in place, that
+sentence answers *which state* a report can reach on a one-gate arm, not *who moves it*. Its job is
+to justify one gate rather than two — a case study has no files, so `flagged` is the only
+destination a report has there. "Full stop" terminates the list of reachable outcomes. Implemented
+as automaticity it would contradict §5's audit-actor invariant and produce a state change with zero
+reader-visible effect.
+
+The queue shows an `openReportCount` as **context**. Nothing reads it as a threshold, and no
+threshold is published — the commerce rule applies verbatim: publishing "three people can hide this"
+is a griefing recipe.
+
+### 10.2 Its own table, and the reasons
+
+⚠️ **Not a widened `user_report`.** This codebase has made that call five times and written it down
+once (`_core.ts`): *"each moderation queue gets its own table rather than a widened `target_kind`,
+because a queue's columns, its reasons and its verdict are its own."* It is not reusable anyway —
+`user_report.reported_user_id` is NOT NULL onto `user(id)`, and a teardown is not a user.
+
+`target_kind` plus **one nullable real FK per arm**, pinned by `num_nonnulls(...) = 1` — the
+`commerce_content_report` shape. ⚠️ `= 1` here and `<= 1` on `blueprint_moderation_action`, and both
+are correct: a report's targets CASCADE so a targetless report cannot exist, while a decision's are
+`set null` because a decision has to outlive its subject.
+
+### 10.3 Authenticated, and why that is not negotiable
+
+⚠️ The intake takes `requireAuth` + `requireIdentifiedUser`. The bare-read rule is about **reads**
+whose payload is identical for every visitor. Beyond that: the two partial unique indexes — **one
+report per person per target** — are the anti-brigading control, and **an anonymous report cannot be
+deduplicated**. An anonymous intake would make the queue's depth something anybody could manufacture.
+
+No idempotency key, because the index already makes a double-submit a 409 rather than a second row.
+
+⚠️ **Resolved under the READABLE gate, so a quarantined teardown still accepts a report** —
+`claim-targets`' reasoning exactly: *"a second rights holder may have an entirely different objection
+from the first… withhold the payload and that claimant can only say 'the whole teardown', which uses
+one quarantine to blunt the control that produced it."*
+
+### 10.4 The queue is a new route, not an arm of the three review queues
+
+1. Those three are keyed on `moderation_state = 'pending_review'` and backed by partial indexes on
+   exactly that predicate. A report is about a row that already **passed** that decision.
+2. The verdict vocabularies are disjoint — publish/send-back versus flag/quarantine/restore/dismiss
+   — so one route means two verdict enums and a `never` switch that can no longer be exhaustive.
+3. ⚠️ `GET /blueprints/admin/case-studies/review-queue` is the **one** route in this router that
+   serves a withheld company's real name (§6). Widening it would widen that exposure and break the
+   sentence `case-study-withheld-name.test.ts` keeps true.
+
+⚠️ **Dismissing restores nothing.** Nothing flags a row except a moderator deciding to, so a
+dismissal has nothing to undo — and quietly un-flagging something a *different* moderator flagged
+would overturn their decision as a side effect of answering a reader. A moderator who wants the row
+back uses `restore`, which costs its own audit entry and its own note.
+
+### 10.5 What the reporter is told
+
+`GET /blueprints/reports/mine` exists because *"a report that vanishes is indistinguishable from one
+nobody read."* It is deliberately narrow: **no moderator identity** (naming them makes a takedown
+personal), **no resolution note**, and **no count of who else reported the same target** (that makes
+brigading measurable). What it carries is the status.
+
+The repeat-report refusal says **"You have already reported this"** and stops there, for the same
+reason.
+
+### 10.6 Proven against Postgres
+
+Twelve assertions, including the four that matter: filing did not move the state; filing wrote no
+audit entry; the **dismissal** did write one, because that is a staff action; and the resolution
+note stayed **off** the hash-linked chain.

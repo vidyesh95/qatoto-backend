@@ -1396,6 +1396,31 @@ export const blueprintEngagementReadLimiter = createLimiter({
   limit: 300,
 });
 
+/**
+ * POST /blueprints/<arm>/:slug/reports — a reader reporting published content.
+ *
+ * ⚠️ ITS OWN NAMESPACE RATHER THAN SHARING `userReportLimiter`'s, even though the budget matches:
+ * a shared bucket means abuse of one report surface silently exhausts the other's headroom, and a
+ * person reporting a profile has nothing to do with a person reporting a teardown.
+ *
+ * 20 per fifteen minutes is tighter in effect than it reads. The partial unique index already caps
+ * one account at ONE report per target, so this does not bound repeat-reporting at all — it bounds
+ * somebody walking the catalogue reporting many DIFFERENT blueprints, which is the only shape of
+ * abuse the index leaves open.
+ */
+export const blueprintContentReportLimiter = createLimiter({
+  namespace: "blueprintContentReport",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/** POST /blueprints/admin/content-reports/:reportId/dismiss — a moderator working the queue. */
+export const blueprintReportModerationLimiter = createLimiter({
+  namespace: "blueprintReportModeration",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 200,
+});
+
 // ---------------------------------------------------------------------------
 // HOME FEED ENGAGEMENT (HOME_BACKEND_STRUCTURE.md §7)
 //

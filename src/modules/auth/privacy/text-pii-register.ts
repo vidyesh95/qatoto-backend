@@ -180,6 +180,18 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
     stepName: "tombstone:teardown_comment",
     note: "Emptied. `teardown_comment_body_ck` demands the empty string once `is_deleted` is true, so the text genuinely leaves the table rather than being hidden by a rendering convention.",
   },
+  /**
+   * ⚠️ THE REPORTER'S OWN WORDS, AND THEY ARE NULLED RATHER THAN REWRITTEN. The column is nullable
+   * with no paired state — unlike a comment body, which is CHECK-bound to `is_deleted` — so NULL is
+   * the honest empty here and does not need a tombstone to be legal. The report row itself survives
+   * because it is evidence about somebody else's work; what leaves is the free text the departing
+   * account contributed to it.
+   */
+  "blueprint_content_report.detail_text": {
+    kind: "scrub",
+    stepName: "scrub:blueprint_content_report_detail",
+    note: "Nulled. The report survives as evidence about another person's work; the reporter's own free text does not.",
+  },
   "community_forum_reply.body": {
     kind: "scrub",
     stepName: "tombstone:community_forum_reply",

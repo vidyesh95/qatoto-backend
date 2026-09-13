@@ -4,6 +4,10 @@ import {
   CreateBlueprintCommentSchema,
   UpdateBlueprintCommentSchema,
 } from "#src/modules/home/blueprints/blueprint-engagement.schemas.js";
+import {
+  CreateBlueprintReportSchema,
+  DismissBlueprintReportSchema,
+} from "#src/modules/home/blueprints/blueprint-content-report.schemas.js";
 import { BlueprintModerationCommandSchema } from "#src/modules/home/blueprints/blueprint-moderation.schemas.js";
 import {
   CountersignPeriodSchema,
@@ -583,6 +587,26 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   },
   "post /blueprints/admin/case-studies/{caseStudyId}/moderation-state": {
     schema: BlueprintModerationCommandSchema,
+    required: true,
+  },
+
+  /*
+   * THE READER-REPORT INTAKE AND ITS DISMISSAL.
+   *
+   * `GET /blueprints/reports/mine` and `GET /blueprints/admin/content-reports` are deliberately
+   * absent: both are GETs that never touch `req.body`, and an orphan entry here fails the build
+   * exactly as a missing one does.
+   */
+  "post /blueprints/teardowns/{teardownSlug}/reports": {
+    schema: CreateBlueprintReportSchema,
+    required: true,
+  },
+  "post /blueprints/case-studies/{caseStudySlug}/reports": {
+    schema: CreateBlueprintReportSchema,
+    required: true,
+  },
+  "post /blueprints/admin/content-reports/{reportId}/dismiss": {
+    schema: DismissBlueprintReportSchema,
     required: true,
   },
   "post /research-programs/{programSlug}/papers/{paperId}/file": {

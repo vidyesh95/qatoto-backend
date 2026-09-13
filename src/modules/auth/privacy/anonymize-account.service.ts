@@ -197,6 +197,21 @@ export function planFreeTextSteps(userId: string): readonly StepPlan[] {
     },
     {
       /**
+       * The reporter's free text, nulled while the report survives.
+       *
+       * ⚠️ ORDER AGAIN: the manifest's `null_out` on `reporter_user_id` severs the only link back
+       * to this person's reports, so this must run first.
+       */
+      stepName: "scrub:blueprint_content_report_detail",
+      tableName: "blueprint_content_report",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM blueprint_content_report
+                    WHERE reporter_user_id = ${userId} AND detail_text IS NOT NULL`,
+      applySql: sql`UPDATE blueprint_content_report
+                    SET detail_text = NULL
+                    WHERE reporter_user_id = ${userId} AND detail_text IS NOT NULL`,
+    },
+    {
+      /**
        * `community_forum_reply` HAS NO TOMBSTONE, and cannot be given one from a job.
        * `body` is NOT NULL with `char_length BETWEEN 2 AND 10000`, so it cannot be
        * emptied; and its `hidden` state is paired by CHECK with a `hidden_by_user_id`
