@@ -3152,6 +3152,24 @@ function teardownFileStorageColumnsCheck() {
   );
 }
 
+/**
+ * The model storage columns' own shape, independent of which arm the row is on.
+ *
+ * Parameterised on the column names because `teardown_assembly` and `teardown_part` spell them with
+ * a `model_` prefix while the two file tables do not — the RULE is identical, so it lives once.
+ */
+function teardownModelStorageColumnsCheck(keyColumn: string, shaColumn: string) {
+  return sql.raw(
+    `(${keyColumn} IS NULL OR (
+            char_length(${keyColumn}) BETWEEN 1 AND 512
+            AND ${keyColumn} !~ '[[:space:][:cntrl:]]'
+            AND left(${keyColumn}, 1) <> '/'
+            AND ${keyColumn} !~ '\\.\\.'
+            AND ${keyColumn} ~ '^[A-Za-z0-9][A-Za-z0-9/_.%-]*$'))
+       AND (${shaColumn} IS NULL OR ${shaColumn} ~ '^[0-9a-f]{64}$')`,
+  );
+}
+
 /** Outbound links — a supplier, a licence. https only; there is no same-site case for these. */
 function externalUrlCheck(columnName: string) {
   return sql.raw(
@@ -4042,6 +4060,32 @@ export const blueprintContentReport = pgTable(
 );
 
 /**
+ * ⚠️ THE FOUR FORMATS THE UPLOADED ARM ACCEPTS, WHICH IS FEWER THAN THE EIGHT `kind`s A FILE MAY
+ * CARRY. `gerber`, `drill`, `pick_and_place` and `bill_of_materials_csv` stay pasted-link-only, and
+ * the omission is a decision rather than a gap: the first two have sniffable preambles and can be
+ * added when somebody wants them, but a pick-and-place file and a BOM csv are plain text with no
+ * framing at all, so a "validator" for them would assert nothing while reading as though it did.
+ * §3.7's rule applies — do not add a label before its lever exists.
+ */
+export const teardownUploadFormatEnum = pgEnum("teardown_upload_format", [
+  "pdf",
+  "step",
+  "stl",
+  "dxf",
+]);
+
+/**
+ * Which of the two ways a file arrived, and therefore which columns may be non-null.
+ *
+ * ⚠️ A DISCRIMINATED UNION ON THE ROW, NOT A NULLABLE COLUMN SOUP. `url` used to be NOT NULL and is
+ * now nullable, which on its own would admit a row that is neither a link nor an upload — so
+ * `source` pins which shape a row holds and a CHECK makes the other three combinations
+ * unrepresentable. CLAUDE.md §2's rule, in the file whose own header says its CHECKs exist so an
+ * illegal state cannot be written.
+ */
+export const teardownFileSourceEnum = pgEnum("teardown_file_source", ["pasted_link", "uploaded"]);
+
+/**
  * The 3D view of one teardown, when a model was published.
  *
  * ONE PER TEARDOWN — `unique(teardown_id)` — so `?media=assembly` is an index-only semi-join and
@@ -4069,22 +4113,67 @@ export const teardownAssembly = pgTable(
     explosionAxisX: doublePrecision("explosion_axis_x"),
     explosionAxisY: doublePrecision("explosion_axis_y"),
     explosionAxisZ: doublePrecision("explosion_axis_z"),
-    /** The one composite model file. NULL on the `individual_parts` arm, where parts carry their own. */
+    /**
+     * The one composite model file. NULL on the `individual_parts` arm, where parts carry their own.
+     *
+     * ⚠️ NULL ON THE UPLOADED ARM TOO, exactly as `teardown_document.url` is. A `.glb` an author
+     * uploaded lives in the private bucket, and the address a viewer fetches is COMPUTED — a route
+     * that re-checks the gate per request. A presigned URL expires in 300 seconds so it cannot be
+     * stored, and a raw object key would be refused by `assetUrlCheck`.
+     */
     modelUrl: text("model_url"),
     modelByteSize: integer("model_byte_size"),
+    modelSource: teardownFileSourceEnum("model_source"),
+    modelObjectStorageKey: text("model_object_storage_key"),
+    modelContentSha256: text("model_content_sha256"),
   },
   (table) => [
     unique("teardown_assembly_teardown_uidx").on(table.teardownId),
     unique("teardown_assembly_teardown_id_uidx").on(table.teardownId, table.id),
     unique("teardown_assembly_kind_uidx").on(table.id, table.kind),
-    /** A composite assembly has the model; an individual-parts one has none. */
+    /**
+     * A composite assembly has the model; an individual-parts one has none.
+     *
+     * ⚠️ "HAS THE MODEL" NOW MEANS ONE OF TWO SHAPES, not just a URL. A seeded assembly carries a
+     * pasted fixture link; an authored one carries an object key, because its `.glb` is in the
+     * private bucket and its address is computed per request. `model_source` says which, and a
+     * composite arm with NEITHER is what this refuses — the row that a nullable `model_url` would
+     * otherwise have admitted for free.
+     *
+     * `model_byte_size > 0` survives on both, and on the uploaded arm it is measured rather than
+     * declared: the upload hashed and sized the bytes at intake.
+     *
+     * ⚠️ `model_source IS NOT NULL` IS SPELLED OUT, AND IT IS THE WHOLE CONSTRAINT. Without it this
+     * CHECK is migration 0172's bug in a new spelling: with a NULL source, `model_source =
+     * 'pasted_link'` is NULL, both arms of the inner `OR` are NULL, `NULL OR NULL` is NULL — and a
+     * CHECK TREATS NULL AS PASSING. The first version of this constraint shipped without the clause
+     * and silently admitted sixteen existing rows it was written to refuse. The redundant-looking
+     * IS NOT NULL beside a comparison is the same fix `showcase_launch_call_to_action_ck` needed.
+     */
     check(
       "teardown_assembly_kind_shape_ck",
       sql`(kind = 'composite'
-           AND model_url IS NOT NULL
            AND model_byte_size IS NOT NULL
-           AND model_byte_size > 0)
-          OR (kind = 'individual_parts' AND model_url IS NULL AND model_byte_size IS NULL)`,
+           AND model_byte_size > 0
+           AND model_source IS NOT NULL
+           AND ((model_source = 'pasted_link'
+                 AND model_url IS NOT NULL
+                 AND model_object_storage_key IS NULL
+                 AND model_content_sha256 IS NULL)
+                OR (model_source = 'uploaded'
+                    AND model_url IS NULL
+                    AND model_object_storage_key IS NOT NULL
+                    AND model_content_sha256 IS NOT NULL)))
+          OR (kind = 'individual_parts'
+              AND model_url IS NULL
+              AND model_byte_size IS NULL
+              AND model_source IS NULL
+              AND model_object_storage_key IS NULL
+              AND model_content_sha256 IS NULL)`,
+    ),
+    check(
+      "teardown_assembly_model_key_ck",
+      teardownModelStorageColumnsCheck("model_object_storage_key", "model_content_sha256"),
     ),
     check(
       "teardown_assembly_model_url_ck",
@@ -4147,9 +4236,12 @@ export const teardownPart = pgTable(
     calloutText: text("callout_text"),
     /** Composite arm only: the node name inside the shared `.glb`, byte-matched by the viewer. */
     nodeName: text("node_name"),
-    /** Individual arm only. */
+    /** Individual arm only. Pasted or uploaded, the same union `teardown_assembly` carries. */
     modelUrl: text("model_url"),
     modelByteSize: integer("model_byte_size"),
+    modelSource: teardownFileSourceEnum("model_source"),
+    modelObjectStorageKey: text("model_object_storage_key"),
+    modelContentSha256: text("model_content_sha256"),
     placementPositionX: doublePrecision("placement_position_x"),
     placementPositionY: doublePrecision("placement_position_y"),
     placementPositionZ: doublePrecision("placement_position_z"),
@@ -4185,13 +4277,28 @@ export const teardownPart = pgTable(
            AND node_name IS NOT NULL
            AND model_url IS NULL
            AND model_byte_size IS NULL
+           AND model_source IS NULL
+           AND model_object_storage_key IS NULL
+           AND model_content_sha256 IS NULL
            AND placement_position_x IS NULL
            AND placement_rotation_x IS NULL)
           OR (assembly_kind = 'individual_parts'
               AND node_name IS NULL
-              AND model_url IS NOT NULL
               AND model_byte_size IS NOT NULL
-              AND model_byte_size > 0)`,
+              AND model_byte_size > 0
+              AND model_source IS NOT NULL
+              AND ((model_source = 'pasted_link'
+                    AND model_url IS NOT NULL
+                    AND model_object_storage_key IS NULL
+                    AND model_content_sha256 IS NULL)
+                   OR (model_source = 'uploaded'
+                       AND model_url IS NULL
+                       AND model_object_storage_key IS NOT NULL
+                       AND model_content_sha256 IS NOT NULL)))`,
+    ),
+    check(
+      "teardown_part_model_key_ck",
+      teardownModelStorageColumnsCheck("model_object_storage_key", "model_content_sha256"),
     ),
     check("teardown_part_model_url_ck", sql`model_url IS NULL OR (${assetUrlCheck("model_url")})`),
     /**
@@ -4290,32 +4397,6 @@ export const teardownPartListing = pgTable(
     ),
   ],
 );
-
-/**
- * ⚠️ THE FOUR FORMATS THE UPLOADED ARM ACCEPTS, WHICH IS FEWER THAN THE EIGHT `kind`s A FILE MAY
- * CARRY. `gerber`, `drill`, `pick_and_place` and `bill_of_materials_csv` stay pasted-link-only, and
- * the omission is a decision rather than a gap: the first two have sniffable preambles and can be
- * added when somebody wants them, but a pick-and-place file and a BOM csv are plain text with no
- * framing at all, so a "validator" for them would assert nothing while reading as though it did.
- * §3.7's rule applies — do not add a label before its lever exists.
- */
-export const teardownUploadFormatEnum = pgEnum("teardown_upload_format", [
-  "pdf",
-  "step",
-  "stl",
-  "dxf",
-]);
-
-/**
- * Which of the two ways a file arrived, and therefore which columns may be non-null.
- *
- * ⚠️ A DISCRIMINATED UNION ON THE ROW, NOT A NULLABLE COLUMN SOUP. `url` used to be NOT NULL and is
- * now nullable, which on its own would admit a row that is neither a link nor an upload — so
- * `source` pins which shape a row holds and a CHECK makes the other three combinations
- * unrepresentable. CLAUDE.md §2's rule, in the file whose own header says its CHECKs exist so an
- * illegal state cannot be written.
- */
-export const teardownFileSourceEnum = pgEnum("teardown_file_source", ["pasted_link", "uploaded"]);
 
 /** Something a reader opens: a schematic, a bill of materials, an assembly guide, a datasheet. */
 export const teardownDocument = pgTable(

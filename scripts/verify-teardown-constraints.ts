@@ -463,8 +463,8 @@ async function main(): Promise<void> {
 
     const assemblyId = randomUUID();
     await client.query(
-      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size)
-       VALUES ($1, $2, 'composite', '/dummy/models/verify.glb', 482000)`,
+      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size, model_source)
+       VALUES ($1, $2, 'composite', '/dummy/models/verify.glb', 482000, 'pasted_link')`,
       [assemblyId, teardownId],
     );
     check("a composite assembly inserts with its model", true, "teardown_assembly");
@@ -472,24 +472,59 @@ async function main(): Promise<void> {
     await expectRefused(
       "a second assembly on one teardown is refused (teardown_assembly_teardown_uidx)",
       PG_UNIQUE_VIOLATION,
-      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size)
-       VALUES ($1, $2, 'composite', '/dummy/models/second.glb', 1000)`,
+      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size, model_source)
+       VALUES ($1, $2, 'composite', '/dummy/models/second.glb', 1000, 'pasted_link')`,
       [randomUUID(), teardownId],
     );
 
     await expectRefused(
       "an individual-parts assembly carrying a model is refused (teardown_assembly_kind_shape_ck)",
       PG_CHECK_VIOLATION,
-      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size)
-       VALUES ($1, $2, 'individual_parts', '/dummy/models/wrong.glb', 1000)`,
+      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size, model_source)
+       VALUES ($1, $2, 'individual_parts', '/dummy/models/wrong.glb', 1000, 'pasted_link')`,
       [randomUUID(), randomUUID()],
     );
 
     await expectRefused(
       "a composite assembly whose model has no byte size is refused (teardown_assembly_kind_shape_ck)",
       PG_CHECK_VIOLATION,
-      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size)
-       VALUES ($1, $2, 'composite', '/dummy/models/sizeless.glb', NULL)`,
+      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size, model_source)
+       VALUES ($1, $2, 'composite', '/dummy/models/sizeless.glb', NULL, 'pasted_link')`,
+      [randomUUID(), randomUUID()],
+    );
+
+    /*
+     * ⚠️ THE NULL-SOURCE CASE, AND IT IS HERE BECAUSE THE FIRST SPELLING OF THIS CONSTRAINT MISSED
+     * IT. `teardown_assembly_kind_shape_ck` compares `model_source` against two literals; with a
+     * NULL source both comparisons are NULL, `NULL OR NULL` is NULL, and A CHECK TREATS NULL AS
+     * PASSING. Migration 0190 shipped without the explicit `IS NOT NULL` and silently admitted
+     * sixteen rows it was written to classify; 0191 tightened it and backfilled them. This is the
+     * assertion that would have caught it — the same shape `showcase_launch_call_to_action_ck`
+     * needed after the identical bug.
+     */
+    await expectRefused(
+      "a composite assembly with a NULL model_source is refused — a CHECK passes on NULL",
+      PG_CHECK_VIOLATION,
+      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size, model_source)
+       VALUES ($1, $2, 'composite', '/dummy/models/sourceless.glb', 1000, NULL)`,
+      [randomUUID(), randomUUID()],
+    );
+
+    await expectRefused(
+      "a composite assembly claiming an upload but carrying a url is refused",
+      PG_CHECK_VIOLATION,
+      `INSERT INTO teardown_assembly
+         (id, teardown_id, kind, model_url, model_byte_size, model_source,
+          model_object_storage_key, model_content_sha256)
+       VALUES ($1, $2, 'composite', '/dummy/models/both.glb', 1000, 'uploaded', $3, $4)`,
+      [randomUUID(), randomUUID(), `teardowns/u/uploads/${"a".repeat(64)}.glb`, "a".repeat(64)],
+    );
+
+    await expectRefused(
+      "a composite assembly claiming an upload with no storage key is refused",
+      PG_CHECK_VIOLATION,
+      `INSERT INTO teardown_assembly (id, teardown_id, kind, model_url, model_byte_size, model_source)
+       VALUES ($1, $2, 'composite', NULL, 1000, 'uploaded')`,
       [randomUUID(), randomUUID()],
     );
 
@@ -520,11 +555,17 @@ async function main(): Promise<void> {
     await expectRefused(
       "a part disagreeing with its assembly's kind is refused (teardown_part_assembly_kind_fk)",
       PG_FOREIGN_KEY_VIOLATION,
+      /*
+       * ⚠️ THE ROW IS OTHERWISE VALID ON PURPOSE, `model_source` INCLUDED. This assertion names the
+       * composite FK, so the row has to reach it — once `teardown_part_arm_shape_ck` started
+       * requiring a source, a fixture without one was refused 23514 by the CHECK and the FK was
+       * never exercised. An assertion that passes for the wrong reason is worse than one that fails.
+       */
       `INSERT INTO teardown_part
          (id, assembly_id, assembly_kind, position, label, material, manufacturing_method,
-          model_url, model_byte_size)
+          model_url, model_byte_size, model_source)
        VALUES ($1, $2, 'individual_parts', 1, 'Wrong arm', 'steel', 'cnc_milled',
-               '/dummy/models/part.glb', 1000)`,
+               '/dummy/models/part.glb', 1000, 'pasted_link')`,
       [`wrong-arm-${suffix}`, assemblyId],
     );
 
