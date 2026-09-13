@@ -1,0 +1,3 @@
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'blueprint_content_flagged' BEFORE 'commerce_content_hidden';--> statement-breakpoint
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'blueprint_content_quarantined' BEFORE 'commerce_content_hidden';--> statement-breakpoint
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'blueprint_content_restored' BEFORE 'commerce_content_hidden';

@@ -181,11 +181,24 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "case_study_rejected",
   // Blueprints teardowns — `teardown-moderation`. A publish materialises somebody's survey of
   // ANOTHER COMPANY'S PRODUCT at a public address; a rejection sends it back with a reason. Both
-  // name an accountable human. Submitting is a member action and is not here. Only two labels: a
-  // teardown's `flagged`/`quarantined` states have no writer yet, and a label no transition writes
-  // is the unverified code the field sweeps exist to catch.
+  // name an accountable human. Submitting is a member action and is not here.
   "teardown_published",
   "teardown_rejected",
+  // The three moderation verbs on a PUBLISHED blueprint — `blueprint-moderation`. This block used
+  // to read "only two labels: a teardown's `flagged`/`quarantined` states have no writer yet".
+  // They have one now.
+  //
+  // ⚠️ VERB-SCOPED, NOT ARM-SCOPED, WHICH IS WHAT MAKES THE COUNT THREE. Arm-scoped would be five
+  // (`teardown_flagged`, `teardown_quarantined`, `teardown_restored`, `case_study_flagged`,
+  // `case_study_restored`) and would contradict the number §3.7 of the blueprints doc promised.
+  // The arm rides in the payload as a flag, where an id already has to travel anyway.
+  //
+  // ⚠️ THERE IS NO `showcase` ARM FOR THESE. `showcase_launch_moderation_state_ck` admits three
+  // states and its public feed gate is a bare `eq(published)`; a label the lever cannot reach is
+  // the unverified code the field sweeps exist to catch.
+  "blueprint_content_flagged",
+  "blueprint_content_quarantined",
+  "blueprint_content_restored",
   // Commerce content moderation — `commerce-content-reports` (Appendix A12). Staff
   // decisions only. An AUTOMATIC threshold hide never reaches this chain: this table's
   // `actorUserId` is NOT NULL because every entry must name an accountable human, and
