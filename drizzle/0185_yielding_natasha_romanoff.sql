@@ -1,0 +1,3 @@
+CREATE TYPE "public"."blueprint_content_report_reason" AS ENUM('rights_claim', 'fabricated_measurements', 'dangerous_procedure', 'not_the_stated_product', 'spam', 'other');--> statement-breakpoint
+CREATE TYPE "public"."blueprint_content_report_status" AS ENUM('open', 'actioned', 'dismissed');--> statement-breakpoint
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'blueprint_content_report_dismissed' BEFORE 'commerce_content_hidden';

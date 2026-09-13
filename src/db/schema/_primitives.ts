@@ -106,6 +106,43 @@ export const userReportReasonEnum = pgEnum("user_report_reason", [
 
 export const userReportStatusEnum = pgEnum("user_report_status", ["open", "actioned", "dismissed"]);
 
+/**
+ * Why a reader is reporting a published blueprint.
+ *
+ * ⚠️ BLUEPRINT-SCOPED, AND EVERY VALUE NAMES SOMETHING THE LEVER CAN ADDRESS — the rule
+ * `user_report_reason` states about `severe_harm_escalation`, applied the other way round: a reason
+ * whose only honest answer is "we cannot do that here" belongs in a queue that says so, and a
+ * reason nothing can act on should not be offered at all.
+ *
+ *   `rights_claim`             the reason QUARANTINE exists, and the only value that can reach it
+ *   `fabricated_measurements`  the survey IS the claim; telemetry nobody took is the core failure
+ *   `dangerous_procedure`      a disassembly step that will injure somebody
+ *   `not_the_stated_product`   the write-up is not about the unit it names
+ *
+ * DELIBERATELY ABSENT, and worth saying so:
+ *   `copyright` — subsumed by `rights_claim`, which is the word this surface already uses
+ *                 (`claim-targets`, `withheldPayload`). Two words for one thing would split the
+ *                 queue.
+ *   `impersonation` / `abusive_profile_text` / `misleading_links` — profile-scoped. A teardown has
+ *                 no bio.
+ *   `counterfeit` / `prohibited_item` — commerce words about goods on sale. A teardown is a survey
+ *                 of somebody else's product, not an offer of one.
+ */
+export const blueprintContentReportReasonEnum = pgEnum("blueprint_content_report_reason", [
+  "rights_claim",
+  "fabricated_measurements",
+  "dangerous_procedure",
+  "not_the_stated_product",
+  "spam",
+  "other",
+]);
+
+export const blueprintContentReportStatusEnum = pgEnum("blueprint_content_report_status", [
+  "open",
+  "actioned",
+  "dismissed",
+]);
+
 export const userModerationActionKindEnum = pgEnum("user_moderation_action_kind", [
   "profile_text_hidden",
   "profile_text_restored",

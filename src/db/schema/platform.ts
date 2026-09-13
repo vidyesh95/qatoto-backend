@@ -199,6 +199,17 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "blueprint_content_flagged",
   "blueprint_content_quarantined",
   "blueprint_content_restored",
+  /**
+   * ⚠️ A FOURTH LABEL, WHERE §3.7 OF THE BLUEPRINTS DOC SAID THREE — and the departure is
+   * deliberate rather than drift. That bullet counted the three VERBS, and it was right about them.
+   * A dismissal is a fourth staff action: every sibling report surface logs one
+   * (`user_report_dismissed`, `video_content_report_dismissed`, `commerce_content_report_dismissed`,
+   * `community_content_report_dismissed`), and §5's inclusion rule for this chain is "staff
+   * action", which a dismissal plainly is. The three verbs shipped with exactly three labels in
+   * their own migration, so §3.7 was literally true at the moment it was deleted; this one arrives
+   * with the report queue that makes it reachable.
+   */
+  "blueprint_content_report_dismissed",
   // Commerce content moderation — `commerce-content-reports` (Appendix A12). Staff
   // decisions only. An AUTOMATIC threshold hide never reaches this chain: this table's
   // `actorUserId` is NOT NULL because every entry must name an accountable human, and
