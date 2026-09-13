@@ -1737,6 +1737,18 @@ export const promotionalSlide = pgTable(
      * check exists so the bad row stays UNREPRESENTABLE even if a future code path
      * skips the service.
      *
+     * ⚠️ THERE ARE TWO SPELLINGS AND THIS USED TO REFUSE ONLY ONE. `/\evil.tld/x` starts with a
+     * SINGLE slash, so `NOT LIKE '//%'` admitted it — and a browser reads it as "same scheme,
+     * different host" exactly as it reads the doubled form. `parsePromotionalDestination` refuses
+     * both, which is why this was a hole in the backstop rather than a live redirect; but a
+     * backstop exists for the path that skips the service, so a hole in it is the one defect it
+     * may not have. `anime_hero_slide_destination_ck` carried the identical gap and was fixed in
+     * the same change.
+     *
+     * `chr(92)` IS A BACKSLASH, written as a call rather than a literal for the reason
+     * `showcase_launch_write_up_image_blur_ck` writes `chr(59)`: a generated migration is not the
+     * place to find out how many layers of escaping a character survived.
+     *
      * Written with no apostrophe inside the character class on purpose — quote-doubling
      * inside a `sql` template is how you get a migration that generates but won't apply.
      */
@@ -1744,8 +1756,9 @@ export const promotionalSlide = pgTable(
       "promotional_slide_destination_ck",
       sql`(destination_kind = 'internal_path'
              AND char_length(destination_value) BETWEEN 1 AND 512
-             AND destination_value LIKE '/%'
-             AND destination_value NOT LIKE '//%'
+             AND left(destination_value, 1) = '/'
+             AND left(destination_value, 2) <> '//'
+             AND left(destination_value, 2) <> ('/' || chr(92))
              AND destination_value !~ '[[:space:][:cntrl:]]')
           OR (destination_kind = 'external_url'
              AND char_length(destination_value) BETWEEN 1 AND 2048
@@ -1920,27 +1933,40 @@ export const animeHeroSlide = pgTable(
     check("anime_hero_slide_position_ck", sql`position >= 0`),
     check("anime_hero_slide_title_ck", sql`char_length(title) BETWEEN 1 AND 160`),
     /**
-     * `https://` for an uploaded asset, or a site-relative path for a seeded one.
+     * `https://` for an uploaded asset, or a site-relative path for a seeded one. ⚠️ THE
+     * SITE-RELATIVE ARM LOOKS LIKE A LOOPHOLE AND IS NOT: migration 0149 seeded four such rows, so
+     * an https-only rule here would refuse the seed. `showcase_launch_heading_image_url_ck` IS
+     * https-only, deliberately, because that arm has no seeded population — do not harmonise them.
      *
-     * The doubled-slash refusal is the same open-redirect backstop
-     * `promotional_slide_destination_ck` applies to its internal arm: `//evil.tld/x`
-     * starts with "/" and is a protocol-relative URL that leaves the site. It matters
-     * here too, because this value becomes a `next/image` src on a public page.
+     * ⚠️ THIS NOW SHARES `assetUrlCheck` WITH THE TEARDOWN TABLES RATHER THAN SPELLING THE RULE
+     * ITSELF, and the change is not cosmetic. The hand-rolled predicate was
+     * `LIKE '/%' AND NOT LIKE '//%'`, which refuses ONE spelling of a protocol-relative URL and
+     * admits the other: `/\evil.tld/x` starts with a single slash, passed, and is read by a browser
+     * as "same scheme, different host". This value becomes a `next/image` src on a public page.
+     * `assetUrlCheck` refuses both spellings and says so in its own docblock.
      */
-    check(
-      "anime_hero_slide_image_url_ck",
-      sql`char_length(image_url) BETWEEN 1 AND 2048
-          AND image_url !~ '[[:space:][:cntrl:]]'
-          AND (image_url LIKE 'https://%'
-               OR (image_url LIKE '/%' AND image_url NOT LIKE '//%'))`,
-    ),
-    /** Same rule, minus the https arm — this surface never links off-site. */
+    check("anime_hero_slide_image_url_ck", assetUrlCheck("image_url")),
+    /**
+     * Same rule, minus the https arm — this surface never links off-site.
+     *
+     * ⚠️ `NOT LIKE '//%'` WAS NOT A SAME-SITE TEST, and the doubled-slash comment above was written
+     * believing it was. `/\evil.tld` starts with ONE slash, so it passed — and a browser reads it
+     * as "same scheme, different host" exactly as it reads `//evil.tld`. `destination_path` becomes
+     * a public `href`, so the backslash arm is the half that was doing nothing.
+     * `parsePromotionalDestination` refuses both spellings in TypeScript, which is why this was a
+     * gap in the backstop rather than a live redirect — but the backstop is for the case where the
+     * TypeScript is bypassed, so a backstop with a hole is the one thing it may not be.
+     *
+     * `chr(92)` IS A BACKSLASH, written as a call for `assetUrlCheck`'s stated reason: a literal
+     * `\` inside a generated migration is not worth the risk.
+     */
     check(
       "anime_hero_slide_destination_ck",
       sql`destination_path IS NULL
           OR (char_length(destination_path) BETWEEN 1 AND 512
-              AND destination_path LIKE '/%'
-              AND destination_path NOT LIKE '//%'
+              AND left(destination_path, 1) = '/'
+              AND left(destination_path, 2) <> '//'
+              AND left(destination_path, 2) <> ('/' || chr(92))
               AND destination_path !~ '[[:space:][:cntrl:]]')`,
     ),
     check(
@@ -2116,7 +2142,19 @@ export const showcaseLaunch = pgTable(
           AND char_length(summary) BETWEEN 40 AND 1000
           AND (write_up IS NULL OR char_length(write_up) BETWEEN 1 AND 10000)`,
     ),
-    check("showcase_launch_tags_ck", sql`cardinality(tags) <= 10`),
+    /**
+     * Ten tags, and not one of them NULL.
+     *
+     * ⚠️ THIS ONE WAS REALLY OPEN. `cardinality(tags) <= 10` counts a NULL element like any other
+     * and tests no membership, so `ARRAY['solar', NULL]` satisfied it and stored. Unlike the
+     * statement CHECK above, there was no containment test here doing the work by accident. A tag
+     * renders as a public chip and is a facet key, so a NULL in the array is a chip with no label
+     * and a facet nothing can select.
+     */
+    check(
+      "showcase_launch_tags_ck",
+      sql`cardinality(tags) <= 10 AND array_position(tags, NULL) IS NULL`,
+    ),
     check(
       "showcase_launch_cost_range_ck",
       sql`(bill_of_materials_minimum_cents IS NULL
@@ -2150,10 +2188,29 @@ export const showcaseLaunch = pgTable(
           AND heading_image_url LIKE 'https://%'
           AND heading_image_url !~ '[[:space:][:cntrl:]]'`,
     ),
+    /**
+     * BOTH STATEMENTS, AND NOT ONE OF THEM NULL.
+     *
+     * ⚠️ THE NULL GUARD HERE IS DEFENCE IN DEPTH, NOT A HOLE BEING CLOSED — and saying which it is
+     * matters, because the sibling comment on `case_study_statements_ck` states the opposite and is
+     * WRONG ABOUT POSTGRES. It claims
+     * `ARRAY['was_part_of_it', NULL] @> ARRAY['was_part_of_it','figures_from_records']`
+     * "evaluates to NULL". It evaluates to FALSE. Array containment tests each right-hand element
+     * for membership and a NULL element simply never matches; it does not propagate. Probed against
+     * a real database before this line was written.
+     *
+     * What actually made a NULL element unrepresentable on THIS arm is the pair that was already
+     * here: `@>` demands both real labels, so a passing array holds at least two non-NULL elements,
+     * and `cardinality = 2` leaves no third slot for a NULL to occupy. The guard is kept anyway —
+     * it is free, it survives somebody relaxing `cardinality` to `>= 2`, and it makes the two
+     * statement CHECKs read alike. `showcase_launch_tags_ck` below is the one that was genuinely
+     * open, because `cardinality(tags) <= 10` tests no membership at all.
+     */
     check(
       "showcase_launch_statements_ck",
       sql`accepted_launch_statement_ids @> ARRAY['built_it_ourselves', 'results_are_our_own']::text[]
-          AND cardinality(accepted_launch_statement_ids) = 2`,
+          AND cardinality(accepted_launch_statement_ids) = 2
+          AND array_position(accepted_launch_statement_ids, NULL) IS NULL`,
     ),
     /**
      * THE DECISION COLUMNS MOVE TOGETHER. A launch in review has no reviewer, no decision time and

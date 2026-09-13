@@ -14,6 +14,12 @@
  * and a constraint nobody has watched fire is indistinguishable from an absent one — so
  * every guarantee below is EXERCISED against real rows.
  *
+ * ⚠️ THERE ARE TWO SPELLINGS OF THAT ATTACK AND THIS FILE ONLY EVER TESTED ONE. `/\evil.tld/x`
+ * begins with a single slash, so the original `NOT LIKE '//%'` arm admitted it while refusing
+ * `//evil.tld/x` — and a browser reads the two identically. The CHECK now tests both and so does
+ * this script. That is the whole argument for the file: the missing assertion and the missing
+ * constraint arm were the same omission, and neither was visible from TypeScript.
+ *
  * Read-only in effect: every write happens inside a transaction that is always rolled back.
  *
  *   pnpm db:verify-promotional-slide-constraints
@@ -198,6 +204,13 @@ async function checkRowLevelGuarantees(): Promise<readonly CheckOutcome[]> {
       // naive startsWith("/") check.
       await expectRejected(client, "refuses a protocol-relative //host path", {
         destinationValue: "//evil.tld/x",
+      }),
+      // ⚠️ THE SECOND SPELLING, AND IT USED TO BE ACCEPTED. `NOT LIKE '//%'` refuses the doubled
+      // form and admits this one, because `/\evil.tld/x` starts with a SINGLE slash — yet a
+      // browser resolves both to "same scheme, different host". The predicate was re-derived
+      // against Postgres before the fix and confirmed to admit this exact value.
+      await expectRejected(client, "refuses a backslash protocol-relative path", {
+        destinationValue: "/\\evil.tld/x",
       }),
       await expectRejected(client, "refuses an absolute URL claimed as an internal path", {
         destinationValue: "https://evil.tld/x",
