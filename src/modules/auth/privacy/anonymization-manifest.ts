@@ -719,6 +719,20 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
      * teardown FIRST nulls that column under a `published` row and raises 23514, dead-lettering the
      * scrub. The submission must go first. `anonymize-account.service.ts` orders it explicitly.
      */
+    /**
+     * ⚠️ `retain`, AND IT IS THE ONLY LAWFUL DISPOSITION HERE — the column is NOT NULL, so a
+     * `null_out` would not merely be wrong, it would raise 23502 and dead-letter the scrub.
+     *
+     * A moderation decision taken ABOUT somebody else's work. The row is hash-chained through
+     * `audit_entry_id` and names the human behind a flag or a quarantine; an unattributable
+     * enforcement action cannot be appealed or defended. Same verdict, same basis, as
+     * `user_moderation_action.moderator_user_id` and `case_study.reviewed_by_user_id`.
+     */
+    "blueprint_moderation_action.moderator_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "Hash-chained and NOT NULL: the row names the human behind a flag, a quarantine or a restore, and an enforcement action nobody can attribute cannot be appealed or defended.",
+    },
     /* Same three dispositions, same reasons, as the showcase arm above. */
     "teardown_comment.author_user_id": { kind: "null_out" },
     "teardown_comment_like.user_id": { kind: "delete_rows" },

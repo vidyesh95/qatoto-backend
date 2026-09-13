@@ -6,6 +6,9 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/home/blueprints/blueprint-error-response.js";
+import { respondBlueprintModerationError } from "#src/modules/home/blueprints/blueprint-moderation-error-response.js";
+import { BlueprintModerationCommandSchema } from "#src/modules/home/blueprints/blueprint-moderation.schemas.js";
+import * as blueprintModerationService from "#src/modules/home/blueprints/blueprint-moderation.service.js";
 import * as caseStudyModerationService from "#src/modules/home/blueprints/case-study-moderation.service.js";
 import * as caseStudyPublicReadService from "#src/modules/home/blueprints/case-study-public-read.service.js";
 import {
@@ -337,4 +340,41 @@ export async function moderateCaseStudy(req: Request, res: Response): Promise<vo
     publicSlug: decisionResult.value.publicSlug,
     decidedAt: decisionResult.value.decidedAt.toISOString(),
   });
+}
+
+/**
+ * `POST /blueprints/admin/case-studies/:caseStudyId/moderation-state` — flag or restore.
+ *
+ * ⚠️ NO QUARANTINE ON THIS ARM, and the refusal is a 409 rather than a missing route.
+ * `case_study_moderation_state_ck` has no `quarantined` label because a case study has no files to
+ * withhold — so the verb is refused with a sentence saying so, which is more useful to a moderator
+ * working two queues than a 404 that looks like the row is gone.
+ *
+ * ⚠️ THE CAPABILITY IS RESOLVED BEFORE `req.params` IS READ AND BEFORE THE BODY IS PARSED — §3.6.
+ * Reversed, a 403 that only arrives for case studies that exist is an existence oracle over
+ * unpublished work.
+ */
+export async function setCaseStudyModerationState(req: Request, res: Response): Promise<void> {
+  const staff = await resolveModerator(req, res);
+  if (!staff) return;
+
+  const parsedCommand = BlueprintModerationCommandSchema.safeParse(req.body);
+  if (!parsedCommand.success) {
+    respondValidationFailed(res, parsedCommand.error);
+    return;
+  }
+
+  const result = await blueprintModerationService.applyCaseStudyModerationVerb({
+    targetId: firstParam(req.params.caseStudyId ?? ""),
+    verb: parsedCommand.data.verb,
+    reasonNote: parsedCommand.data.reasonNote,
+    staff,
+  });
+
+  if (!result.success) {
+    respondBlueprintModerationError(res, result.error);
+    return;
+  }
+
+  respondOk(res, "The case study's state was changed.", result.value);
 }

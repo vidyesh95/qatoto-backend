@@ -4,6 +4,7 @@ import {
   CreateBlueprintCommentSchema,
   UpdateBlueprintCommentSchema,
 } from "#src/modules/home/blueprints/blueprint-engagement.schemas.js";
+import { BlueprintModerationCommandSchema } from "#src/modules/home/blueprints/blueprint-moderation.schemas.js";
 import {
   CountersignPeriodSchema,
   DeclineAgreementSchema,
@@ -566,6 +567,22 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   },
   "patch /blueprints/comments/{commentId}": {
     schema: UpdateBlueprintCommentSchema,
+    required: true,
+  },
+
+  /*
+   * THE THREE VERBS ON A PUBLISHED BLUEPRINT. One schema serves both arms: it is a discriminated
+   * union on `verb`, and the ARM is in the path rather than the body. The case-study route accepts
+   * `quarantine` at the parse boundary and refuses it with a 409 — `case_study_moderation_state_ck`
+   * has no such label — because the alternative is two nearly identical schemas whose only
+   * difference is one literal, and a spec reader could not tell which they were looking at.
+   */
+  "post /blueprints/admin/teardowns/{teardownId}/moderation-state": {
+    schema: BlueprintModerationCommandSchema,
+    required: true,
+  },
+  "post /blueprints/admin/case-studies/{caseStudyId}/moderation-state": {
+    schema: BlueprintModerationCommandSchema,
     required: true,
   },
   "post /research-programs/{programSlug}/papers/{paperId}/file": {

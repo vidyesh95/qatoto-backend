@@ -6,6 +6,9 @@ import {
   respondValidationFailed,
 } from "#src/modules/home/blueprints/blueprint-error-response.js";
 import { respondUnauthenticated } from "#src/modules/home/blueprints/blueprint-error-response.js";
+import { respondBlueprintModerationError } from "#src/modules/home/blueprints/blueprint-moderation-error-response.js";
+import { BlueprintModerationCommandSchema } from "#src/modules/home/blueprints/blueprint-moderation.schemas.js";
+import * as blueprintModerationService from "#src/modules/home/blueprints/blueprint-moderation.service.js";
 import * as teardownModerationService from "#src/modules/home/blueprints/teardown-moderation.service.js";
 import * as teardownPublicReadService from "#src/modules/home/blueprints/teardown-public-read.service.js";
 import {
@@ -321,4 +324,43 @@ export async function moderateTeardown(req: Request, res: Response): Promise<voi
     publicSlug: decisionResult.value.publicSlug,
     decidedAt: decisionResult.value.decidedAt.toISOString(),
   });
+}
+
+/**
+ * `POST /blueprints/admin/teardowns/:teardownId/moderation-state` — flag, quarantine or restore.
+ *
+ * ⚠️ THE CAPABILITY IS RESOLVED BEFORE `req.params` IS READ AND BEFORE THE BODY IS PARSED, and the
+ * ordering is the security property rather than a style choice. Reversed, a 403 that only arrives
+ * for teardowns that EXIST is an existence oracle over other people's work — blueprints doc §3.6,
+ * and `blueprints.routes.blueprint-moderation.test.ts` proves it by sending a non-moderator a
+ * request that is ALSO malformed and requiring 403, not 422.
+ *
+ * ⚠️ ADDRESSED BY THE TEARDOWN'S ID, NOT ITS SLUG, and the param is named `teardownId` rather than
+ * `submissionId` so it cannot be confused with the sibling route that decides a submission. These
+ * two act on different objects: `/:submissionId/moderate` decides paperwork, this moves a row that
+ * is already public.
+ */
+export async function setTeardownModerationState(req: Request, res: Response): Promise<void> {
+  const staff = await resolveModerator(req, res);
+  if (!staff) return;
+
+  const parsedCommand = BlueprintModerationCommandSchema.safeParse(req.body);
+  if (!parsedCommand.success) {
+    respondValidationFailed(res, parsedCommand.error);
+    return;
+  }
+
+  const result = await blueprintModerationService.applyTeardownModerationVerb({
+    targetId: firstParam(req.params.teardownId ?? ""),
+    verb: parsedCommand.data.verb,
+    reasonNote: parsedCommand.data.reasonNote,
+    staff,
+  });
+
+  if (!result.success) {
+    respondBlueprintModerationError(res, result.error);
+    return;
+  }
+
+  respondOk(res, "The teardown's state was changed.", result.value);
 }

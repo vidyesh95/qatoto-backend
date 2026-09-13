@@ -585,4 +585,47 @@ router.post(
   teardownController.moderateTeardown,
 );
 
+/*
+ * THE THREE VERBS THAT ACT ON A PUBLISHED BLUEPRINT — flag, quarantine, restore.
+ *
+ * ⚠️ A DIFFERENT OBJECT FROM `/:submissionId/moderate` ABOVE, AND THE PARAM NAME SAYS SO. That
+ * route decides a SUBMISSION: publish it or send it back. These move a row that is already public,
+ * and on the teardown arm that is literally a different table with a different id. The param is
+ * `:teardownId`, never `:submissionId`, so the two cannot be confused at a glance or in a handler.
+ *
+ * ⚠️ ID-ADDRESSED, NOT SLUG-ADDRESSED, WHICH IS THE OPPOSITE OF THE ENGAGEMENT ROUTES ABOVE — and
+ * the split is principled. A reader is standing on a public page and the slug is the only handle
+ * they have; a moderator is working a queue that hands them an id, and §5's audit payload is ids
+ * only. Slug-addressing here would also be unspellable on the case-study arm, whose `public_slug`
+ * is NULL until a moderator mints one.
+ *
+ * ROUTE ORDER: both are three-segment paths ending in a distinct literal, so Express cannot
+ * confuse them with the `/:submissionId/moderate` siblings. Neither adds a literal under an arm's
+ * public prefix, so the derived literal lists are untouched.
+ *
+ * The existing moderation limiters are reused rather than given new namespaces: a flag and a
+ * publish are the same person working the same queue, and two budgets for one queue would let
+ * abuse of either hide in the other's headroom.
+ */
+
+router.post(
+  "/admin/teardowns/:teardownId/moderation-state",
+  requireAuth,
+  teardownModerationLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  idempotency({ required: true }),
+  teardownController.setTeardownModerationState,
+);
+
+router.post(
+  "/admin/case-studies/:caseStudyId/moderation-state",
+  requireAuth,
+  caseStudyModerationLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  idempotency({ required: true }),
+  caseStudyController.setCaseStudyModerationState,
+);
+
 export default router;

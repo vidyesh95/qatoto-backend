@@ -3668,6 +3668,109 @@ export const teardownCommentLike = pgTable(
   ],
 );
 
+/*
+ * ---------------------------------------------------------------------------
+ * BLUEPRINT MODERATION — the three verbs that act on a PUBLISHED row.
+ * ---------------------------------------------------------------------------
+ *
+ * `teardown_moderation_state_ck` has admitted `flagged` and `quarantined` since the arm landed,
+ * and both gate the public reads — but until now NOTHING COULD WRITE EITHER. These are the tables
+ * behind the levers.
+ *
+ * ⚠️ SEPARATE FROM `/:submissionId/moderate`, BECAUSE IT ACTS ON A DIFFERENT OBJECT. That route
+ * decides a SUBMISSION: publish it or send it back. These decide a row that is already public, and
+ * on the teardown arm that is literally a different table with a different id.
+ *
+ * ⚠️ NO `showcase` VALUE IN THE TARGET ENUM. `showcase_launch_moderation_state_ck` admits
+ * `pending_review | published | rejected` and the public feed gate is a bare `eq(published)`, so
+ * offering the label would enqueue a complaint the lever cannot answer — the rule
+ * `user_report_reason` states about `child_safety`. Adding it later is a CHECK widening, a gate
+ * rewrite, and an index predicate change, which is a feature rather than an enum value.
+ */
+
+/** The two arms a moderation verb can reach. Deliberately not three — see the block comment. */
+export const blueprintContentTargetKindEnum = pgEnum("blueprint_content_target_kind", [
+  "teardown",
+  "case_study",
+]);
+
+export const blueprintModerationActionKindEnum = pgEnum("blueprint_moderation_action_kind", [
+  "content_flagged",
+  "content_quarantined",
+  "content_restored",
+]);
+
+/**
+ * One staff decision about one published blueprint.
+ *
+ * FORKED FROM `user_moderation_action`, not from `commerce_moderation_action`, and the difference
+ * is one column: commerce carries `action_source` because it has an AUTOMATIC threshold hide, and
+ * a hide triggered by three reporters names nobody. This surface has no such threshold — a report
+ * here never moves a state by itself — so copying that column would ship a column with one value,
+ * and copying its nullable `audit_entry_id` would ship a nullable foreign key nothing can null.
+ *
+ * ⚠️ `reason_note` IS NOT NULL AND LIVES HERE, NOT IN THE AUDIT CHAIN. `buildHashDocument` hashes
+ * `detailNote` into a chain that is kept forever, and a rights-claim note names a manufacturer and
+ * one party's account of a private permission. The note the author is owed lives on this row,
+ * where an erasure can reach it.
+ */
+export const blueprintModerationAction = pgTable(
+  "blueprint_moderation_action",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    actionKind: blueprintModerationActionKindEnum("action_kind").notNull(),
+    /** Survives its target, which is why it is stored rather than derived from the two ids. */
+    targetKind: blueprintContentTargetKindEnum("target_kind").notNull(),
+    /** `set null`: the decision outlives the row it was about. */
+    teardownId: text("teardown_id").references(() => teardown.id, { onDelete: "set null" }),
+    caseStudyId: text("case_study_id").references(() => caseStudy.id, { onDelete: "set null" }),
+    /** `restrict`: a moderation decision stays attributable for as long as it exists. */
+    moderatorUserId: text("moderator_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    /** Roles are revocable, so a join would tell a later reader the wrong thing. */
+    moderatorRoleSnapshot: text("moderator_role_snapshot").notNull(),
+    reasonNote: text("reason_note").notNull(),
+    /** `unique`: one decision, one entry in the hash-linked chain. */
+    auditEntryId: text("audit_entry_id").notNull().unique(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("blueprint_moderation_action_timeline_idx").on(table.createdAt, table.id),
+    index("blueprint_moderation_action_moderator_idx").on(table.moderatorUserId, table.createdAt),
+    index("blueprint_moderation_action_teardown_idx")
+      .on(table.teardownId, table.createdAt)
+      .where(sql`teardown_id IS NOT NULL`),
+    index("blueprint_moderation_action_case_study_idx")
+      .on(table.caseStudyId, table.createdAt)
+      .where(sql`case_study_id IS NOT NULL`),
+    /**
+     * ⚠️ `<= 1`, NOT `= 1`, AND THE DIFFERENCE IS DELIBERATE. Both target columns are `set null`,
+     * so a decision whose subject was later deleted ends with NO target at all — and `target_kind`
+     * is what still records which kind it was. `blueprint_content_report` uses `= 1` because its
+     * targets CASCADE, so a targetless report cannot exist. Two tables, two correct answers.
+     */
+    check(
+      "blueprint_moderation_action_target_ck",
+      sql`num_nonnulls(teardown_id, case_study_id) <= 1
+          AND (teardown_id IS NULL OR target_kind = 'teardown')
+          AND (case_study_id IS NULL OR target_kind = 'case_study')`,
+    ),
+    check("blueprint_moderation_action_note_ck", sql`char_length(reason_note) BETWEEN 1 AND 2000`),
+    /**
+     * ⚠️ THE SQL-LEVEL STATEMENT THAT QUARANTINE IS TEARDOWN-ONLY. `case_study_moderation_state_ck`
+     * refuses the `quarantined` state on that arm — a case study has no files to withhold — but
+     * nothing else would stop a LOG entry claiming one happened. This does.
+     */
+    check(
+      "blueprint_moderation_action_quarantine_arm_ck",
+      sql`action_kind <> 'content_quarantined' OR target_kind = 'teardown'`,
+    ),
+  ],
+);
+
 /**
  * The 3D view of one teardown, when a model was published.
  *

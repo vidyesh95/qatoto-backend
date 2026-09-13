@@ -234,10 +234,10 @@ sending a non-moderator a request that is ALSO malformed and requiring **403, no
 - **No edit-and-resubmit.** A rejection is terminal, which is why the note is mandatory on one: it is
   the author's entire remedy. The partial unique index deliberately excludes `rejected`, so a
   sent-back author may survey the same unit again as a fresh submission.
-- **No `flag` / `quarantine` / `restore` verb.** Both states already exist in
-  `teardown_moderation_state_ck` and both gate the public read; nothing writes them yet, and no
-  frontend page drives them. When they land they bring three audit labels in their own enum-only
-  migration.
+- ~~**No `flag` / `quarantine` / `restore` verb.**~~ **THESE LANDED — see §9.** They brought exactly
+  the three audit labels this bullet predicted, in their own enum-only migration. The bullet is kept
+  struck through rather than deleted because its reasoning is what kept a label from being added
+  before its lever existed, and the same rule still governs the next one.
 - **No rights-claim intake.** `claim-targets` serves a picker for a flow that prepares a `mailto:`
   notice on the frontend; nothing posts to Qatoto, by that flow's own explicit decision.
 
@@ -376,3 +376,85 @@ rather than deleted, because the reasoning is what stops each one being re-intro
 | 6 | Retire the `/mine` fixture's `draft` row — the endpoint can never return one | Went with the mock file when the transport was wired. |
 
 **Nothing on this surface is waiting on the frontend.**
+
+---
+
+## 9. The three verbs that act on a published blueprint
+
+`flag`, `quarantine` and `restore`. §3.7 said they did not exist; this section is what replaced that.
+
+```
+POST /blueprints/admin/teardowns/:teardownId/moderation-state
+POST /blueprints/admin/case-studies/:caseStudyId/moderation-state
+```
+
+### 9.1 A different object from `/:submissionId/moderate`
+
+That route decides a SUBMISSION — publish it or send it back. These move a row that is **already
+public**, and on the teardown arm that is literally a different table with a different id. The path
+parameter is named `:teardownId`, never `:submissionId`, so the two cannot be confused in code.
+
+⚠️ **Id-addressed, which is the opposite of the engagement routes, and the split is principled.** A
+reader is standing on a public page and the slug is the only handle they have; a moderator is
+working a queue that hands them an id, and §5's audit payload is ids only. Slug-addressing would
+also be *unspellable* on the case-study arm, whose `public_slug` is NULL until a moderator mints one.
+
+### 9.2 The matrix, and the two refusals worth defending
+
+One file — `blueprint-moderation-transitions.ts` — holds every pair; the service reads it and never
+re-states one.
+
+| teardown, from ↓ | `flag` | `quarantine` | `restore` |
+| --- | --- | --- | --- |
+| `published` | → `flagged` | → `quarantined` | refuse |
+| `flagged` | refuse (already) | → `quarantined` | → `published` |
+| `quarantined` | **refuse** | refuse (already) | → `published` |
+| `pending_review` | refuse | refuse | refuse |
+
+Case studies: the same, minus every quarantine cell.
+
+⚠️ **`quarantined → flagged` is refused, not quietly allowed.** A quarantine withholds a publisher's
+files under an unresolved rights claim; downgrading to a flag **republishes them**. That is a
+`restore` then a `flag` — two decisions, two audit entries, two reason notes, because somebody has
+to own the republication. The 409's message names the two-step path rather than just refusing.
+
+⚠️ **`rejected` is never a source.** A rejection is terminal (§3.7) and a rejected case study was
+never public.
+
+⚠️ **Quarantine is teardown-only**, and it is refused in three independent places:
+`case_study_moderation_state_ck` has no such label, the matrix returns `not_available_on_arm`, and
+`blueprint_moderation_action_quarantine_arm_ck` refuses a LOG entry claiming one happened.
+
+### 9.3 What is not built, and why
+
+⚠️ **No showcase arm at all.** `showcase_launch_moderation_state_ck` admits
+`pending_review | published | rejected` and the public feed gate is a bare `eq(published)`. Adding
+the verbs there is a CHECK widening, a gate rewrite, `flagged` added to two partial index
+predicates, and a fix to `showcase_launch_decision_ck` so flagging does not strip the public slug —
+a feature, not an enum value. `blueprint_content_target_kind` therefore has two values, and
+`verify-showcase-launch-constraints` asserts `flagged` and `quarantined` are still *refused* there,
+with a comment saying the refusal is a decision.
+
+### 9.4 Where the note lives, and where it must not
+
+`blueprint_moderation_action.reason_note` is **NOT NULL on all three verbs, `restore` included** — a
+restore overturns another moderator's quarantine, and the record of why is the only thing that stops
+the pair being re-litigated silently.
+
+⚠️ **The note never reaches the audit chain.** `buildHashDocument` hashes `detailNote` into a chain
+that is hash-linked and kept forever, and a rights-claim note names a manufacturer and one party's
+account of a private permission. The payload carries `hasReasonNote: true` and nothing else.
+`user-reports.service.ts` passes `detailNote`; this path does not, and that divergence is a
+decision. Proven against a real database: after driving all three verbs with notes, zero rows in
+`platform_audit_entry` contain the note text.
+
+⚠️ **A refusal writes nothing** — no action row, no audit entry, no state change. Six verbs
+attempted, three refused, three action rows. A log that recorded attempts would make "three
+moderators looked at this" indistinguishable from "three moderators acted".
+
+### 9.5 What the verbs deliberately do not touch
+
+⚠️ **`teardown_submission.moderation_state` is never written.** §4: the state comes from the
+teardown by a `COALESCE` over the join, and `publicSlug` is COMPUTED from it — so `/teardowns/mine`
+picks a flag up for free and stops rendering a "View the page" link with nothing extra written
+anywhere. The alternative is a second state machine writing back into the paperwork.
