@@ -18,7 +18,7 @@ Every API client in `qatoto-frontend/src/lib/blueprints/` maps to an active Expr
 | **Teardowns** | Index (`/teardowns`), options, slugs, detail, claim targets, market signal | Submission intake (`POST /teardowns`), `/mine` | View beacons, likes, saves, threaded comments with likes | Review queue + flag, quarantine, and restore verbs |
 | **Cross-arm** | `/engagement/state` | — | `/comments/:commentId` (edit/delete/like) | `/admin/content-reports` (reader report queue + dismissal) |
 
-All 32 backend blueprint test suites (807 tests), 5 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly. The full project gate is 207 files / 4026 tests.
+All 32 backend blueprint test suites (810 tests), 5 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly. The full project gate is 207 files / 4029 tests.
 
 ---
 
@@ -26,9 +26,16 @@ All 32 backend blueprint test suites (807 tests), 5 database constraint verifica
 
 If you are planning the next phase of capabilities, the following features are not yet implemented by design (detailed in [`BLUEPRINTS_BACKEND_STRUCTURE.md`](file:///Users/vinitchuri/code/backend/qatoto-backend/docs/BLUEPRINTS_BACKEND_STRUCTURE.md)):
 
-### A. 3D CAD/Assembly Geometry for User-Submitted Teardowns
-- **Current State:** The authoring wizard (`POST /blueprints/teardowns`) collects part listings ([`teardown_part_listing`](file:///Users/vinitchuri/code/backend/qatoto-backend/src/db/schema/home.ts)), document links, and manufacturing files.
-- **What's Missing:** The interactive 3D explode/layer viewer tables ([`teardown_assembly`](file:///Users/vinitchuri/code/backend/qatoto-backend/src/db/schema/home.ts), `teardown_part`, `teardown_assembly_step`, `teardown_fastener`) can currently only be created via database seeds (`pnpm db:seed-blueprint-teardowns`). There is no user submission schema or endpoint to upload `.glb` models or configure 3D exploded assemblies.
+### ~~A. 3D CAD/Assembly Geometry for User-Submitted Teardowns~~ — **DONE**
+- **Landed:** `POST /blueprints/teardowns` now accepts `assembly`, `assemblySteps` and `fasteners`,
+  the publish writes all four viewer tables, and `.glb` uploads share the file upload route.
+- ⚠️ **The four tables needed no DDL to accept authored rows** — they were built for this shape. The
+  only schema change was the model union, which uploads forced, not authoring.
+- ⚠️ **§3.4 required this rather than forbidding it.** "A moderator who never held it would be
+  fabricating them" is a rule about who SUPPLIES a field; its verdict is that geometry comes from
+  the author, on the submit path.
+- ⚠️ **The `.glb` goes to the private bucket**, so a quarantine takes the geometry away. See
+  `BLUEPRINTS_BACKEND_STRUCTURE.md` §12.
 
 ### ~~B. Reader Reports and Post-Publish Moderation on Showcase Launches~~ — **DONE**
 - **Landed:** `showcase_launch` now admits `flagged`, readers can report a launch

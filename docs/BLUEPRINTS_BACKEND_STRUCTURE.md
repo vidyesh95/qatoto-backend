@@ -192,8 +192,13 @@ Publishing carries `thumbnailUrl` and `difficulty`, which the author never sent.
 The line: those two are **editorial judgements about the write-up**, formed by reading it — the same
 kind of decision as the public slug every other blueprint arm already asks a moderator to mint. A
 part's `manufacturingMethod`, a node name or a `.glb` are **facts about the physical unit**, and a
-moderator who never held it would be fabricating them. This surface asks for the first two and will
-never ask for the others.
+moderator who never held it would be fabricating them.
+
+⚠️ **THAT IS A RULE ABOUT WHO SUPPLIES A FIELD, AND IT IS WHY THE GEOMETRY LANDED ON THE SUBMIT
+PATH.** Read quickly it sounds like a prohibition on the fields; it is a prohibition on the
+MODERATOR supplying them. Its verdict is that geometry must come from whoever held the unit — the
+author — and the submit route is the only one they have. See §12. This surface, the moderator's
+decision body, still asks for the first two and will never ask for the others.
 
 ### 3.5 `documents[].kind` — a frontend bug the backend absorbed, and why the tolerance stays
 
@@ -319,13 +324,13 @@ sentinel and sweeping raw response bytes.
 ## 7. Verification
 
 ```bash
-pnpm db:verify-teardown-constraints        # 108 assertions in one rolled-back transaction
+pnpm db:verify-teardown-constraints        # 111 assertions in one rolled-back transaction
 pnpm db:verify-case-study-constraints      # 46
 pnpm db:verify-showcase-launch-constraints # 103
 pnpm db:verify-blueprint-hero-constraints  # 27
 pnpm db:verify-blueprint-engagement-constraints # 33
 pnpm db:reconcile-blueprint-stats          # counter drift; -- --fix repairs
-pnpm db:smoke-teardown-authoring           # upload → submit → publish → read → quarantine withholds
+pnpm db:smoke-teardown-authoring           # 41: upload, assembly, publish, read, quarantine withholds
 pnpm db:smoke-case-study-authoring         # 16, and a byte sweep for the withheld company name
 pnpm db:smoke-showcase-authoring           # 36, upload-before-submit, the stats tripwire, the flag walk and `actioned`
 pnpm db:smoke-blueprint-hero               # 19, AVIF and the seeded site-relative arm
@@ -765,3 +770,82 @@ commerce documents, video documents or product documents either. The manifest en
 `delete_rows` and the orphan sweep reaches an unclaimed upload within a day; a claimed one cascades
 with its submission and leaves its bytes, exactly as the other four families do. Worth closing once,
 for all five.
+
+---
+
+## 12. Authored assemblies
+
+The wizard could collect a parts LISTING (§3.3) and no geometry: `teardown_assembly`,
+`teardown_part`, `teardown_assembly_step` and `teardown_fastener` were seed-only. They are now
+written by the publish, from the submission document.
+
+### 12.1 The submit path, not a post-publish surface
+
+⚠️ **§3.4 REQUIRES THIS RATHER THAN FORBIDDING IT** — see the sharpened sentence there. Geometry is
+a fact about the physical unit, so it must come from whoever held it. The two alternatives were
+asking a moderator to invent it, which §3.4 refuses outright, or opening a second unmoderated author
+write onto a row that is already public.
+
+⚠️ **THE FOUR TABLES NEEDED NO DDL TO ACCEPT AUTHORED ROWS**, which is the strongest evidence the
+design is right: they were built for exactly this shape. §3.1's argument against relaxing `teardown`
+— nine all-or-none CHECKs, a `thumbnail_url` the wizard cannot fill — transfers to none of them. The
+only schema change was the model union, and UPLOADS forced that, not authoring.
+
+`document_schema_version` moves 2 → 3, and as with 2 no second parser is needed: `assembly`,
+`assemblySteps` and `fasteners` all carry Zod defaults, so an older document reads as a teardown with
+no assembly, which is what it is.
+
+### 12.2 One field differs; everything else is reused
+
+`model: { url, byteSize }` becomes `modelUploadId`. An author has neither — the URL does not exist
+until a moderator publishes, and the size is a fact the server measured at intake — so sending
+either would be a client asserting something it cannot know. The same reasoning omits `id` from
+`SubmittedMaterialSchema`.
+
+`AssemblyStepSchema` and `FastenerSchema` are imported **whole**: neither carries a file, so neither
+needs an authoring variant.
+
+`refineTeardownCrossSectionRules` is applied rather than restated — its own comment said it was
+exported "so the authoring gate can apply the same rules to a different field set", and this is that
+caller. Its parameter narrowed to a derived `Pick` interface: every field TYPE still comes from the
+import shape, and only the SELECTION narrows.
+
+⚠️ **A SIXTH CROSS-ROW RULE LANDED: part ids are unique within an assembly.** The composite primary
+key always refused a duplicate, but as a 23505 inside the publish transaction, hours after the author
+left, naming a constraint rather than a field. The seed was the only writer, so that was a
+developer's problem; a public route makes it a stranger's.
+
+### 12.3 The `.glb` shares the file upload route
+
+⚠️ **AND IT GOES TO THE PRIVATE BUCKET, NOT CLOUDINARY RAW.** `uploadProductModel` is the documented
+exception for "a public asset rendered in place on a public page", and a `.glb` fits that sentence —
+but `assembly` is in `withheldPayload()`, so a quarantine is supposed to take the geometry away. A
+permanent public URL keeps serving it to anyone who saved the link, which is the hole §11 closed for
+documents; reopening it for the model would have made one quarantine mean two different things on
+one page. The model downloads therefore use the **LIST** gate, exactly as the file downloads do.
+
+One route for five formats means one staging table, one ceiling, one sweep and one download gate.
+`validateGlbBytes` is delegated to rather than re-implemented, for the reason `validatePdfBytes` is:
+it hardcodes its own cap, so a second would be two limits that eventually disagree.
+
+⚠️ **AND THAT DELEGATION HAS AN ORDERING RULE.** `validateTeardownFileBytes` carries a 64-byte floor
+for the three CAD text formats; `pdf` and `glb` must be dispatched ABOVE it, because both delegate to
+validators with their own floors and a conforming minimal `.glb` is 49 bytes. The first version
+applied the generic floor first and refused a valid model — caught by the smoke, whose fixture is the
+smallest legal model, and which no hand-written unit fixture would have reproduced.
+
+### 12.4 The body budget, which the build gate cannot check here
+
+⚠️ **`json-body-budget.test.ts` PASSES THIS ROUTE VACUOUSLY, AND ALWAYS HAS.** That suite is the
+reason a cap is "a derived fact rather than a guess", but `estimateBodyBytes` does not traverse
+`ZodEffects` — and `TeardownSubmissionSchema` ends in `.superRefine`, so it reports **eight bytes**
+for the largest body on this surface. Verified by measuring before and after the assembly arm
+existed. The arm is what makes it matter.
+
+So `teardown-submission.schemas.test.ts` CONSTRUCTS the worst case and measures it against both
+ceilings: `longFormBody` at 128 KB and `teardown_submission_document_ck` at 262,144 characters.
+
+⚠️ **IT CAUGHT THE PROBLEM ON ITS FIRST RUN.** 64 parts, 64 steps and 64 fasteners put a maximal
+document at 133,256 bytes against a 131,072-byte cap. The caps are **48**, measured rather than
+chosen, and the test imports the constants so the two cannot drift. `MAX_JSON_BODY_BYTES` is
+untouched — it is the ceiling every route behind it inherits.

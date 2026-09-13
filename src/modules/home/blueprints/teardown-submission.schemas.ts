@@ -43,14 +43,19 @@ import {
  * become. The reader's `unparseable` arm handles the failure; this number decides WHICH schema to
  * try. Bump it when a stored shape changes, and keep the old parser beside the new one.
  *
- * ⚠️ VERSION 2 ADDED THE UPLOADED FILE ARM, AND NEEDS NO SECOND PARSER — which is worth writing
- * down, because "bump it and keep the old parser beside the new one" invites one. A v1 document
- * carries no `source` key on any file, and `source` DEFAULTS to `pasted_link`, so the v2 schema
- * reads every v1 document as exactly what it is. The bump happens anyway: §3.2's argument for this
- * column is that it is free now and impossible to add later, and a version that only moves when a
- * migration is unavoidable is a version nobody can rely on.
+ * ⚠️ NEITHER 2 NOR 3 NEEDED A SECOND PARSER, which is worth writing down because "bump it and keep
+ * the old parser beside the new one" invites one every time.
+ *
+ * VERSION 2 added the uploaded file arm. A v1 document carries no `source` key on any file, and
+ * `source` DEFAULTS to `pasted_link`, so the v2 schema reads every v1 document as exactly what it
+ * is. VERSION 3 added `assembly`, `assemblySteps` and `fasteners`, all three defaulted, so an
+ * older document reads as a teardown with no geometry — which is what it is.
+ *
+ * The bump happens anyway, both times: §3.2's argument for this column is that it is free now and
+ * impossible to add later, and a version that only moves when a migration is unavoidable is a
+ * version nobody can rely on.
  */
-export const TEARDOWN_SUBMISSION_DOCUMENT_SCHEMA_VERSION = 2;
+export const TEARDOWN_SUBMISSION_DOCUMENT_SCHEMA_VERSION = 3;
 
 /**
  * ⚠️ 512, NOT 2048, AND HTTPS ONLY — two tightenings the read path does not need.
