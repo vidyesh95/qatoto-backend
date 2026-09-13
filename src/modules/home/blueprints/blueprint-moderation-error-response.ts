@@ -92,6 +92,32 @@ export function respondBlueprintModerationError(
             : `A ${error.verb} does not apply to a ${error.moderationState} ${describeModerationArm(error.arm)}.`,
       });
       return;
+    /*
+     * ⚠️ 404, AND IT IS THE SAME ANSWER FOR THREE DIFFERENT FACTS: no such report, a report about
+     * a different row, and a report id the caller had no business knowing. Splitting them would
+     * let anyone holding `moderate_content` map reports to targets by guessing ids, and the queue
+     * already serves everything they are meant to know.
+     */
+    case "BLUEPRINT_REPORT_NOT_FOUND":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "No open report with that id is about this blueprint.",
+      });
+      return;
+    /*
+     * 409 rather than 404: the report EXISTS and the caller may see it in the queue, so telling
+     * them it is already resolved is not a disclosure — it is the answer to why nothing happened.
+     * The state change is refused with it, so two moderators racing one report cannot both be
+     * told they answered it.
+     */
+    case "BLUEPRINT_REPORT_ALREADY_RESOLVED":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "That report was already resolved by another moderator.",
+      });
+      return;
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled blueprint moderation error: ${JSON.stringify(exhaustiveCheck)}`);

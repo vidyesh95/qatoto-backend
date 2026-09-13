@@ -137,6 +137,13 @@ export const blueprintContentReportReasonEnum = pgEnum("blueprint_content_report
   "other",
 ]);
 
+/**
+ * ⚠️ `actioned` AND `dismissed` ARE NOT SYNONYMS, AND THE DIFFERENCE IS WHAT THE REPORTER IS OWED.
+ * `dismissed` means a moderator read the complaint and left the row alone; `actioned` means they
+ * moved it — flagged, quarantined or restored — and named this report as the reason. Both are
+ * answers. `open` is the only one that is not, which is why `/blueprints/reports/mine` exists at
+ * all: "a report that vanishes is indistinguishable from one nobody read."
+ */
 export const blueprintContentReportStatusEnum = pgEnum("blueprint_content_report_status", [
   "open",
   "actioned",

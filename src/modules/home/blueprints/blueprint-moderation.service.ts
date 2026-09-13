@@ -1,7 +1,13 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { blueprintModerationAction, caseStudy, showcaseLaunch, teardown } from "#src/db/schema.js";
+import {
+  blueprintContentReport,
+  blueprintModerationAction,
+  caseStudy,
+  showcaseLaunch,
+  teardown,
+} from "#src/db/schema.js";
 import {
   actionKindForVerb,
   auditLabelForVerb,
@@ -59,7 +65,16 @@ export type BlueprintModerationError =
       readonly verb: BlueprintModerationVerb;
       readonly arm: BlueprintModerationArm;
       readonly moderationState: BlueprintModerationState;
-    };
+    }
+  /**
+   * ⚠️ ONE ERROR FOR "no such report", "somebody else's target" AND "already resolved's sibling",
+   * because the alternative is an oracle. A moderator holds `moderate_content`, so this is not a
+   * privilege boundary — but distinguishing "that report id does not exist" from "that report is
+   * about a different row" would let anyone with the capability map reports to targets by
+   * guessing ids, and the queue already tells them everything they are meant to know.
+   */
+  | { readonly type: "BLUEPRINT_REPORT_NOT_FOUND" }
+  | { readonly type: "BLUEPRINT_REPORT_ALREADY_RESOLVED" };
 
 export interface BlueprintModerationView {
   readonly targetId: string;
@@ -72,6 +87,15 @@ interface ApplyVerbInput {
   readonly targetId: string;
   readonly verb: BlueprintModerationVerb;
   readonly reasonNote: string;
+  /**
+   * The open report this decision answers, when there is one.
+   *
+   * ⚠️ NULL IS THE ORDINARY CASE. The primary quarantine path is an emailed rights claim that
+   * never touches the queue (§3.7), so a decision with no report id is a complete decision — not
+   * a missing link. What a non-null id buys is that the reporter's own list stops saying `open`
+   * about a complaint somebody already acted on.
+   */
+  readonly reportId: string | null;
   readonly staff: PlatformStaffContext;
 }
 
@@ -218,6 +242,8 @@ type TransactionOutcome =
       readonly kind: "not_available";
       readonly moderationState: BlueprintModerationState;
     }
+  | { readonly kind: "report_missing" }
+  | { readonly kind: "report_already_resolved" }
   | {
       readonly kind: "applied";
       readonly nextState: BlueprintModerationState;
@@ -263,6 +289,10 @@ function toResult(
           moderationState: outcome.moderationState,
         },
       };
+    case "report_missing":
+      return { success: false, error: { type: "BLUEPRINT_REPORT_NOT_FOUND" } };
+    case "report_already_resolved":
+      return { success: false, error: { type: "BLUEPRINT_REPORT_ALREADY_RESOLVED" } };
     case "applied":
       return {
         success: true,
@@ -353,6 +383,41 @@ async function applyVerb(
       const decidedAt = new Date();
 
       /*
+       * 3b. THE REPORT THIS DECISION ANSWERS, LOCKED AND CHECKED BEFORE ANYTHING MOVES.
+       *
+       * ⚠️ ORDERED BEFORE THE STATE CHANGE ON PURPOSE. A bad report id must cost NOTHING — no
+       * state move, no audit entry, no action row — and the only way to guarantee that without
+       * relying on the rollback is to refuse before the first write. It is the same ordering rule
+       * the capability check follows one layer up.
+       *
+       * ⚠️ THE TARGET MUST MATCH, AND A MISMATCH ANSWERS "not found". Accepting a report that
+       * points at a DIFFERENT row would let one moderator's decision close a complaint about
+       * somebody else's work — the reporter would be told their report was actioned by an action
+       * that never touched what they reported.
+       */
+      if (input.reportId !== null) {
+        const [reportRow] = await transaction
+          .select({
+            id: blueprintContentReport.id,
+            status: blueprintContentReport.status,
+            teardownId: blueprintContentReport.teardownId,
+            caseStudyId: blueprintContentReport.caseStudyId,
+            showcaseLaunchId: blueprintContentReport.showcaseLaunchId,
+          })
+          .from(blueprintContentReport)
+          .where(eq(blueprintContentReport.id, input.reportId))
+          .for("update");
+
+        if (!reportRow) return { kind: "report_missing" };
+
+        const reportTargetId =
+          reportRow.teardownId ?? reportRow.caseStudyId ?? reportRow.showcaseLaunchId;
+        // A stranger's report id and a nonexistent one are the same bytes — see the error union.
+        if (reportTargetId !== input.targetId) return { kind: "report_missing" };
+        if (reportRow.status !== "open") return { kind: "report_already_resolved" };
+      }
+
+      /*
        * 4. THE MOVE, guarded on the state the lock observed.
        *
        * The per-arm `nextState` re-checks are not redundant with the matrix. They are what lets
@@ -429,14 +494,54 @@ async function applyVerb(
           fromModerationState: snapshot.moderationState,
           toModerationState: nextState,
           hasReasonNote: true,
+          /*
+           * ⚠️ THE REPORT ID IS AN ID, SO IT TRAVELS; THE NOTE IS NOT, SO IT DOES NOT. The chain
+           * carries `hasReasonNote: true` and never the text — and `answeredReportId` is null on
+           * the ordinary emailed-claim path rather than absent, so a reader of the chain can tell
+           * "no report" from "field added later".
+           */
+          answeredReportId: input.reportId,
         },
         occurredAt: decidedAt,
       });
 
-      // 6. The decision record, which is where the note lives.
+      /*
+       * 6. THE REPORT, ANSWERED — and `actioned` becomes reachable for the first time.
+       *
+       * ⚠️ THIS IS NOT A REPORT MOVING A STATE. The moderator chose the verb and owns it; all this
+       * records is WHICH open complaint their decision answers, so `/blueprints/reports/mine` can
+       * stop saying `open` about something somebody already acted on. Blueprints doc §10.1's three
+       * rules are untouched: nothing counts reports, and no threshold exists to trip. The change
+       * looks like it contradicts them, which is why it says so here.
+       *
+       * ⚠️ `reasonNote` IS REUSED AS THE RESOLUTION NOTE RATHER THAN A SECOND NOTE BEING ASKED
+       * FOR. §10.5: the reporter never sees the resolution note, and the reason the row was
+       * flagged IS the reason the report was actioned. Two required notes about one decision is a
+       * form nobody fills honestly — the second one becomes "see above".
+       */
+      if (input.reportId !== null) {
+        await transaction
+          .update(blueprintContentReport)
+          .set({
+            status: "actioned",
+            resolvedByUserId: input.staff.staffUserId,
+            resolvedAt: decidedAt,
+            resolutionNote: input.reasonNote,
+          })
+          .where(
+            and(
+              eq(blueprintContentReport.id, input.reportId),
+              // Guarded on the status the lock observed, exactly as the state move is.
+              eq(blueprintContentReport.status, "open"),
+            ),
+          );
+      }
+
+      // 7. The decision record, which is where the note lives.
       await transaction.insert(blueprintModerationAction).values({
         actionKind: actionKindForVerb(input.verb),
         targetKind: arm,
+        reportId: input.reportId,
         ...targetColumnsForArm(arm, input.targetId),
         moderatorUserId: input.staff.staffUserId,
         moderatorRoleSnapshot: input.staff.platformRole,

@@ -41,6 +41,9 @@ If you are planning the next phase of capabilities, the following features are n
 - ⚠️ **A flag does not hide anything.** The page still answers, the row stays in the feed, and the
   public slug survives; what a flag changes is that the launch stops accruing new engagement and
   appears in the report queue. Hiding it would make filing a report a takedown.
+- **Also closed while here:** the three moderation verbs now accept an optional `reportId`, which
+  writes `blueprint_moderation_action.report_id` and moves the answered report to `actioned`. Both
+  had shipped unreachable — see `BLUEPRINTS_BACKEND_STRUCTURE.md` §10.7.
 
 ### C. Direct File Uploads for Teardown Documents & Fabrication Files
 - **Current State:** Showcases and Hero slides support direct multipart image uploads to Cloudinary.

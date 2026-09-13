@@ -368,6 +368,7 @@ export async function setCaseStudyModerationState(req: Request, res: Response): 
     targetId: firstParam(req.params.caseStudyId ?? ""),
     verb: parsedCommand.data.verb,
     reasonNote: parsedCommand.data.reasonNote,
+    reportId: parsedCommand.data.reportId,
     staff,
   });
 

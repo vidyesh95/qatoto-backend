@@ -3815,6 +3815,12 @@ export const blueprintModerationAction = pgTable(
      * claim — blueprints doc §3.7: "nothing posts to Qatoto, by that flow's own explicit decision"
      * — so a NOT NULL column here would make the case this lever exists for unrecordable.
      * `set null` so a purged report does not take the decision with it.
+     *
+     * ⚠️ IT SHIPPED EMPTY AND IS WRITTEN NOW. This column arrived with the reader-report intake
+     * (migration 0186) and nothing populated it for two releases, which also left
+     * `blueprint_content_report_status = 'actioned'` unreachable: the queue could filter on a
+     * label no code could produce, and a moderator who flagged a row BECAUSE of a report left that
+     * report `open` forever. `applyVerb` now sets both, in the transaction that moves the state.
      */
     reportId: text("report_id").references(() => blueprintContentReport.id, {
       onDelete: "set null",

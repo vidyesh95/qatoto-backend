@@ -362,6 +362,7 @@ export async function setShowcaseLaunchModerationState(req: Request, res: Respon
     targetId: firstParam(req.params.launchId ?? ""),
     verb: parsedCommand.data.verb,
     reasonNote: parsedCommand.data.reasonNote,
+    reportId: parsedCommand.data.reportId,
     staff,
   });
 

@@ -155,6 +155,8 @@ describe("blueprints showcase moderation routes", () => {
       targetId: LAUNCH_ID,
       verb: "flag",
       reasonNote: "A reader reported fabricated results.",
+      // ⚠️ NULL, NOT ABSENT. `.default(null)` means the service never sees `undefined`.
+      reportId: null,
       staff: MODERATOR_CONTEXT.value,
     });
   });
@@ -185,6 +187,82 @@ describe("blueprints showcase moderation routes", () => {
      * to understand the refusal.
      */
     expect(response.body.message).toContain("showcase launch");
+  });
+
+  /**
+   * ⚠️ THE REPORT ID IS OPTIONAL ON THE WIRE AND NEVER `undefined` IN THE SERVICE. A moderator
+   * acting on an emailed rights claim sends no id at all, which is the ORDINARY case — see the
+   * command schema. This pair asserts both halves of that contract.
+   */
+  it("passes a supplied report id through, so the reporter's list can stop saying open", async () => {
+    signInAs();
+    requirePlatformCapability.mockResolvedValue(MODERATOR_CONTEXT);
+    applyShowcaseLaunchModerationVerb.mockResolvedValue({
+      success: true,
+      value: {
+        targetId: LAUNCH_ID,
+        targetKind: "showcase",
+        moderationState: "flagged",
+        decidedAt: new Date("2026-03-01T10:00:00.000Z"),
+      },
+    });
+
+    const reportId = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const response = await request(app)
+      .post(path)
+      .set("Idempotency-Key", "key-8")
+      .send({ verb: "flag", reasonNote: "Answering the report.", reportId });
+
+    expect(response.status).toBe(200);
+    expect(applyShowcaseLaunchModerationVerb.mock.calls[0]?.[0]).toMatchObject({ reportId });
+  });
+
+  it("refuses a malformed report id with 422", async () => {
+    signInAs();
+    requirePlatformCapability.mockResolvedValue(MODERATOR_CONTEXT);
+
+    const response = await request(app)
+      .post(path)
+      .set("Idempotency-Key", "key-9")
+      .send({ verb: "flag", reasonNote: "Answering the report.", reportId: "not-a-uuid" });
+
+    expect(response.status).toBe(422);
+    expect(applyShowcaseLaunchModerationVerb).not.toHaveBeenCalled();
+  });
+
+  /** ⚠️ A REPORT ABOUT A DIFFERENT ROW ANSWERS 404 — the same bytes as one that does not exist. */
+  it("answers 404 when the report names a different blueprint", async () => {
+    signInAs();
+    requirePlatformCapability.mockResolvedValue(MODERATOR_CONTEXT);
+    applyShowcaseLaunchModerationVerb.mockResolvedValue({
+      success: false,
+      error: { type: "BLUEPRINT_REPORT_NOT_FOUND" },
+    });
+
+    const response = await request(app).post(path).set("Idempotency-Key", "key-10").send({
+      verb: "flag",
+      reasonNote: "Answering the report.",
+      reportId: "3f2504e0-4f89-41d3-9a0c-0305e82c3302",
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it("answers 409 when another moderator already resolved the report", async () => {
+    signInAs();
+    requirePlatformCapability.mockResolvedValue(MODERATOR_CONTEXT);
+    applyShowcaseLaunchModerationVerb.mockResolvedValue({
+      success: false,
+      error: { type: "BLUEPRINT_REPORT_ALREADY_RESOLVED" },
+    });
+
+    const response = await request(app).post(path).set("Idempotency-Key", "key-11").send({
+      verb: "flag",
+      reasonNote: "Answering the report.",
+      reportId: "3f2504e0-4f89-41d3-9a0c-0305e82c3303",
+    });
+
+    expect(response.status).toBe(409);
   });
 
   it("answers 404 when the launch does not exist", async () => {

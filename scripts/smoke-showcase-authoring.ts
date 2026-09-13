@@ -399,10 +399,28 @@ async function main(): Promise<void> {
      * is the transaction, against a real database, that shows the widened clause is what makes the
      * verb possible at all.
      */
+    /*
+     * ⚠️ THE FLAG ANSWERS A REAL REPORT, WHICH IS WHAT MAKES `actioned` REACHABLE AT ALL. The
+     * column `blueprint_moderation_action.report_id` shipped with the intake and nothing wrote it
+     * for two releases; `blueprint_content_report_status` could therefore filter on a label no
+     * code could produce. This is the transaction that closes both, and the assertions below are
+     * the only proof it runs — vitest mocks the database wholesale.
+     */
+    const [answeredReport] = await db
+      .insert(blueprintContentReport)
+      .values({
+        targetKind: "showcase",
+        showcaseLaunchId: submittedLaunchId,
+        reason: "fabricated_measurements",
+        reporterUserId: moderatorUserId,
+      })
+      .returning({ id: blueprintContentReport.id });
+
     const flagResult = await applyShowcaseLaunchModerationVerb({
       targetId: submittedLaunchId,
       verb: "flag",
       reasonNote: "A reader reported this as not the stated product.",
+      reportId: answeredReport?.id ?? null,
       staff: { staffUserId: moderatorUserId, platformRole: "admin" },
     });
     check(
@@ -410,6 +428,67 @@ async function main(): Promise<void> {
       flagResult.success,
       flagResult.success ? flagResult.value.moderationState : JSON.stringify(flagResult.error),
     );
+
+    if (answeredReport !== undefined) {
+      const [resolvedReport] = await db
+        .select({
+          status: blueprintContentReport.status,
+          resolvedByUserId: blueprintContentReport.resolvedByUserId,
+          resolvedAt: blueprintContentReport.resolvedAt,
+          resolutionNote: blueprintContentReport.resolutionNote,
+        })
+        .from(blueprintContentReport)
+        .where(eq(blueprintContentReport.id, answeredReport.id));
+      check(
+        "the answered report moved to actioned — a label nothing could produce until now",
+        resolvedReport?.status === "actioned" &&
+          resolvedReport.resolvedByUserId === moderatorUserId &&
+          resolvedReport.resolvedAt !== null,
+        `${resolvedReport?.status ?? "(absent)"}, resolved by ${resolvedReport?.resolvedByUserId ?? "(nobody)"}`,
+      );
+      check(
+        "the moderation reason became the resolution note — one decision, one note",
+        resolvedReport?.resolutionNote === "A reader reported this as not the stated product.",
+        resolvedReport?.resolutionNote ?? "(null)",
+      );
+
+      const [actionRow] = await db
+        .select({ reportId: blueprintModerationAction.reportId })
+        .from(blueprintModerationAction)
+        .where(eq(blueprintModerationAction.showcaseLaunchId, submittedLaunchId));
+      check(
+        "the decision row names the report it answered — report_id is written at last",
+        actionRow?.reportId === answeredReport.id,
+        actionRow?.reportId ?? "(null)",
+      );
+
+      /*
+       * ⚠️ A SECOND VERB NAMING THE SAME REPORT IS REFUSED, and it must be refused BEFORE anything
+       * moves. Two moderators racing one report cannot both be told they answered it.
+       */
+      const replayResult = await applyShowcaseLaunchModerationVerb({
+        targetId: submittedLaunchId,
+        verb: "restore",
+        reasonNote: "Trying to answer a report that is already closed.",
+        reportId: answeredReport.id,
+        staff: { staffUserId: moderatorUserId, platformRole: "admin" },
+      });
+      check(
+        "a report already resolved cannot be answered twice",
+        !replayResult.success && replayResult.error.type === "BLUEPRINT_REPORT_ALREADY_RESOLVED",
+        replayResult.success ? "it was ACCEPTED" : replayResult.error.type,
+      );
+
+      const [stateAfterReplay] = await db
+        .select({ moderationState: showcaseLaunch.moderationState })
+        .from(showcaseLaunch)
+        .where(eq(showcaseLaunch.id, submittedLaunchId));
+      check(
+        "and that refusal moved NOTHING — the launch is still flagged",
+        stateAfterReplay?.moderationState === "flagged",
+        stateAfterReplay?.moderationState ?? "(absent)",
+      );
+    }
 
     const [flaggedRow] = await db
       .select({
@@ -457,6 +536,8 @@ async function main(): Promise<void> {
       targetId: submittedLaunchId,
       verb: "quarantine",
       reasonNote: "A rights holder emailed about the hero image.",
+      // ⚠️ NULL — the emailed rights claim is exactly the case this field must not require.
+      reportId: null,
       staff: { staffUserId: moderatorUserId, platformRole: "admin" },
     });
     check(
@@ -494,6 +575,21 @@ async function main(): Promise<void> {
     );
 
     /*
+     * ⚠️ THE ID TRAVELS AND THE NOTE DOES NOT, IN THE SAME PAYLOAD. That is the whole distinction
+     * §9.4 draws: the chain is hash-linked and kept forever, so it carries identifiers and flags
+     * and never one party's account of somebody's work. Asserting both halves against ONE entry is
+     * what makes the rule legible — either alone reads like an accident.
+     */
+    const answeredIdTravelled =
+      answeredReport !== undefined &&
+      auditRows.some((row) => row.payloadJson.includes(answeredReport.id));
+    check(
+      "but the answered report's ID does travel — ids and flags only, and an id is an id",
+      answeredIdTravelled,
+      answeredIdTravelled ? "answeredReportId is in the payload" : "the report id is absent",
+    );
+
+    /*
      * ⚠️ A DISMISSAL'S AUDIT ENTRY MUST NAME ITS TARGET, and this assertion exists because the
      * three-arm version of that payload was written with a two-arm coalesce chain. A chain one
      * column short does not fail — it writes `null` for the missing arm, into a hash-linked chain
@@ -506,7 +602,7 @@ async function main(): Promise<void> {
         targetKind: "showcase",
         showcaseLaunchId: submittedLaunchId,
         reason: "not_the_stated_product",
-        reporterUserId: moderatorUserId,
+        reporterUserId: authorRow.id,
       })
       .returning({ id: blueprintContentReport.id });
 
@@ -539,6 +635,7 @@ async function main(): Promise<void> {
       targetId: submittedLaunchId,
       verb: "restore",
       reasonNote: "Reviewed the report; the build is the makers' own.",
+      reportId: null,
       staff: { staffUserId: moderatorUserId, platformRole: "admin" },
     });
     check(

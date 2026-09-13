@@ -12,7 +12,7 @@ const ReasonNoteSchema = z
   );
 
 /**
- * The body of `POST /blueprints/admin/{teardowns,case-studies}/:id/moderation-state`.
+ * The body of `POST /blueprints/admin/{teardowns,case-studies,showcases}/:id/moderation-state`.
  *
  * A DISCRIMINATED UNION ON `verb`, so the controller's switch is exhaustive over the three and a
  * fourth verb is a compile error rather than a silent fall-through.
@@ -27,14 +27,39 @@ const ReasonNoteSchema = z
  * reach it; the chain gets `hasReasonNote: true` and nothing else. See
  * `blueprint-moderation.service.ts`.
  *
- * ⚠️ THERE IS NO `reportId` FIELD YET, DELIBERATELY. The primary quarantine path is an EMAILED
- * rights claim — blueprints doc §3.7: "nothing posts to Qatoto, by that flow's own explicit
- * decision" — so a required report id would make the commonest case unexpressible. When a reader
- * report intake lands it adds a nullable one here rather than changing this contract.
+ * ⚠️ `reportId` IS NULLABLE, AND IT ARRIVED EXACTLY AS THIS BLOCK PREDICTED IT WOULD. The note it
+ * replaces read: "The primary quarantine path is an EMAILED rights claim — blueprints doc §3.7:
+ * 'nothing posts to Qatoto, by that flow's own explicit decision' — so a required report id would
+ * make the commonest case unexpressible. When a reader report intake lands it adds a nullable one
+ * here rather than changing this contract." That is what this is. **NULL is the ordinary case**,
+ * not a degraded one: a moderator acting on an email, a routine sweep, or their own reading of a
+ * page passes nothing, and the verb behaves exactly as it did before this field existed.
+ *
+ * ⚠️ SUPPLYING ONE DOES NOT LET A REPORT MOVE A STATE. The moderator still chose the verb; the id
+ * only says WHICH open complaint this decision answers, so the reporter's own list can stop
+ * showing `open` forever. Blueprints doc §10.1's three rules are untouched — nothing here counts
+ * reports, and no threshold exists to trip.
+ *
+ * ⚠️ `.default(null)` RATHER THAN `.optional()`. `.strict()` refuses unknown keys, not absent ones,
+ * so an omitted field is already legal — but a defaulted one means the SERVICE's input type has no
+ * `undefined` arm to handle, and the difference between "not sent" and "explicitly nothing" never
+ * reaches the transaction as two states.
  */
+const ReportIdSchema = z.uuid("A report id is a UUID.").nullable().default(null);
+
 export const BlueprintModerationCommandSchema = z.discriminatedUnion("verb", [
-  z.object({ verb: z.literal("flag"), reasonNote: ReasonNoteSchema }).strict(),
-  z.object({ verb: z.literal("quarantine"), reasonNote: ReasonNoteSchema }).strict(),
-  z.object({ verb: z.literal("restore"), reasonNote: ReasonNoteSchema }).strict(),
+  z
+    .object({ verb: z.literal("flag"), reasonNote: ReasonNoteSchema, reportId: ReportIdSchema })
+    .strict(),
+  z
+    .object({
+      verb: z.literal("quarantine"),
+      reasonNote: ReasonNoteSchema,
+      reportId: ReportIdSchema,
+    })
+    .strict(),
+  z
+    .object({ verb: z.literal("restore"), reasonNote: ReasonNoteSchema, reportId: ReportIdSchema })
+    .strict(),
 ]);
 export type BlueprintModerationCommand = z.infer<typeof BlueprintModerationCommandSchema>;

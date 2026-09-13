@@ -317,7 +317,7 @@ pnpm db:verify-blueprint-engagement-constraints # 33
 pnpm db:reconcile-blueprint-stats          # counter drift; -- --fix repairs
 pnpm db:smoke-teardown-authoring           # submit → duplicate refusal → publish → public read
 pnpm db:smoke-case-study-authoring         # 16, and a byte sweep for the withheld company name
-pnpm db:smoke-showcase-authoring           # 28, upload-before-submit, the stats tripwire, and the flag walk
+pnpm db:smoke-showcase-authoring           # 36, upload-before-submit, the stats tripwire, the flag walk and `actioned`
 pnpm db:smoke-blueprint-hero               # 19, AVIF and the seeded site-relative arm
 pnpm db:seed-blueprint-teardowns           # the import schema is unchanged by the write path
 pnpm gate                                  # specifiers, typecheck ×3, fmt:check, lint, test
@@ -592,6 +592,43 @@ one quarantine to blunt the control that produced it."*
 dismissal has nothing to undo — and quietly un-flagging something a *different* moderator flagged
 would overturn their decision as a side effect of answering a reader. A moderator who wants the row
 back uses `restore`, which costs its own audit entry and its own note.
+
+### 10.7 `actioned`, and the two releases it spent unreachable
+
+`blueprint_content_report_status` has carried `actioned` since the intake landed, the queue schema
+has accepted it as a filter, and `MyBlueprintReportView` has declared it — and **nothing in the
+codebase could produce it.** `blueprint_moderation_action.report_id` shipped in the same migration
+and was never written. So a moderator who flagged a row *because of* a report left that report
+`open` forever, and §10.5's whole reason for `/reports/mine` — *"a report that vanishes is
+indistinguishable from one nobody read"* — was defeated by the one path most likely to answer a
+reader.
+
+The three verbs now take an **optional** `reportId`:
+
+⚠️ **NULL IS THE ORDINARY CASE, NOT A DEGRADED ONE.** The primary quarantine path is an emailed
+rights claim that never touches the queue (§3.7), so requiring an id would make the case the lever
+exists for unrecordable. A decision with no report id is a complete decision.
+
+⚠️ **THIS IS NOT A REPORT MOVING A STATE, AND §10.1 IS UNTOUCHED.** The moderator still chose the
+verb and owns it; the id records *which* open complaint that decision answers. Nothing counts
+reports, and no threshold exists to trip. The change looks like it contradicts §10.1, which is why
+the service says so in place.
+
+⚠️ **THE MODERATION NOTE IS REUSED AS THE RESOLUTION NOTE.** §10.5 says the reporter never sees it,
+and the reason the row was flagged *is* the reason the report was actioned. Asking for two required
+notes about one decision produces a second note reading "see above".
+
+⚠️ **A REPORT ABOUT A DIFFERENT ROW ANSWERS 404, the same bytes as one that does not exist.** The
+caller holds `moderate_content`, so this is not a privilege boundary — but distinguishing the two
+would let anyone with the capability map reports to targets by guessing ids, and the queue already
+serves everything they are meant to know. An already-resolved report answers **409**, because its
+existence is not a disclosure to someone who can see the queue, and the refusal is the answer to why
+nothing happened.
+
+⚠️ **THE REPORT IS CHECKED BEFORE ANYTHING MOVES.** A bad id costs no state change, no audit entry
+and no action row — the same ordering rule the capability check follows one layer up, and proven in
+`db:smoke-showcase-authoring`: a second verb naming a resolved report is refused and the launch is
+still in the state the first one left it.
 
 ### 10.5 What the reporter is told
 
