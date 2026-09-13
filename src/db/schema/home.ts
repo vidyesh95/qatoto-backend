@@ -2168,10 +2168,26 @@ export const showcaseLaunch = pgTable(
               AND bill_of_materials_maximum_cents >= bill_of_materials_minimum_cents
               AND bill_of_materials_maximum_cents <= 100000000)`,
     ),
+    /**
+     * BOTH HALVES OF THE CALL TO ACTION, OR NEITHER.
+     *
+     * ⚠️ THE TWO `IS NOT NULL` CLAUSES LOOK REDUNDANT BESIDE `char_length(...) BETWEEN` AND ARE THE
+     * WHOLE CONSTRAINT. Without them this CHECK ACCEPTED a half-filled pair, and migration 0172 is
+     * the reason why: with a label and no URL the first arm is FALSE, `char_length(NULL)` is NULL,
+     * so the second arm is NULL — and `false OR NULL` is NULL, which a CHECK treats as passing.
+     * `showcase_launch_cost_range_ck` below never had the bug because it asserts `IS NOT NULL` on
+     * all three columns before comparing them; this pair was written the other way round.
+     *
+     * Found by `db:verify-showcase-launch-constraints` the first time it ran, which is the entire
+     * argument for that script: nothing in TypeScript can see a CHECK that passes on NULL, and the
+     * write gate refusing the same shape is what kept it from ever being stored.
+     */
     check(
       "showcase_launch_call_to_action_ck",
       sql`(call_to_action_label IS NULL AND call_to_action_url IS NULL)
-          OR (char_length(call_to_action_label) BETWEEN 1 AND 40
+          OR (call_to_action_label IS NOT NULL
+              AND call_to_action_url IS NOT NULL
+              AND char_length(call_to_action_label) BETWEEN 1 AND 40
               AND char_length(call_to_action_url) BETWEEN 1 AND 2048
               AND call_to_action_url LIKE 'https://%'
               AND call_to_action_url !~ '[[:space:][:cntrl:]]')`,
