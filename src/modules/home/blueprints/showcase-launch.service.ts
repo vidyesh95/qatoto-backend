@@ -302,7 +302,13 @@ export async function submitShowcaseLaunch(input: {
     .where(
       and(
         sql`${showcaseLaunch.titleNormalized} = lower(regexp_replace(btrim(${draft.title}::text), '[[:space:]]+', ' ', 'g'))`,
-        inArray(showcaseLaunch.moderationState, ["pending_review", "published"]),
+        /*
+         * ⚠️ THREE STATES, MATCHING `showcase_launch_title_live_uidx`'S PREDICATE EXACTLY. A
+         * flagged launch was published, keeps its slug and still answers at its address, so its
+         * title is still taken. If this list and the index ever disagree, this pre-check passes and
+         * the index raises a 23505 the caller cannot read.
+         */
+        inArray(showcaseLaunch.moderationState, ["pending_review", "published", "flagged"]),
       ),
     )
     .limit(1);
@@ -445,6 +451,14 @@ export async function submitShowcaseLaunch(input: {
  * UNPAGED, deliberately and for now. The submit limiter holds a maker to five launches in fifteen
  * minutes, and My Launches renders the whole list; a page control nobody's list can reach would
  * be a control no fixture could exercise.
+ *
+ * ⚠️ `publicSlug` IS PROJECTED RAW, AND THAT IS CORRECT HERE EVEN THOUGH `/teardowns/mine` COMPUTES
+ * ITS OWN. It is the line in this file a reviewer is most likely to read as a bug now that
+ * `flagged` is reachable, so: under `showcase_launch_decision_ck` a flagged launch KEEPS its slug
+ * and its page still answers, so a "View the page" link built from this column is honest. On the
+ * teardown arm the slug has to be computed because a QUARANTINED teardown is served but withheld —
+ * its address resolves to a page with no payload, so a raw link would promise something the reader
+ * will not get. Two arms, two correct answers, and the difference is quarantine.
  */
 export async function listMyShowcaseLaunches(
   authorUserId: string,

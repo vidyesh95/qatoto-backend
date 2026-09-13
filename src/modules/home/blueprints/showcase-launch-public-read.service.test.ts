@@ -235,15 +235,21 @@ describe("listPublicShowcases", () => {
   /**
    * THE VISIBILITY GATE, asserted on EVERY query rather than on the list alone.
    *
-   * A launch that is not published has never been decided in the reader's favour, and two of the
-   * other states hold a maker's unpublished work. The facet query matters as much as the list: a
-   * tag chip counted over a wider population promises launches the list will never return, which
-   * is a count the reader can see is wrong.
+   * A launch outside the gate has never been decided in the reader's favour, and two of the states
+   * outside it hold a maker's unpublished work. The facet query matters as much as the list: a tag
+   * chip counted over a wider population promises launches the list will never return, which is a
+   * count the reader can see is wrong.
    *
    * This case exists because removing the gate entirely once broke NOTHING in this file — the stub
    * ignored the WHERE, so the most important predicate in the service was unverified.
+   *
+   * ⚠️ BOTH LABELS ARE ASSERTED, AND THE SECOND ONE IS WHY THIS BLOCK WAS REWRITTEN RATHER THAN
+   * LEFT ALONE. The gate went from `= 'published'` to `IN ('published','flagged')`, and a bare
+   * `toContain("published")` keeps passing either way — so an assertion that reads like a proof of
+   * the gate would have silently stopped being one. `rejected` is asserted ABSENT for the same
+   * reason: `toContain` can only ever prove a predicate is wide enough, never that it is narrow.
    */
-  it("filters every query to published launches, the facet count included", async () => {
+  it("filters every query to the publicly visible states, the facet count included", async () => {
     databaseState.launchRows = [buildLaunchRow()];
     const { listPublicShowcases } = await import("#src/modules/home/blueprints/showcase-launch-public-read.service.js");
 
@@ -253,8 +259,11 @@ describe("listPublicShowcases", () => {
     const facetCondition =
       databaseState.queries.find((query) => query.selectedColumns.includes("value"))?.conditionText ?? "";
 
-    expect(feedCondition, "the feed must filter on published").toContain("published");
-    expect(facetCondition, "the facet count must filter on published too").toContain("published");
+    expect(feedCondition, "the feed must admit published launches").toContain("published");
+    expect(feedCondition, "the feed must admit flagged launches — a flag is not a takedown").toContain("flagged");
+    expect(feedCondition, "the feed must never admit rejected launches").not.toContain("rejected");
+    expect(facetCondition, "the facet count must admit published launches too").toContain("published");
+    expect(facetCondition, "the facet count must admit flagged launches too").toContain("flagged");
   });
 
   it("binds the tag as an array element rather than a substring", async () => {
@@ -499,7 +508,7 @@ describe("getPublicShowcaseBySlug", () => {
     resetDatabaseState();
   });
 
-  it("filters the detail read to published launches and to the slug asked for", async () => {
+  it("filters the detail read to the publicly visible states and to the slug asked for", async () => {
     databaseState.launchRows = [buildLaunchRow()];
     const { getPublicShowcaseBySlug } =
       await import("#src/modules/home/blueprints/showcase-launch-public-read.service.js");
@@ -509,6 +518,8 @@ describe("getPublicShowcaseBySlug", () => {
     const condition =
       databaseState.queries.find((query) => query.selectedColumns.includes("launch"))?.conditionText ?? "";
     expect(condition).toContain("published");
+    // A flagged launch's page still answers — the flag marks it for the queue, it does not hide it.
+    expect(condition).toContain("flagged");
     expect(condition).toContain("solar-cold-storage-unit");
   });
 
@@ -567,13 +578,18 @@ describe("listPublicShowcaseSlugs", () => {
     resetDatabaseState();
   });
 
-  it("filters the slug list to published launches", async () => {
+  it("filters the slug list to the publicly visible states", async () => {
     const { listPublicShowcaseSlugs } =
       await import("#src/modules/home/blueprints/showcase-launch-public-read.service.js");
 
     await listPublicShowcaseSlugs();
 
     expect(databaseState.queries[0]?.conditionText).toContain("published");
+    /*
+     * ⚠️ THE PRERENDER LIST CARRIES FLAGGED SLUGS TOO. Dropping them would 404 a page that still
+     * answers, and would quietly de-index somebody's work on an unreviewed accusation.
+     */
+    expect(databaseState.queries[0]?.conditionText).toContain("flagged");
   });
 
   it("returns the published slugs and drops any row without one", async () => {

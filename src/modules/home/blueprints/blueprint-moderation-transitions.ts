@@ -2,8 +2,8 @@
  * The state-transition matrix for the three moderation verbs, in ONE place.
  *
  * The service reads this and never re-states a pair. A matrix spread across a service's `if`s is
- * one somebody edits on one arm and forgets on the other — and the two arms here genuinely differ,
- * which is exactly the condition that makes a scattered version drift.
+ * one somebody edits on one arm and forgets on the others — and the three arms here genuinely
+ * differ, which is exactly the condition that makes a scattered version drift.
  *
  * ⚠️ THE SOURCE-STATE LISTS ARE ASSERTED AGAINST THE DATABASE'S OWN CHECKs by
  * `blueprint-moderation-transitions.test.ts`. If somebody widens
@@ -11,7 +11,7 @@
  * state quietly having no verbs.
  */
 
-export type BlueprintModerationArm = "teardown" | "case_study";
+export type BlueprintModerationArm = "teardown" | "case_study" | "showcase";
 export type BlueprintModerationVerb = "flag" | "quarantine" | "restore";
 
 /** The four states a teardown may hold — `teardown_moderation_state_ck`. */
@@ -30,8 +30,35 @@ export const CASE_STUDY_MODERATION_STATES = [
   "flagged",
 ] as const;
 
+/**
+ * The four a showcase launch may hold — `showcase_launch_moderation_state_ck`.
+ *
+ * ⚠️ NO `quarantined`, AND IT IS THE SAME LIST AS THE CASE-STUDY ARM'S FOR A DIFFERENT REASON. A
+ * case study has no files at all. A showcase HAS files — a heading image, write-up images — but
+ * they are the maker's own by construction (`showcase_launch_statements_ck` pins
+ * `built_it_ourselves` and `results_are_our_own`), so a third-party rights claim against one
+ * alleges the attestation was a lie. That is a fraud finding, answered by `flag` then `reject`,
+ * not a withholding pending somebody else's dispute.
+ */
+export const SHOWCASE_LAUNCH_MODERATION_STATES = [
+  "pending_review",
+  "published",
+  "rejected",
+  "flagged",
+] as const;
+
 export type TeardownModerationState = (typeof TEARDOWN_MODERATION_STATES)[number];
 export type CaseStudyModerationState = (typeof CASE_STUDY_MODERATION_STATES)[number];
+export type ShowcaseLaunchModerationState = (typeof SHOWCASE_LAUNCH_MODERATION_STATES)[number];
+/**
+ * Every state any arm can hold.
+ *
+ * ⚠️ `ShowcaseLaunchModerationState` IS NOT A CONSTITUENT, AND ITS ABSENCE IS NOT AN OVERSIGHT. The
+ * showcase arm admits exactly the four labels the case-study arm admits, so naming it here would
+ * be a duplicate union member — `no-duplicate-type-constituents` refuses it, correctly. The two
+ * arms are kept as SEPARATE named types above because they are separate CHECKs that happen to
+ * agree today: if either widens, its own type changes and this union picks the difference up.
+ */
 export type BlueprintModerationState = TeardownModerationState | CaseStudyModerationState;
 
 /**
@@ -52,6 +79,12 @@ export function parseTeardownModerationState(candidate: string): TeardownModerat
 
 export function parseCaseStudyModerationState(candidate: string): CaseStudyModerationState | null {
   return CASE_STUDY_MODERATION_STATES.find((state) => state === candidate) ?? null;
+}
+
+export function parseShowcaseLaunchModerationState(
+  candidate: string,
+): ShowcaseLaunchModerationState | null {
+  return SHOWCASE_LAUNCH_MODERATION_STATES.find((state) => state === candidate) ?? null;
 }
 
 export type BlueprintTransitionOutcome =
@@ -80,8 +113,17 @@ export function resolveBlueprintTransition(
   currentState: BlueprintModerationState,
   verb: BlueprintModerationVerb,
 ): BlueprintTransitionOutcome {
-  // Quarantine exists on one arm only, and the refusal is arm-shaped rather than state-shaped.
-  if (verb === "quarantine" && arm === "case_study") {
+  /*
+   * Quarantine exists on one arm only, and the refusal is arm-shaped rather than state-shaped.
+   *
+   * ⚠️ SPELLED `arm !== "teardown"`, NOT `arm === "case_study"`. Naming the arm that MAY is what
+   * makes a fourth arm refused by default instead of quietly admitted by an `===` nobody
+   * remembered to extend. The database's own `blueprint_moderation_action_quarantine_arm_ck` is
+   * written the same way round, and this is the second of the three independent refusals — the
+   * third being that neither `case_study_moderation_state_ck` nor
+   * `showcase_launch_moderation_state_ck` admits the label at all.
+   */
+  if (verb === "quarantine" && arm !== "teardown") {
     return { kind: "not_available_on_arm" };
   }
 

@@ -47,7 +47,8 @@ export type CreateBlueprintReportInput = z.infer<typeof CreateBlueprintReportSch
 export const BlueprintReportQueueQuerySchema = z
   .object({
     status: z.enum(["open", "actioned", "dismissed"]).default("open"),
-    targetKind: z.enum(["teardown", "case_study"]).optional(),
+    /** The three `blueprint_content_target_kind` labels, spelled exactly as the pgEnum spells them. */
+    targetKind: z.enum(["teardown", "case_study", "showcase"]).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
     cursor: z.string().min(1).optional(),
   })

@@ -548,6 +548,24 @@ router.post(
   blueprintContentReportController.makeCreateReportHandler("case_study", "caseStudySlug"),
 );
 
+/*
+ * The showcase arm's intake. Resolved under `('published','flagged')` — this arm has ONE gate,
+ * like case studies, because `showcase_launch_moderation_state_ck` has no `quarantined` label for
+ * a wider READABLE set to contain.
+ *
+ * No new limiter: `blueprintContentReportLimiter` is per-account and its ceiling bounds somebody
+ * walking the catalogue reporting many different blueprints, which is arm-agnostic. A third
+ * namespace would give that walk a third budget to hide in.
+ */
+router.post(
+  "/showcases/:launchSlug/reports",
+  requireAuth,
+  blueprintContentReportLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  blueprintContentReportController.makeCreateReportHandler("showcase", "launchSlug"),
+);
+
 /**
  * GET /blueprints/reports/mine — a flat list under a hard cap.
  *
@@ -710,6 +728,25 @@ router.post(
   compactBody,
   idempotency({ required: true }),
   caseStudyController.setCaseStudyModerationState,
+);
+
+/*
+ * ⚠️ ON THIS ARM `:launchId` AND `:submissionId` ADDRESS THE SAME ROW IN THE SAME TABLE, which is
+ * the one place the paragraph above needs a qualifier. A showcase has no separate submission
+ * table — `showcase_launch` is both the paperwork and the published row — so the two routes really
+ * do take the same id. The param is still named `:launchId`, because what the name records is
+ * which ACT is being performed: `/moderate` decides a launch awaiting review, this moves one that
+ * is already public. Naming it `:submissionId` here would make the two routes look interchangeable
+ * to a reader, and they are not — their verb vocabularies are disjoint.
+ */
+router.post(
+  "/admin/showcases/:launchId/moderation-state",
+  requireAuth,
+  showcaseLaunchModerationLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  idempotency({ required: true }),
+  showcaseLaunchController.setShowcaseLaunchModerationState,
 );
 
 export default router;

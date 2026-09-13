@@ -1,11 +1,12 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { blueprintModerationAction, caseStudy, teardown } from "#src/db/schema.js";
+import { blueprintModerationAction, caseStudy, showcaseLaunch, teardown } from "#src/db/schema.js";
 import {
   actionKindForVerb,
   auditLabelForVerb,
   parseCaseStudyModerationState,
+  parseShowcaseLaunchModerationState,
   parseTeardownModerationState,
   resolveBlueprintTransition,
 } from "#src/modules/home/blueprints/blueprint-moderation-transitions.js";
@@ -78,6 +79,133 @@ interface ApplyVerbInput {
 interface TargetSnapshot {
   readonly moderationState: BlueprintModerationState;
   readonly authorUserId: string | null;
+}
+
+/** The same local alias `teardown-moderation.service.ts` uses for a transaction handle. */
+type DatabaseExecutor = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * The locked row, whichever arm it lives on.
+ *
+ * ⚠️ EVERY ARM-SHAPED BRANCH IN THIS FILE IS A `switch` WITH A `never` DEFAULT. The two-arm version
+ * of this code used ternaries, which are the one shape that does NOT break when an arm is added:
+ * `arm === "teardown" ? a : b` keeps compiling and silently sends the new arm down the `b` branch.
+ * On this path that means locking the wrong table, narrowing against the wrong CHECK and then
+ * UPDATING a row nobody asked about. The `never` is what turns a fourth arm into a build failure.
+ */
+async function selectLockedSnapshot(
+  transaction: DatabaseExecutor,
+  arm: BlueprintModerationArm,
+  targetId: string,
+): Promise<{ moderationState: string; authorUserId: string | null } | undefined> {
+  switch (arm) {
+    case "teardown":
+      return (
+        await transaction
+          .select({
+            moderationState: teardown.moderationState,
+            authorUserId: teardown.authorUserId,
+          })
+          .from(teardown)
+          .where(eq(teardown.id, targetId))
+          .for("update")
+      )[0];
+    case "case_study":
+      return (
+        await transaction
+          .select({
+            moderationState: caseStudy.moderationState,
+            authorUserId: caseStudy.authorUserId,
+          })
+          .from(caseStudy)
+          .where(eq(caseStudy.id, targetId))
+          .for("update")
+      )[0];
+    case "showcase":
+      return (
+        await transaction
+          .select({
+            moderationState: showcaseLaunch.moderationState,
+            authorUserId: showcaseLaunch.authorUserId,
+          })
+          .from(showcaseLaunch)
+          .where(eq(showcaseLaunch.id, targetId))
+          .for("update")
+      )[0];
+    default: {
+      const exhaustiveCheck: never = arm;
+      throw new Error(`Unhandled moderation arm: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/** Narrows the seven-label column against the arm's own CHECK. `null` means the matrix is stale. */
+function narrowModerationStateForArm(
+  arm: BlueprintModerationArm,
+  rawModerationState: string,
+): BlueprintModerationState | null {
+  switch (arm) {
+    case "teardown":
+      return parseTeardownModerationState(rawModerationState);
+    case "case_study":
+      return parseCaseStudyModerationState(rawModerationState);
+    case "showcase":
+      return parseShowcaseLaunchModerationState(rawModerationState);
+    default: {
+      const exhaustiveCheck: never = arm;
+      throw new Error(`Unhandled moderation arm: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
+ * The one target column this arm sets, and the two it explicitly nulls.
+ *
+ * ⚠️ RETURNS ALL THREE KEYS, ALWAYS. `blueprint_moderation_action_target_ck` counts non-nulls, so
+ * an omitted key and an explicit `null` are the same row — but they are NOT the same diff. Writing
+ * every column makes the two that stay empty visible at the call site, which is what stops a
+ * fourth arm being added to the enum while one of these quietly keeps its default.
+ */
+function targetColumnsForArm(
+  arm: BlueprintModerationArm,
+  targetId: string,
+): { teardownId: string | null; caseStudyId: string | null; showcaseLaunchId: string | null } {
+  switch (arm) {
+    case "teardown":
+      return { teardownId: targetId, caseStudyId: null, showcaseLaunchId: null };
+    case "case_study":
+      return { teardownId: null, caseStudyId: targetId, showcaseLaunchId: null };
+    case "showcase":
+      return { teardownId: null, caseStudyId: null, showcaseLaunchId: targetId };
+    default: {
+      const exhaustiveCheck: never = arm;
+      throw new Error(`Unhandled moderation arm: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
+ * The audit chain's human-readable label.
+ *
+ * ⚠️ VERB-SCOPED, NOT ARM-SCOPED, WHICH IS WHY THE QUARANTINE LINE MAY NAME A TEARDOWN. Quarantine
+ * is teardown-only in three independent places, so "Quarantined a published teardown" is a fact
+ * about the only arm that can reach this label rather than an assumption about the caller. It was
+ * a nested ternary, which hid that reasoning behind a shape that would have kept compiling if
+ * quarantine ever widened; a `switch` makes the claim explicit and the widening loud.
+ */
+function describeVerbForAudit(verb: BlueprintModerationVerb): string {
+  switch (verb) {
+    case "flag":
+      return "Flagged a published blueprint";
+    case "quarantine":
+      return "Quarantined a published teardown";
+    case "restore":
+      return "Restored a blueprint to published";
+    default: {
+      const exhaustiveCheck: never = verb;
+      throw new Error(`Unhandled moderation verb: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
 }
 
 type TransactionOutcome =
@@ -160,29 +288,16 @@ async function applyVerb(
 
   try {
     outcome = await db.transaction(async (transaction): Promise<TransactionOutcome> => {
-      // 1. THE ROW, LOCKED. The lock and the UPDATE's predicate must agree on the source state.
-      const rawSnapshot =
-        arm === "teardown"
-          ? (
-              await transaction
-                .select({
-                  moderationState: teardown.moderationState,
-                  authorUserId: teardown.authorUserId,
-                })
-                .from(teardown)
-                .where(eq(teardown.id, input.targetId))
-                .for("update")
-            )[0]
-          : (
-              await transaction
-                .select({
-                  moderationState: caseStudy.moderationState,
-                  authorUserId: caseStudy.authorUserId,
-                })
-                .from(caseStudy)
-                .where(eq(caseStudy.id, input.targetId))
-                .for("update")
-            )[0];
+      /*
+       * 1. THE ROW, LOCKED. The lock and the UPDATE's predicate must agree on the source state.
+       *
+       * ⚠️ A `switch` WITH A `never` DEFAULT, NEVER A TERNARY. This was
+       * `arm === "teardown" ? ... : ...` while there were two arms, and a binary ternary does not
+       * fail to compile when a third arrives — it silently routes the new arm into the ELSE
+       * branch, which here means locking, narrowing and then UPDATING the wrong row in the wrong
+       * table. The compiler cannot catch that; only this shape can.
+       */
+      const rawSnapshot = await selectLockedSnapshot(transaction, arm, input.targetId);
 
       if (!rawSnapshot) return { kind: "missing" };
 
@@ -193,10 +308,7 @@ async function applyVerb(
        * condition that should stop the request rather than fall through to a transition nobody
        * wrote.
        */
-      const narrowedState =
-        arm === "teardown"
-          ? parseTeardownModerationState(rawSnapshot.moderationState)
-          : parseCaseStudyModerationState(rawSnapshot.moderationState);
+      const narrowedState = narrowModerationStateForArm(arm, rawSnapshot.moderationState);
       if (narrowedState === null) {
         throw new Error(
           `${arm} ${input.targetId} holds moderation state "${rawSnapshot.moderationState}", which the transition matrix does not list. Widen the matrix before widening the CHECK.`,
@@ -240,33 +352,64 @@ async function applyVerb(
       const nextState = transition.nextState;
       const decidedAt = new Date();
 
-      // 4. THE MOVE, guarded on the state the lock observed.
-      if (arm === "teardown") {
-        if (nextState !== "published" && nextState !== "flagged" && nextState !== "quarantined") {
-          throw new Error(`A teardown cannot move to ${nextState}`);
+      /*
+       * 4. THE MOVE, guarded on the state the lock observed.
+       *
+       * The per-arm `nextState` re-checks are not redundant with the matrix. They are what lets
+       * the column's narrow type be honest at the point of the write: the matrix decides the
+       * transition, and these prove the destination is one this arm's CHECK admits, so a matrix
+       * edit that outran a CHECK fails here rather than as a 23514 with no explanation.
+       */
+      switch (arm) {
+        case "teardown": {
+          if (nextState !== "published" && nextState !== "flagged" && nextState !== "quarantined") {
+            throw new Error(`A teardown cannot move to ${nextState}`);
+          }
+          await transaction
+            .update(teardown)
+            .set({ moderationState: nextState })
+            .where(
+              and(
+                eq(teardown.id, input.targetId),
+                eq(teardown.moderationState, snapshot.moderationState),
+              ),
+            );
+          break;
         }
-        await transaction
-          .update(teardown)
-          .set({ moderationState: nextState })
-          .where(
-            and(
-              eq(teardown.id, input.targetId),
-              eq(teardown.moderationState, snapshot.moderationState),
-            ),
-          );
-      } else {
-        if (nextState !== "published" && nextState !== "flagged") {
-          throw new Error(`A case study cannot move to ${nextState}`);
+        case "case_study": {
+          if (nextState !== "published" && nextState !== "flagged") {
+            throw new Error(`A case study cannot move to ${nextState}`);
+          }
+          await transaction
+            .update(caseStudy)
+            .set({ moderationState: nextState })
+            .where(
+              and(
+                eq(caseStudy.id, input.targetId),
+                eq(caseStudy.moderationState, snapshot.moderationState),
+              ),
+            );
+          break;
         }
-        await transaction
-          .update(caseStudy)
-          .set({ moderationState: nextState })
-          .where(
-            and(
-              eq(caseStudy.id, input.targetId),
-              eq(caseStudy.moderationState, snapshot.moderationState),
-            ),
-          );
+        case "showcase": {
+          if (nextState !== "published" && nextState !== "flagged") {
+            throw new Error(`A showcase launch cannot move to ${nextState}`);
+          }
+          await transaction
+            .update(showcaseLaunch)
+            .set({ moderationState: nextState })
+            .where(
+              and(
+                eq(showcaseLaunch.id, input.targetId),
+                eq(showcaseLaunch.moderationState, snapshot.moderationState),
+              ),
+            );
+          break;
+        }
+        default: {
+          const exhaustiveCheck: never = arm;
+          throw new Error(`Unhandled moderation arm: ${JSON.stringify(exhaustiveCheck)}`);
+        }
       }
 
       /*
@@ -277,12 +420,7 @@ async function applyVerb(
         eventKind: auditLabelForVerb(input.verb),
         actorUserId: input.staff.staffUserId,
         actorRoleSnapshot: input.staff.platformRole,
-        actionLabel:
-          input.verb === "flag"
-            ? "Flagged a published blueprint"
-            : input.verb === "quarantine"
-              ? "Quarantined a published teardown"
-              : "Restored a blueprint to published",
+        actionLabel: describeVerbForAudit(input.verb),
         targetLabel: `${arm} ${input.targetId}`,
         // ⚠️ IDS AND FLAGS ONLY. `hasReasonNote`, never the note. See the file docblock.
         payload: {
@@ -299,8 +437,7 @@ async function applyVerb(
       await transaction.insert(blueprintModerationAction).values({
         actionKind: actionKindForVerb(input.verb),
         targetKind: arm,
-        teardownId: arm === "teardown" ? input.targetId : null,
-        caseStudyId: arm === "case_study" ? input.targetId : null,
+        ...targetColumnsForArm(arm, input.targetId),
         moderatorUserId: input.staff.staffUserId,
         moderatorRoleSnapshot: input.staff.platformRole,
         reasonNote: input.reasonNote,
@@ -337,4 +474,15 @@ export async function applyCaseStudyModerationVerb(
   input: ApplyVerbInput,
 ): Promise<Result<BlueprintModerationView, BlueprintModerationError>> {
   return applyVerb("case_study", input);
+}
+
+/**
+ * ⚠️ `flag` AND `restore` ONLY — `quarantine` answers `not_available_on_arm`, like a case study's.
+ * The two arms reach that refusal for different reasons, and the difference is worth keeping in
+ * mind: a case study has no files, while a showcase HAS them and they are its own maker's.
+ */
+export async function applyShowcaseLaunchModerationVerb(
+  input: ApplyVerbInput,
+): Promise<Result<BlueprintModerationView, BlueprintModerationError>> {
+  return applyVerb("showcase", input);
 }

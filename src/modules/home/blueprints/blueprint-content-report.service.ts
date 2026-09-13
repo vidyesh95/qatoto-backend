@@ -1,7 +1,13 @@
 import { and, asc, count, eq, gt, inArray, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { blueprintContentReport, caseStudy, teardown, user } from "#src/db/schema.js";
+import {
+  blueprintContentReport,
+  caseStudy,
+  showcaseLaunch,
+  teardown,
+  user,
+} from "#src/db/schema.js";
 import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
 import type { BlueprintModerationArm } from "#src/modules/home/blueprints/blueprint-moderation-transitions.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
@@ -50,6 +56,14 @@ export type BlueprintContentReportReason =
  */
 const REPORTABLE_TEARDOWN_STATES = ["published", "flagged", "quarantined"] as const;
 const REPORTABLE_CASE_STUDY_STATES = ["published", "flagged"] as const;
+/**
+ * ⚠️ TWO STATES, NOT THREE, BECAUSE THIS ARM HAS ONE GATE. `quarantined` is not in
+ * `showcase_launch_moderation_state_ck` at all, so there is no wider READABLE set to resolve
+ * against here — a showcase is either reachable or it is not. The teardown arm's third entry
+ * exists because a quarantine withholds a payload while keeping the address alive; nothing on this
+ * arm does that.
+ */
+const REPORTABLE_SHOWCASE_STATES = ["published", "flagged"] as const;
 
 interface ReportTarget {
   readonly id: string;
@@ -60,30 +74,76 @@ async function resolveReportableTarget(
   arm: BlueprintModerationArm,
   slug: string,
 ): Promise<ReportTarget | null> {
-  if (arm === "teardown") {
-    const [row] = await db
-      .select({ id: teardown.id, authorUserId: teardown.authorUserId })
-      .from(teardown)
-      .where(
-        and(
-          eq(teardown.slug, slug),
-          inArray(teardown.moderationState, [...REPORTABLE_TEARDOWN_STATES]),
-        ),
-      )
-      .limit(1);
-    return row ?? null;
+  switch (arm) {
+    case "teardown": {
+      const [row] = await db
+        .select({ id: teardown.id, authorUserId: teardown.authorUserId })
+        .from(teardown)
+        .where(
+          and(
+            eq(teardown.slug, slug),
+            inArray(teardown.moderationState, [...REPORTABLE_TEARDOWN_STATES]),
+          ),
+        )
+        .limit(1);
+      return row ?? null;
+    }
+    case "case_study": {
+      const [row] = await db
+        .select({ id: caseStudy.id, authorUserId: caseStudy.authorUserId })
+        .from(caseStudy)
+        .where(
+          and(
+            eq(caseStudy.publicSlug, slug),
+            inArray(caseStudy.moderationState, [...REPORTABLE_CASE_STUDY_STATES]),
+          ),
+        )
+        .limit(1);
+      return row ?? null;
+    }
+    case "showcase": {
+      const [row] = await db
+        .select({ id: showcaseLaunch.id, authorUserId: showcaseLaunch.authorUserId })
+        .from(showcaseLaunch)
+        .where(
+          and(
+            eq(showcaseLaunch.publicSlug, slug),
+            inArray(showcaseLaunch.moderationState, [...REPORTABLE_SHOWCASE_STATES]),
+          ),
+        )
+        .limit(1);
+      return row ?? null;
+    }
+    default: {
+      const exhaustiveCheck: never = arm;
+      throw new Error(`Unhandled report arm: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
-  const [row] = await db
-    .select({ id: caseStudy.id, authorUserId: caseStudy.authorUserId })
-    .from(caseStudy)
-    .where(
-      and(
-        eq(caseStudy.publicSlug, slug),
-        inArray(caseStudy.moderationState, [...REPORTABLE_CASE_STUDY_STATES]),
-      ),
-    )
-    .limit(1);
-  return row ?? null;
+}
+
+/**
+ * The one target column a report sets, and the two it nulls.
+ *
+ * ⚠️ `blueprint_content_report_target_ck` IS `= 1`, NOT `<= 1` — a report's targets CASCADE, so a
+ * targetless report cannot exist. Returning all three keys keeps that arithmetic visible at the
+ * insert rather than resting on which properties happened to be omitted.
+ */
+function reportTargetColumnsForArm(
+  arm: BlueprintModerationArm,
+  targetId: string,
+): { teardownId: string | null; caseStudyId: string | null; showcaseLaunchId: string | null } {
+  switch (arm) {
+    case "teardown":
+      return { teardownId: targetId, caseStudyId: null, showcaseLaunchId: null };
+    case "case_study":
+      return { teardownId: null, caseStudyId: targetId, showcaseLaunchId: null };
+    case "showcase":
+      return { teardownId: null, caseStudyId: null, showcaseLaunchId: targetId };
+    default: {
+      const exhaustiveCheck: never = arm;
+      throw new Error(`Unhandled report arm: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
 }
 
 export async function createBlueprintContentReport(input: {
@@ -117,8 +177,7 @@ export async function createBlueprintContentReport(input: {
     .insert(blueprintContentReport)
     .values({
       targetKind: input.arm,
-      teardownId: input.arm === "teardown" ? target.id : null,
-      caseStudyId: input.arm === "case_study" ? target.id : null,
+      ...reportTargetColumnsForArm(input.arm, target.id),
       reason: input.reason,
       detailText: input.detailText,
       reporterUserId: input.reporterUserId,
@@ -166,10 +225,12 @@ export async function listMyBlueprintReports(
       createdAt: blueprintContentReport.createdAt,
       teardownTitle: teardown.title,
       caseStudyTitle: caseStudy.title,
+      showcaseLaunchTitle: showcaseLaunch.title,
     })
     .from(blueprintContentReport)
     .leftJoin(teardown, eq(teardown.id, blueprintContentReport.teardownId))
     .leftJoin(caseStudy, eq(caseStudy.id, blueprintContentReport.caseStudyId))
+    .leftJoin(showcaseLaunch, eq(showcaseLaunch.id, blueprintContentReport.showcaseLaunchId))
     .where(eq(blueprintContentReport.reporterUserId, reporterUserId))
     .orderBy(asc(blueprintContentReport.createdAt), asc(blueprintContentReport.id))
     .limit(MY_REPORTS_LIMIT);
@@ -179,7 +240,7 @@ export async function listMyBlueprintReports(
     targetKind: row.targetKind,
     // The target cascades away with the blueprint, so a title is always present in practice; the
     // fallback exists because `leftJoin` cannot promise it in the type.
-    targetTitle: row.teardownTitle ?? row.caseStudyTitle ?? "(removed)",
+    targetTitle: row.teardownTitle ?? row.caseStudyTitle ?? row.showcaseLaunchTitle ?? "(removed)",
     reason: row.reason,
     status: row.status,
     createdAt: row.createdAt,
@@ -253,6 +314,7 @@ export async function listBlueprintReportQueue(input: {
       targetKind: blueprintContentReport.targetKind,
       teardownId: blueprintContentReport.teardownId,
       caseStudyId: blueprintContentReport.caseStudyId,
+      showcaseLaunchId: blueprintContentReport.showcaseLaunchId,
       reason: blueprintContentReport.reason,
       detailText: blueprintContentReport.detailText,
       createdAt: blueprintContentReport.createdAt,
@@ -263,11 +325,15 @@ export async function listBlueprintReportQueue(input: {
       caseStudySlug: caseStudy.publicSlug,
       caseStudyTitle: caseStudy.title,
       caseStudyState: caseStudy.moderationState,
+      showcaseLaunchSlug: showcaseLaunch.publicSlug,
+      showcaseLaunchTitle: showcaseLaunch.title,
+      showcaseLaunchState: showcaseLaunch.moderationState,
     })
     .from(blueprintContentReport)
     .leftJoin(user, eq(user.id, blueprintContentReport.reporterUserId))
     .leftJoin(teardown, eq(teardown.id, blueprintContentReport.teardownId))
     .leftJoin(caseStudy, eq(caseStudy.id, blueprintContentReport.caseStudyId))
+    .leftJoin(showcaseLaunch, eq(showcaseLaunch.id, blueprintContentReport.showcaseLaunchId))
     .where(and(...conditions))
     .orderBy(asc(blueprintContentReport.createdAt), asc(blueprintContentReport.id))
     .limit(input.limit + 1);
@@ -284,13 +350,16 @@ export async function listBlueprintReportQueue(input: {
    * answered `array_in: unnamed portal parameter`. `inArray` expands it to a parameter list, which
    * is what the driver can actually bind.
    */
-  const targetIds = pageRows.map((row) => row.teardownId ?? row.caseStudyId ?? "");
+  const targetIds = pageRows.map(
+    (row) => row.teardownId ?? row.caseStudyId ?? row.showcaseLaunchId ?? "",
+  );
   const openCounts = new Map<string, number>();
   if (targetIds.length > 0) {
     const countRows = await db
       .select({
         teardownId: blueprintContentReport.teardownId,
         caseStudyId: blueprintContentReport.caseStudyId,
+        showcaseLaunchId: blueprintContentReport.showcaseLaunchId,
         openCount: count(),
       })
       .from(blueprintContentReport)
@@ -300,12 +369,25 @@ export async function listBlueprintReportQueue(input: {
           or(
             inArray(blueprintContentReport.teardownId, targetIds),
             inArray(blueprintContentReport.caseStudyId, targetIds),
+            inArray(blueprintContentReport.showcaseLaunchId, targetIds),
           ),
         ),
       )
-      .groupBy(blueprintContentReport.teardownId, blueprintContentReport.caseStudyId);
+      /*
+       * ⚠️ ALL THREE TARGET COLUMNS IN THE `groupBy`, or the counts collapse. The grouping key has
+       * to be the same tuple the map is keyed on below; omit one and every report whose target is
+       * that arm folds into a single `(null, null)` bucket.
+       */
+      .groupBy(
+        blueprintContentReport.teardownId,
+        blueprintContentReport.caseStudyId,
+        blueprintContentReport.showcaseLaunchId,
+      );
     for (const row of countRows) {
-      openCounts.set(row.teardownId ?? row.caseStudyId ?? "", row.openCount);
+      openCounts.set(
+        row.teardownId ?? row.caseStudyId ?? row.showcaseLaunchId ?? "",
+        row.openCount,
+      );
     }
   }
 
@@ -313,14 +395,16 @@ export async function listBlueprintReportQueue(input: {
     success: true,
     value: {
       items: pageRows.map((row) => {
-        const targetId = row.teardownId ?? row.caseStudyId ?? "";
+        const targetId = row.teardownId ?? row.caseStudyId ?? row.showcaseLaunchId ?? "";
         return {
           reportId: row.reportId,
           targetKind: row.targetKind,
           targetId,
-          targetSlug: row.teardownSlug ?? row.caseStudySlug ?? null,
-          targetTitle: row.teardownTitle ?? row.caseStudyTitle ?? "(removed)",
-          targetModerationState: row.teardownState ?? row.caseStudyState ?? "unknown",
+          targetSlug: row.teardownSlug ?? row.caseStudySlug ?? row.showcaseLaunchSlug ?? null,
+          targetTitle:
+            row.teardownTitle ?? row.caseStudyTitle ?? row.showcaseLaunchTitle ?? "(removed)",
+          targetModerationState:
+            row.teardownState ?? row.caseStudyState ?? row.showcaseLaunchState ?? "unknown",
           reason: row.reason,
           detailText: row.detailText,
           reporterHandle: row.reporterHandle,

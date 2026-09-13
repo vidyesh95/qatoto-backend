@@ -118,9 +118,40 @@ describe("blueprint content reports", () => {
       await request(app)
         .post("/blueprints/case-studies/some-lesson/reports")
         .send({ reason: "spam", detailText: null });
+      await request(app).post("/blueprints/showcases/some-launch/reports").send({ reason: "spam", detailText: null });
 
       expect(createBlueprintContentReport.mock.calls[0]?.[0]).toMatchObject({ arm: "teardown" });
       expect(createBlueprintContentReport.mock.calls[1]?.[0]).toMatchObject({ arm: "case_study" });
+      expect(createBlueprintContentReport.mock.calls[2]?.[0]).toMatchObject({ arm: "showcase" });
+    });
+
+    /**
+     * ⚠️ THE SHOWCASE INTAKE TAKES THE SAME GUARDS AS THE OTHER TWO, and the anonymous case is the
+     * one worth asserting per arm rather than once: the two partial unique indexes are the
+     * anti-brigading control, and an anonymous report cannot be deduplicated — so an arm that
+     * accepted one would make the queue's depth something anybody could manufacture.
+     */
+    it("refuses a signed-out reporter on the showcase arm with 401", async () => {
+      const response = await request(app)
+        .post("/blueprints/showcases/some-launch/reports")
+        .send({ reason: "spam", detailText: null });
+
+      expect(response.status).toBe(401);
+      expect(createBlueprintContentReport).not.toHaveBeenCalled();
+    });
+
+    it("carries the launch slug through as the target slug", async () => {
+      signInAs();
+      createBlueprintContentReport.mockResolvedValue({ success: true, value: { reportId: "r" } });
+
+      await request(app)
+        .post("/blueprints/showcases/solar-lamp-v2/reports")
+        .send({ reason: "not_the_stated_product", detailText: null });
+
+      expect(createBlueprintContentReport.mock.calls[0]?.[0]).toMatchObject({
+        arm: "showcase",
+        slug: "solar-lamp-v2",
+      });
     });
 
     it("refuses an unknown reason with 422 — the labels are snake_case and sent verbatim", async () => {

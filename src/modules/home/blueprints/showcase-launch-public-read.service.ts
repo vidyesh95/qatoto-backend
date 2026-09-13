@@ -19,11 +19,19 @@ import type { Result } from "#src/types/index.js";
  * The PUBLIC reads behind `/blueprints/showcase` — the feed, the slug list and one launch.
  *
  * THE VISIBILITY RULE IS THE WHOLE SECURITY SURFACE OF THIS FILE, and it is one predicate:
- * `moderation_state = 'published'`. A launch in any other state has never been decided in the
- * reader's favour, and two of those states — `pending_review` and `rejected` — contain a maker's
- * unpublished work. Every query below applies it, including the facet counts: a tag chip promising
- * three launches that resolves to two is a count the reader can see is wrong, and the way that
- * happens is a facet query that forgets the gate the list applies.
+ * `moderation_state IN ('published', 'flagged')`. A launch in any other state has never been
+ * decided in the reader's favour, and two of them — `pending_review` and `rejected` — contain a
+ * maker's unpublished work. Every query below applies it, including the facet counts: a tag chip
+ * promising three launches that resolves to two is a count the reader can see is wrong, and the way
+ * that happens is a facet query that forgets the gate the list applies.
+ *
+ * ⚠️ `flagged` IS INSIDE THE GATE, NOT OUTSIDE IT, AND THAT IS DELIBERATE. A flag is a moderator's
+ * marker that a row needs looking at; it is not a takedown, and it changes nothing a visitor sees.
+ * What it does change is engagement — `ENGAGEABLE_MODERATION_STATES` stays `published` alone, so a
+ * flagged launch stops accruing new likes, upvotes and comments the moment it is flagged. The
+ * reason the label cannot hide the row is blueprints doc §10.1: if it could, filing a report would
+ * become a way to remove somebody's work before a human read the complaint. A moderator who does
+ * want the row gone uses `reject`, which is a decision with a name on it.
  *
  * NOTHING HERE READS THE CALLER. There is no `viewerState` in the payload because the frontend
  * offers no control that would need one — its vote box is deliberately a `<span>` rather than a
@@ -96,9 +104,27 @@ export interface PublicShowcaseFeedPage {
 export type ShowcaseFeedError = { readonly type: "SHOWCASE_FEED_CURSOR_MALFORMED" };
 export type ShowcaseDetailError = { readonly type: "SHOWCASE_LAUNCH_NOT_FOUND" };
 
-/** Every published launch, whatever the filter — the population both the list and facets read. */
-function publishedLaunchCondition(): SQL {
-  return eq(showcaseLaunch.moderationState, "published");
+/**
+ * Every PUBLICLY VISIBLE launch, whatever the filter — the population the list, the detail, the
+ * prerender slug list and the tag facets all read.
+ *
+ * ⚠️ TWO STATES, AND `flagged` BEING ONE OF THEM IS THE POINT OF THE LABEL. A flag marks a row for
+ * the report queue and stops it accruing new engagement (`ENGAGEABLE_MODERATION_STATES` is
+ * `published` alone); it changes NOTHING a visitor sees. Hiding a flagged row instead would make
+ * filing a report a way to take somebody's work down before a human had read the complaint, which
+ * is the brigading outcome the reader-report design refuses outright — see blueprints doc §10.1,
+ * whose first rule is that `flagged` is in every gate on every arm precisely so that an
+ * unreviewed accusation cannot change what anyone sees.
+ *
+ * ⚠️ RENAMED FROM `publishedLaunchCondition`, AND THE RENAME IS NOT COSMETIC. A function called
+ * `publishedLaunchCondition` that returns a two-state predicate is a lie to the next reader, and
+ * this is the whole security surface of this file — the one place worth spending a rename on.
+ *
+ * This predicate and `showcase_launch_public_newest_idx`'s `WHERE` are ONE RULE IN TWO PLACES. If
+ * they disagree, nothing fails: Postgres simply stops using the index.
+ */
+function publiclyVisibleLaunchCondition(): SQL {
+  return inArray(showcaseLaunch.moderationState, ["published", "flagged"]);
 }
 
 /**
@@ -289,7 +315,7 @@ async function loadTagFacets(): Promise<readonly ShowcaseTagFacet[]> {
   const facetRows = await db
     .select({ value: tagExpression, count: count() })
     .from(showcaseLaunch)
-    .where(publishedLaunchCondition())
+    .where(publiclyVisibleLaunchCondition())
     .groupBy(tagExpression)
     .orderBy(desc(count()), asc(tagExpression));
 
@@ -302,7 +328,7 @@ export async function listPublicShowcases(input: {
   readonly tag: string | undefined;
   readonly cursor: string | undefined;
 }): Promise<Result<PublicShowcaseFeedPage, ShowcaseFeedError>> {
-  const conditions: SQL[] = [publishedLaunchCondition()];
+  const conditions: SQL[] = [publiclyVisibleLaunchCondition()];
 
   if (input.tag !== undefined) {
     // `@>` so the tag is matched as an array element rather than as a substring of one.
@@ -379,7 +405,7 @@ export async function getPublicShowcaseBySlug(
     .from(showcaseLaunch)
     .innerJoin(user, eq(user.id, showcaseLaunch.authorUserId))
     .leftJoin(showcaseLaunchStats, eq(showcaseLaunchStats.launchId, showcaseLaunch.id))
-    .where(and(publishedLaunchCondition(), eq(showcaseLaunch.publicSlug, publicSlug)))
+    .where(and(publiclyVisibleLaunchCondition(), eq(showcaseLaunch.publicSlug, publicSlug)))
     .limit(1);
 
   if (!launchRow) return { success: false, error: { type: "SHOWCASE_LAUNCH_NOT_FOUND" } };
@@ -398,7 +424,7 @@ export async function listPublicShowcaseSlugs(): Promise<readonly string[]> {
   const slugRows = await db
     .select({ publicSlug: showcaseLaunch.publicSlug })
     .from(showcaseLaunch)
-    .where(publishedLaunchCondition())
+    .where(publiclyVisibleLaunchCondition())
     .orderBy(desc(showcaseLaunch.launchedAt), asc(showcaseLaunch.id));
 
   return slugRows.flatMap((slugRow) => (slugRow.publicSlug === null ? [] : [slugRow.publicSlug]));

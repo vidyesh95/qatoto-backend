@@ -143,7 +143,13 @@ export async function getTeardownMarketSignal(
       .innerJoin(user, eq(user.id, showcaseLaunch.authorUserId))
       .where(
         and(
-          eq(showcaseLaunch.moderationState, "published"),
+          /*
+           * ⚠️ MUST MATCH `showcase_launch_built_from_idx`'S PREDICATE, which is
+           * `IN ('published','flagged')`. This query is that index's only caller. Narrow it back to
+           * `= 'published'` and nothing fails — Postgres just stops using the index, silently.
+           * `flagged` belongs here on its own merits too: a flag changes nothing a visitor sees.
+           */
+          inArray(showcaseLaunch.moderationState, ["published", "flagged"]),
           isNotNull(showcaseLaunch.builtFromBlueprintSlug),
           eq(showcaseLaunch.builtFromBlueprintSlug, target.slug),
         ),

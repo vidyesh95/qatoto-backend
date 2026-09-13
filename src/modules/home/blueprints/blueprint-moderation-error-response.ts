@@ -1,5 +1,6 @@
 import type { Response } from "express";
 
+import type { BlueprintModerationArm } from "#src/modules/home/blueprints/blueprint-moderation-transitions.js";
 import type { BlueprintModerationError } from "#src/modules/home/blueprints/blueprint-moderation.service.js";
 
 /**
@@ -18,6 +19,29 @@ import type { BlueprintModerationError } from "#src/modules/home/blueprints/blue
  *         does not apply as it stands.
  *   422 — parse failures only, answered by `respondValidationFailed` before this is reached.
  */
+
+/**
+ * The arm, as a moderator would say it.
+ *
+ * ⚠️ A `switch` WITH A `never` DEFAULT, BECAUSE THE TERNARY THIS REPLACES WAS ALREADY WRONG THE DAY
+ * A THIRD ARM LANDED. `arm === "case_study" ? "case study" : "teardown"` does not fail to compile
+ * when the union widens — it just calls a showcase launch a teardown, in the one sentence a
+ * moderator reads to understand why their action was refused.
+ */
+function describeModerationArm(arm: BlueprintModerationArm): string {
+  switch (arm) {
+    case "teardown":
+      return "teardown";
+    case "case_study":
+      return "case study";
+    case "showcase":
+      return "showcase launch";
+    default: {
+      const exhaustiveCheck: never = arm;
+      throw new Error(`Unhandled moderation arm: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
 
 export function respondBlueprintModerationError(
   res: Response,
@@ -65,7 +89,7 @@ export function respondBlueprintModerationError(
         message:
           error.verb === "flag" && error.moderationState === "quarantined"
             ? "A quarantine already withholds more than a flag. Restore it first if the files should go back up."
-            : `A ${error.verb} does not apply to a ${error.moderationState} ${error.arm === "case_study" ? "case study" : "teardown"}.`,
+            : `A ${error.verb} does not apply to a ${error.moderationState} ${describeModerationArm(error.arm)}.`,
       });
       return;
     default: {

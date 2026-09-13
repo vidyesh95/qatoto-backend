@@ -5,12 +5,15 @@ import {
   auditLabelForVerb,
   CASE_STUDY_MODERATION_STATES,
   parseCaseStudyModerationState,
+  parseShowcaseLaunchModerationState,
   parseTeardownModerationState,
   resolveBlueprintTransition,
+  SHOWCASE_LAUNCH_MODERATION_STATES,
   TEARDOWN_MODERATION_STATES,
 } from "#src/modules/home/blueprints/blueprint-moderation-transitions.js";
 import type {
   BlueprintModerationArm,
+  BlueprintModerationState,
   BlueprintModerationVerb,
 } from "#src/modules/home/blueprints/blueprint-moderation-transitions.js";
 
@@ -24,6 +27,22 @@ import type {
  */
 
 const VERBS: readonly BlueprintModerationVerb[] = ["flag", "quarantine", "restore"];
+
+/** Exhaustive by `never`, so a fourth arm cannot be added without being given a state list here. */
+function statesForArm(arm: BlueprintModerationArm): readonly BlueprintModerationState[] {
+  switch (arm) {
+    case "teardown":
+      return TEARDOWN_MODERATION_STATES;
+    case "case_study":
+      return CASE_STUDY_MODERATION_STATES;
+    case "showcase":
+      return SHOWCASE_LAUNCH_MODERATION_STATES;
+    default: {
+      const exhaustiveCheck: never = arm;
+      throw new Error(`Unhandled moderation arm: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
 
 describe("the blueprint moderation matrix", () => {
   it("lists exactly the states each arm's CHECK admits", () => {
@@ -41,14 +60,31 @@ describe("the blueprint moderation matrix", () => {
       "published",
       "rejected",
     ]);
+    /*
+     * Mirrors `showcase_launch_moderation_state_ck`. ⚠️ NO `quarantined`, and for a DIFFERENT
+     * reason from the case-study arm's: a showcase HAS files, but they are its own maker's by
+     * attestation, so a third-party rights claim against one alleges the attestation was a lie.
+     */
+    expect([...SHOWCASE_LAUNCH_MODERATION_STATES].toSorted()).toEqual([
+      "flagged",
+      "pending_review",
+      "published",
+      "rejected",
+    ]);
   });
 
   it("resolves every (arm x state x verb) cell without throwing", () => {
-    const arms: readonly BlueprintModerationArm[] = ["teardown", "case_study"];
+    /*
+     * ⚠️ THE ARM LIST AND THE STATE LOOKUP ARE BOTH EXHAUSTIVE ON PURPOSE. A `switch` with a
+     * `never` default means adding a fourth arm to `BlueprintModerationArm` fails to compile HERE
+     * as well as in the service — which is the only reason this count can be trusted as coverage
+     * rather than as a number somebody updated to make the suite green.
+     */
+    const arms: readonly BlueprintModerationArm[] = ["teardown", "case_study", "showcase"];
     let resolvedCellCount = 0;
 
     for (const arm of arms) {
-      const states = arm === "teardown" ? TEARDOWN_MODERATION_STATES : CASE_STUDY_MODERATION_STATES;
+      const states = statesForArm(arm);
       for (const state of states) {
         for (const verb of VERBS) {
           const outcome = resolveBlueprintTransition(arm, state, verb);
@@ -58,8 +94,8 @@ describe("the blueprint moderation matrix", () => {
       }
     }
 
-    // 4 teardown states + 4 case-study states, three verbs each.
-    expect(resolvedCellCount).toBe(24);
+    // 4 teardown + 4 case-study + 4 showcase states, three verbs each.
+    expect(resolvedCellCount).toBe(36);
   });
 
   describe("the teardown arm", () => {
@@ -151,13 +187,57 @@ describe("the blueprint moderation matrix", () => {
     });
   });
 
+  describe("the showcase arm", () => {
+    it("refuses quarantine in EVERY state — the arm has no such label", () => {
+      for (const state of SHOWCASE_LAUNCH_MODERATION_STATES) {
+        expect(
+          resolveBlueprintTransition("showcase", state, "quarantine"),
+          `quarantine must be refused on a ${state} showcase launch`,
+        ).toEqual({ kind: "not_available_on_arm" });
+      }
+    });
+
+    it("flags and restores like the case-study arm", () => {
+      expect(resolveBlueprintTransition("showcase", "published", "flag")).toEqual({
+        kind: "allowed",
+        nextState: "flagged",
+      });
+      expect(resolveBlueprintTransition("showcase", "flagged", "restore")).toEqual({
+        kind: "allowed",
+        nextState: "published",
+      });
+    });
+
+    it("never treats rejected as a source — a rejection is terminal", () => {
+      for (const verb of VERBS) {
+        const outcome = resolveBlueprintTransition("showcase", "rejected", verb);
+        expect(outcome.kind, `${verb} on a rejected launch`).not.toBe("allowed");
+      }
+    });
+
+    it("refuses every verb on a launch that was never public", () => {
+      for (const verb of VERBS) {
+        const outcome = resolveBlueprintTransition("showcase", "pending_review", verb);
+        expect(outcome.kind, `${verb} on a pending launch`).not.toBe("allowed");
+      }
+    });
+  });
+
   describe("state narrowing", () => {
     it("accepts the states its arm admits and refuses the rest", () => {
       expect(parseTeardownModerationState("quarantined")).toBe("quarantined");
       // ⚠️ `quarantined` is a real label on the shared enum and NOT reachable on this arm.
       expect(parseCaseStudyModerationState("quarantined")).toBeNull();
+      expect(parseShowcaseLaunchModerationState("quarantined")).toBeNull();
       expect(parseTeardownModerationState("rejected")).toBeNull();
       expect(parseTeardownModerationState("draft")).toBeNull();
+      /*
+       * ⚠️ THE SHOWCASE ARM ADMITS `rejected` WHERE THE TEARDOWN ARM DOES NOT. A rejected launch is
+       * the same row it always was, sitting in `showcase_launch` with a moderator note; a rejected
+       * teardown submission never became a `teardown` at all, so the published table has no such
+       * state to narrow to.
+       */
+      expect(parseShowcaseLaunchModerationState("rejected")).toBe("rejected");
     });
   });
 

@@ -589,6 +589,11 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
     schema: BlueprintModerationCommandSchema,
     required: true,
   },
+  /** Same command shape; the showcase arm answers `quarantine` with a 409 rather than a parse error. */
+  "post /blueprints/admin/showcases/{launchId}/moderation-state": {
+    schema: BlueprintModerationCommandSchema,
+    required: true,
+  },
 
   /*
    * THE READER-REPORT INTAKE AND ITS DISMISSAL.
@@ -602,6 +607,10 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
     required: true,
   },
   "post /blueprints/case-studies/{caseStudySlug}/reports": {
+    schema: CreateBlueprintReportSchema,
+    required: true,
+  },
+  "post /blueprints/showcases/{launchSlug}/reports": {
     schema: CreateBlueprintReportSchema,
     required: true,
   },

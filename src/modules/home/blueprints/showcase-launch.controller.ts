@@ -1,6 +1,9 @@
 import type { Request, Response } from "express";
 
 import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+import { respondBlueprintModerationError } from "#src/modules/home/blueprints/blueprint-moderation-error-response.js";
+import { BlueprintModerationCommandSchema } from "#src/modules/home/blueprints/blueprint-moderation.schemas.js";
+import * as blueprintModerationService from "#src/modules/home/blueprints/blueprint-moderation.service.js";
 import {
   firstParam,
   respondShowcaseLaunchError,
@@ -323,4 +326,49 @@ export async function getPublicShowcaseLaunch(req: Request, res: Response): Prom
   }
 
   respondOk(res, "Showcase launch retrieved successfully", launchResult.value);
+}
+
+/**
+ * `POST /blueprints/admin/showcases/:launchId/moderation-state` — flag or restore a LIVE launch.
+ *
+ * ⚠️ A DIFFERENT OBJECT FROM `/:submissionId/moderate`, EVEN THOUGH IT IS THE SAME ROW. That route
+ * decides a SUBMISSION — publish it or send it back; this one moves a launch that is already
+ * public. On the teardown arm those are literally two tables with two ids, and the param names say
+ * so. Here `showcase_launch` is both, so `:launchId` and `:submissionId` would select the same row
+ * — and the param is still named `:launchId`, because the distinction that matters is which ACT is
+ * being performed, not which table it lands in. A moderator reaching this route is working the
+ * report queue, not the review queue.
+ *
+ * ⚠️ `quarantine` IS REFUSED ON THIS ARM, with a sentence rather than a 404. A quarantine withholds
+ * a publisher's files under a third-party rights claim; a showcase is the maker's own work by
+ * attestation, so the equivalent complaint is that the attestation was a lie — answered by `flag`
+ * and then `reject`, each of which names a decision somebody owns.
+ *
+ * ⚠️ THE CAPABILITY IS RESOLVED BEFORE `req.params` IS READ AND BEFORE THE BODY IS PARSED — §3.6.
+ * Reversed, a 403 that only arrives for launches that exist is an existence oracle over
+ * unpublished work.
+ */
+export async function setShowcaseLaunchModerationState(req: Request, res: Response): Promise<void> {
+  const staff = await resolveModerator(req, res);
+  if (!staff) return;
+
+  const parsedCommand = BlueprintModerationCommandSchema.safeParse(req.body);
+  if (!parsedCommand.success) {
+    respondValidationFailed(res, parsedCommand.error);
+    return;
+  }
+
+  const result = await blueprintModerationService.applyShowcaseLaunchModerationVerb({
+    targetId: firstParam(req.params.launchId ?? ""),
+    verb: parsedCommand.data.verb,
+    reasonNote: parsedCommand.data.reasonNote,
+    staff,
+  });
+
+  if (!result.success) {
+    respondBlueprintModerationError(res, result.error);
+    return;
+  }
+
+  respondOk(res, "The showcase launch's state was changed.", result.value);
 }

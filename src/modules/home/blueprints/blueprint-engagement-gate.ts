@@ -47,7 +47,18 @@ const ENGAGEABLE_MODERATION_STATES = ["published"] as const;
 /** Where a TEARDOWN's page is served at all — the READABLE list, which the beacon follows. */
 const TEARDOWN_VIEWABLE_MODERATION_STATES = ["published", "flagged", "quarantined"] as const;
 
-/** Where a SHOWCASE or CASE STUDY is served — neither arm has a quarantine. */
+/**
+ * Where a SHOWCASE or CASE STUDY is served — neither arm has a quarantine.
+ *
+ * ⚠️ `flagged` IS NOT SPECULATIVE ON EITHER ARM ANY MORE. This list was written with two labels
+ * while `showcase_launch_moderation_state_ck` still admitted only three states, so the showcase
+ * half of it described a row that could not yet exist. It can now, and this file needed NO code
+ * change for it — which is the whole reason the list was written this way in the first place.
+ *
+ * Do not "simplify" either label away. `ENGAGEABLE_MODERATION_STATES` above is `published` alone,
+ * and the gap between the two lists is the entire behaviour of a flag: the page still answers, and
+ * the row stops accruing likes, upvotes and comments.
+ */
 const LISTED_MODERATION_STATES = ["published", "flagged"] as const;
 
 export type BlueprintEngagementArm = "showcase" | "teardown" | "case_study";
