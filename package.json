@@ -120,6 +120,7 @@
     "db:smoke-teardown-authoring": "tsx --conditions=development scripts/smoke-teardown-authoring.ts",
     "db:smoke-case-study-authoring": "tsx --conditions=development scripts/smoke-case-study-authoring.ts",
     "db:smoke-showcase-authoring": "tsx --conditions=development scripts/smoke-showcase-authoring.ts",
+    "db:smoke-blueprint-hero": "tsx --conditions=development scripts/smoke-blueprint-hero.ts",
     "db:smoke-compensation": "tsx --conditions=development scripts/smoke-compensation.ts",
     "db:smoke-object-storage": "tsx --conditions=development scripts/smoke-object-storage.ts",
     "db:expire-stale-project-requests": "tsx --conditions=development scripts/expire-stale-project-requests.ts",

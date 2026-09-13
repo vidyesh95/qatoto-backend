@@ -311,6 +311,9 @@ pnpm db:verify-case-study-constraints      # 46
 pnpm db:verify-showcase-launch-constraints # 91
 pnpm db:verify-blueprint-hero-constraints  # 27
 pnpm db:smoke-teardown-authoring           # submit → duplicate refusal → publish → public read
+pnpm db:smoke-case-study-authoring         # 16, and a byte sweep for the withheld company name
+pnpm db:smoke-showcase-authoring           # 20, upload-before-submit and the stats tripwire
+pnpm db:smoke-blueprint-hero               # 19, AVIF and the seeded site-relative arm
 pnpm db:seed-blueprint-teardowns           # the import schema is unchanged by the write path
 pnpm gate                                  # specifiers, typecheck ×3, fmt:check, lint, test
 ```
@@ -333,6 +336,18 @@ than restating:
 - ⚠️ **Both hero URL CHECKs refused `//evil.tld` and accepted `/\evil.tld`** — the same attack in the
   spelling nobody tested. `promotional_slide_destination_ck` carried it too. The hero image check
   now shares `assetUrlCheck` with the teardown tables, which already refused both spellings.
+
+**All four arms now have a smoke script too.** Each exists for the reason `db:smoke-teardown-authoring`
+does: no test can prove a TRANSACTION runs, only that a controller calls it. Three of them carry an
+assertion that is a **tripwire rather than a description**, and each says so in place:
+
+- `smoke-showcase-authoring` asserts publishing mints **no** `showcase_launch_stats` row. When the
+  engagement write path lands it must mint that row on FIRST ENGAGEMENT and still not on publish.
+- The same file asserts `sort=top` and `sort=newest` return the same order. That is true only while
+  nothing writes an upvote; the day one lands, the assertion is to be deleted, not repaired.
+- `smoke-blueprint-hero` reorders **every** slide, seeded rows included, because the service refuses
+  anything that is not a permutation of the whole table — then puts the carousel back in the order
+  it found it in. A harness that silently rearranged the data it found would be worse than none.
 
 A sweep of all 338 CHECK constraints for the multi-column NULL-pair shape found three candidates:
 the call-to-action one (fixed), `commerce_seller_profile_sample_policy_ck` (safe — its second arm
