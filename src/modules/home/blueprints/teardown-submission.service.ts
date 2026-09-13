@@ -45,7 +45,9 @@ export type TeardownSubmitError =
    * stranger's id exists — the same oracle rule this surface applies to submission ids. It names no
    * id for the same reason.
    */
-  | { readonly type: "TEARDOWN_UPLOAD_NOT_AVAILABLE" };
+  | { readonly type: "TEARDOWN_UPLOAD_NOT_AVAILABLE" }
+  /** ⚠️ A STRANGER'S SUBMISSION AND A NONEXISTENT ONE ARE THE SAME BYTES — an id oracle otherwise. */
+  | { readonly type: "TEARDOWN_SUBMISSION_NOT_MINE" };
 
 /** Drizzle's `transaction.rollback()` throws a sentinel rather than returning; this recognises it. */
 function isTransactionRollbackError(thrown: unknown): boolean {
@@ -365,4 +367,61 @@ export async function listMyTeardowns(input: {
       moderatorNote: row.moderatorNote,
     };
   });
+}
+
+/**
+ * One of this author's own submissions, document and all — so a wizard can pre-fill from it.
+ *
+ * ⚠️ THIS IS EDIT-AND-RESUBMIT, AND IT LEAVES REJECTION TERMINAL. §3.7 says "a rejection is
+ * terminal, which is why the note is mandatory on one: it is the author's entire remedy", and that
+ * stays exactly true. Nothing here reopens a decided row. The author reads their own document,
+ * seeds a DRAFT from it, edits, and submits afresh — which the schema already allows, because
+ * `teardown_submission_subject_live_uidx` deliberately excludes `rejected` so "a sent-back author
+ * may survey the same unit again as a fresh submission".
+ *
+ * ⚠️ IN-PLACE EDITING IS REFUSED BY POSTGRES, WHICH IS WHY IT WAS NEVER THE DESIGN.
+ * `teardown_submission_decision_ck` reads `(moderation_state = 'pending_review') = (reviewed_at IS
+ * NULL)` and `(reviewed_at IS NULL) = (reviewed_by_user_id IS NULL)` and `(moderation_state <>
+ * 'rejected' OR moderator_note IS NOT NULL)`. Moving a rejected row back to `pending_review`
+ * therefore forces the reviewer, the decision time AND the mandatory note all to NULL — the
+ * constraint deletes the evidence as the price of the edit. A revision chain would be the shape if
+ * lineage is ever wanted; this needs no schema change at all.
+ *
+ * ⚠️ OWNER-SCOPED, AND A STRANGER'S ID ANSWERS THE SAME AS A MISSING ONE. The predicate is in the
+ * query rather than a check around it.
+ */
+export async function getMyTeardownSubmission(input: {
+  readonly authorUserId: string;
+  readonly submissionId: string;
+}): Promise<
+  Result<
+    {
+      readonly submissionId: string;
+      readonly moderationState: string;
+      readonly moderatorNote: string | null;
+      readonly document: string;
+      readonly documentSchemaVersion: number;
+    },
+    TeardownSubmitError
+  >
+> {
+  const [row] = await db
+    .select({
+      submissionId: teardownSubmission.id,
+      moderationState: teardownSubmission.moderationState,
+      moderatorNote: teardownSubmission.moderatorNote,
+      document: teardownSubmission.documentJson,
+      documentSchemaVersion: teardownSubmission.documentSchemaVersion,
+    })
+    .from(teardownSubmission)
+    .where(
+      and(
+        eq(teardownSubmission.id, input.submissionId),
+        eq(teardownSubmission.authorUserId, input.authorUserId),
+      ),
+    )
+    .limit(1);
+
+  if (!row) return { success: false, error: { type: "TEARDOWN_SUBMISSION_NOT_MINE" } };
+  return { success: true, value: row };
 }

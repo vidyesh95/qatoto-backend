@@ -44,6 +44,15 @@ export async function sweepOrphanShowcaseImages(asOf: Date): Promise<ShowcaseIma
     .where(
       and(
         isNull(showcaseLaunchWriteUpImage.launchId),
+        /*
+         * ⚠️ A DRAFT'S IMAGES ARE CLAIMED, AND FORGETTING THIS LOSES AN AUTHOR'S WORK SILENTLY.
+         * Every image a showcase draft references has a NULL `launch_id` — a draft has no launch —
+         * so the predicate above alone would delete all of them after 24 hours. An author resuming
+         * a week later would find their write-up full of dead links, with nothing failing anywhere
+         * to say why. This conjunct and `showcase_launch_write_up_image_unclaimed_idx`'s predicate
+         * are one rule in two places.
+         */
+        isNull(showcaseLaunchWriteUpImage.draftId),
         lt(showcaseLaunchWriteUpImage.createdAt, cutoff),
       ),
     )

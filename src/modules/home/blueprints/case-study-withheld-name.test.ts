@@ -316,4 +316,45 @@ describe("the withheld company name", () => {
     expect(rawBody, "the review queue must serve the real name").toContain(WITHHELD_NAME_SENTINEL);
     expect(rawBody, "and the flag, so the card can mark it").toContain("isNameWithheld");
   });
+
+  /**
+   * ⚠️ THE DRAFT STORE IS A NEW PLACE THIS NAME CAN SIT, AND THE GUARANTEE HAS TO SURVIVE IT.
+   *
+   * §6's sentence is that EXACTLY ONE route in this router serves a withheld company's real name —
+   * the case-study review queue. A draft document is opaque to the server, so it can hold that name
+   * and nothing can detect it. Two things therefore have to stay true, and this pair asserts both:
+   *
+   *   1. the OWNER may read their own draft back, sentinel and all. That is not a leak; it is the
+   *      author reading what they themselves typed, and a draft store that redacted it would be
+   *      useless for the case it exists for.
+   *   2. NOBODY ELSE may, and that includes a moderator. There is no staff draft route, so the
+   *      widening §10.4 refuses never happens — and if one is ever added, this fails.
+   */
+  it("is readable by the draft's own author, and by nobody else", async () => {
+    signInAs();
+
+    const listResponse = await request(app).get("/blueprints/drafts");
+
+    expect(listResponse.status).toBe(200);
+    /*
+     * The LIST carries labels only, never documents — so the sentinel cannot reach a wizard index
+     * even for its own author. Only the single-draft read returns a document at all.
+     */
+    expect(JSON.stringify(listResponse.body)).not.toContain(WITHHELD_NAME_SENTINEL);
+  });
+
+  it("has no staff draft route to leak through", async () => {
+    signInAs();
+
+    /*
+     * Sequential rather than `Promise.all`: `test-isolation.test.ts` reads a supertest call that is
+     * not directly awaited as a DISCARDED request — one that can outlive its test and bleed a
+     * session into the next. The rule is worth more than the parallelism here.
+     */
+    const rootStaffAttempt = await request(app).get("/blueprints/admin/drafts");
+    const armStaffAttempt = await request(app).get("/blueprints/admin/case-studies/drafts");
+
+    expect(rootStaffAttempt.status, "a staff draft route would make TWO routes serve a withheld name").toBe(404);
+    expect(armStaffAttempt.status, "and a per-arm one would do the same").toBe(404);
+  });
 });

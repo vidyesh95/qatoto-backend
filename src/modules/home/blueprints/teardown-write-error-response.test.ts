@@ -34,9 +34,20 @@ const EVERY_TEARDOWN_WRITE_ERROR: Readonly<Record<TeardownWriteError["type"], Te
     issues: ["parts.0.label: Required"],
   },
   TEARDOWN_UPLOAD_NOT_AVAILABLE: { type: "TEARDOWN_UPLOAD_NOT_AVAILABLE" },
+  TEARDOWN_SUBMISSION_NOT_MINE: { type: "TEARDOWN_SUBMISSION_NOT_MINE" },
 };
 
 describe("mapTeardownWriteErrorToResponse", () => {
+  /**
+   * ⚠️ 404, THE SAME ANSWER A NONEXISTENT ID GETS. A 403 would confirm the submission exists, which
+   * is an existence oracle over other people's unpublished surveys.
+   */
+  it("refuses somebody else's submission with 404, not 403", () => {
+    const mapped = mapTeardownWriteErrorToResponse(EVERY_TEARDOWN_WRITE_ERROR.TEARDOWN_SUBMISSION_NOT_MINE);
+
+    expect(mapped.statusCode).toBe(404);
+  });
+
   /**
    * ⚠️ 409 AND NO ID. The three facts behind this refusal — an upload that never existed, one
    * belonging to another author, and one an earlier submission already claimed — are deliberately
@@ -113,7 +124,7 @@ describe("mapTeardownWriteErrorToResponse", () => {
     it("maps every variant the union declares without throwing", () => {
       const everyError = Object.values(EVERY_TEARDOWN_WRITE_ERROR);
 
-      expect(everyError, "the variant table must not silently empty out").toHaveLength(7);
+      expect(everyError, "the variant table must not silently empty out").toHaveLength(8);
       for (const error of everyError) {
         const mapped = mapTeardownWriteErrorToResponse(error);
 

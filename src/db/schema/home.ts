@@ -2369,6 +2369,16 @@ export const showcaseLaunchWriteUpImage = pgTable(
       .primaryKey()
       .$defaultFn(() => randomUUID()),
     launchId: text("launch_id").references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    /**
+     * ⚠️ WITHOUT THIS COLUMN A RESUMED SHOWCASE DRAFT LOSES EVERY IMAGE, SILENTLY.
+     * `sweep-orphan-showcase-images` deletes any row whose `launch_id` is NULL after 24 hours —
+     * which is every image a draft references, because a draft has no launch. An author resuming a
+     * week later would find their write-up full of dead links and no error anywhere saying why.
+     *
+     * `set null` rather than cascade: deleting a draft should free the images for the sweeper to
+     * reap, not take assets that a submitted launch may already have claimed.
+     */
+    draftId: text("draft_id").references(() => blueprintDraft.id, { onDelete: "set null" }),
     uploadedByUserId: text("uploaded_by_user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -2384,9 +2394,15 @@ export const showcaseLaunchWriteUpImage = pgTable(
   (table) => [
     index("showcase_launch_write_up_image_launch_idx").on(table.launchId),
     // The staging cap and the sweeper both ask "which of this maker's uploads are unclaimed".
+    /*
+     * ⚠️ THE PREDICATE IS BOTH CLAIMS, and it must stay that way. The sweeper and the staging cap
+     * both ask "which of this maker's uploads are unclaimed", and an image a DRAFT references is
+     * claimed — by paperwork rather than by a launch, but claimed. Narrowing this back to
+     * `launch_id IS NULL` would make the sweeper eat a resumed draft's images.
+     */
     index("showcase_launch_write_up_image_unclaimed_idx")
       .on(table.uploadedByUserId, table.createdAt)
-      .where(sql`launch_id IS NULL`),
+      .where(sql`launch_id IS NULL AND draft_id IS NULL`),
     check(
       "showcase_launch_write_up_image_dimensions_ck",
       sql`width_px BETWEEN 1 AND 8192 AND height_px BETWEEN 1 AND 8192`,
@@ -3957,6 +3973,106 @@ export const blueprintModerationAction = pgTable(
     ),
   ],
 );
+
+/**
+ * ⚠️ ITS OWN TYPE, NOT A WIDENED `blueprint_content_target_kind`. Widening that one would need an
+ * isolated `ALTER TYPE` migration AND would contradict what it records: that its members are the
+ * arms a moderation VERB can reach. A draft is not moderated and never will be — it is the author's
+ * own unfinished work, and the showcase arm belongs here under a name that means something else.
+ */
+export const blueprintDraftArmEnum = pgEnum("blueprint_draft_arm", [
+  "teardown",
+  "showcase_launch",
+  "case_study",
+]);
+
+/**
+ * One wizard's unfinished work, kept so it survives a closed tab.
+ *
+ * ⚠️ ONE TABLE FOR THREE ARMS, WHICH IS THE OPPOSITE OF THE RULE `_core.ts` STATES — and the rule
+ * does not reach here. It says "each MODERATION QUEUE gets its own table rather than a widened
+ * `target_kind`, because a queue's columns, its REASONS and its VERDICT are its own." Every clause
+ * of that justification is about a queue. A draft has no verdict, no reasons, and — decisively — no
+ * columns of its own: the promoted set below is identical for all three wizards, because the only
+ * two queries are "list mine" and "load one".
+ *
+ * ⚠️ THE DOCUMENT IS OPAQUE, AND THAT IS THE POINT OF A DRAFT. `teardown_submission.document_json`
+ * is parsed at publish because it becomes ten public tables; this is never parsed by the server at
+ * all. A draft is unvalidated BY DEFINITION — half-answered is the state it exists to hold — so the
+ * gate checks the envelope strictly and the document only for being a JSON object. The submit gate
+ * remains the only gate, and a draft that cannot be submitted is simply a draft.
+ *
+ * ⚠️ `document_schema_version` MEANS SOMETHING DIFFERENT HERE than on `teardown_submission`. There
+ * it selects a server-side parser. Here THE READER IS THE CLIENT: a resumed draft goes back to the
+ * wizard, which parses it with its own draft schema and discards a version it does not recognise.
+ * Recorded because the two columns look like copies and are not.
+ *
+ * ⚠️ NOT `teardown_submission` WITH `moderation_state = 'draft'`. Four independent refusals, any one
+ * sufficient: that CHECK admits three labels and `draft` is not among them; `subject_product_name`
+ * is NOT NULL and a draft has no subject yet; `teardown_submission_subject_live_uidx` would need a
+ * fourth predicate decision; and it would put an UNPARSED document in the column `decideTeardown`
+ * parses. The unused `draft` label on `blueprint_moderation_state` stays unused.
+ */
+export const blueprintDraft = pgTable(
+  "blueprint_draft",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    arm: blueprintDraftArmEnum("arm").notNull(),
+    /** The author's own name for it, shown in their list. NULL until they type one. */
+    label: text("label"),
+    documentJson: text("document_json").notNull(),
+    documentSchemaVersion: integer("document_schema_version").notNull(),
+    /**
+     * ⚠️ OPTIMISTIC CONCURRENCY, AND IT IS NOT OPTIONAL. Two tabs autosaving one draft with no
+     * revision means the last writer silently destroys the other's work — which is the exact
+     * failure "resume later across devices" is sold as preventing. The body carries the revision it
+     * loaded, the UPDATE guards on it, and zero rows affected is a 409 rather than a lost edit.
+     */
+    revision: integer("revision").default(1).notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /** The only two reads: this owner's drafts on one arm, newest first, and one by id. */
+    index("blueprint_draft_owner_idx").on(table.ownerUserId, table.arm, table.updatedAt, table.id),
+    /** The sweeper's read: anything untouched for long enough, whoever owns it. */
+    index("blueprint_draft_stale_idx").on(table.updatedAt),
+    /**
+     * An object, not an array and not a bare scalar — the `teardown_submission_document_ck` idiom.
+     *
+     * ⚠️ 32,768 RATHER THAN THAT TABLE'S 262,144, AND THE SMALLER NUMBER IS THE HONEST ONE.
+     * `estimateBodyBytes` counts four bytes per character, so a 262,144-character document is over
+     * a megabyte against `longFormBody`'s 128 KB — a bound no request could reach, which makes it
+     * decoration rather than a control. `BLUEPRINT_DRAFT_DOCUMENT_MAXIMUM_CHARACTERS` carries the
+     * same number and `json-body-budget.test.ts` keeps the two reachable.
+     */
+    check(
+      "blueprint_draft_document_ck",
+      sql`char_length(document_json) BETWEEN 2 AND 32000 AND left(document_json, 1) = '{'`,
+    ),
+    check(
+      "blueprint_draft_scalars_ck",
+      sql`document_schema_version >= 1
+          AND revision >= 1
+          AND (label IS NULL OR char_length(label) BETWEEN 1 AND 200)`,
+    ),
+  ],
+);
+
+export const blueprintDraftRelations = relations(blueprintDraft, ({ one }) => ({
+  owner: one(user, {
+    fields: [blueprintDraft.ownerUserId],
+    references: [user.id],
+  }),
+}));
 
 /**
  * A reader's report about one published blueprint.

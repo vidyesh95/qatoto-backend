@@ -8,6 +8,10 @@ import {
   CreateBlueprintReportSchema,
   DismissBlueprintReportSchema,
 } from "#src/modules/home/blueprints/blueprint-content-report.schemas.js";
+import {
+  CreateBlueprintDraftSchema,
+  ReplaceBlueprintDraftSchema,
+} from "#src/modules/home/blueprints/blueprint-draft.schemas.js";
 import { BlueprintModerationCommandSchema } from "#src/modules/home/blueprints/blueprint-moderation.schemas.js";
 import {
   CountersignPeriodSchema,
@@ -551,6 +555,12 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
    * this one carries a `format` TEXT PART that the handler reads, which is what the body sweep
    * detects. The file itself is bounded by multer, not by a schema.
    */
+  /*
+   * THE DRAFT STORE. Both writers carry a body; the GETs and the DELETE do not, and an orphan entry
+   * here fails the build exactly as a missing one does.
+   */
+  "post /blueprints/drafts": { schema: CreateBlueprintDraftSchema, required: true },
+  "put /blueprints/drafts/{draftId}": { schema: ReplaceBlueprintDraftSchema, required: true },
   "post /blueprints/teardowns/uploads": {
     schema: TeardownUploadFormatSchema,
     required: true,

@@ -1444,6 +1444,21 @@ export const teardownFileDownloadLimiter = createLimiter({
   limit: 60,
 });
 
+/**
+ * The draft writes — `POST /blueprints/drafts` and `PUT /blueprints/drafts/:draftId`.
+ *
+ * ⚠️ FAR MORE GENEROUS THAN ANY SUBMIT LIMITER, DELIBERATELY. A submit is a person finishing
+ * something; an autosave fires every few seconds while they type, so the five-per-fifteen-minutes
+ * shape used for submissions would break the feature it is meant to protect. It still exists,
+ * because a draft store is an unbounded per-account write amplifier and this is the only thing
+ * bounding it.
+ */
+export const blueprintDraftSaveLimiter = createLimiter({
+  namespace: "blueprintDraftSave",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 600,
+});
+
 /** POST /blueprints/admin/content-reports/:reportId/dismiss — a moderator working the queue. */
 export const blueprintReportModerationLimiter = createLimiter({
   namespace: "blueprintReportModeration",

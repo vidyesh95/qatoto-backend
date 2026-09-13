@@ -537,3 +537,35 @@ function makeTeardownModelDownloadHandler(scope: "assembly" | "part") {
 
 export const downloadTeardownAssemblyModel = makeTeardownModelDownloadHandler("assembly");
 export const downloadTeardownPartModel = makeTeardownModelDownloadHandler("part");
+
+/**
+ * `GET /blueprints/teardowns/mine/:submissionId` — the author's own stored document.
+ *
+ * ⚠️ THIS IS THE WHOLE OF EDIT-AND-RESUBMIT, and it changes no schema and no decision. A rejection
+ * stays terminal (§3.7); the author reads their document, seeds a DRAFT from it, and submits
+ * afresh — which `teardown_submission_subject_live_uidx` already permits by excluding `rejected`.
+ * The moderator note travels with it, because that note is the instructions.
+ */
+export async function getMySubmission(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const result = await teardownSubmissionService.getMyTeardownSubmission({
+    authorUserId: req.user.id,
+    submissionId: firstParam(req.params.submissionId ?? ""),
+  });
+  if (!result.success) {
+    respondTeardownWriteError(res, result.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Submission retrieved successfully",
+    data: result.value,
+  };
+  res.status(200).json(response);
+}

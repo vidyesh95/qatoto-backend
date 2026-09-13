@@ -1,0 +1,2 @@
+ALTER TABLE "blueprint_draft" DROP CONSTRAINT "blueprint_draft_document_ck";--> statement-breakpoint
+ALTER TABLE "blueprint_draft" ADD CONSTRAINT "blueprint_draft_document_ck" CHECK (char_length(document_json) BETWEEN 2 AND 32768 AND left(document_json, 1) = '{');

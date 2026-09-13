@@ -782,6 +782,21 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
      * bytes behind, exactly as the other four families do.
      */
     "teardown_submission_file_upload.uploaded_by_user_id": { kind: "delete_rows" },
+    /**
+     * A draft is the author's own unfinished work, so it goes with them.
+     *
+     * ⚠️ `delete_rows` IS THE ONLY DEFENSIBLE DISPOSITION HERE, AND THE REASON IS THE OPACITY. The
+     * document is a TEXT blob this server never parses, so `text-pii-register.ts` — which works
+     * per column on structured text — cannot reach inside it. A case-study draft may name a company
+     * the author meant to withhold, and a teardown draft may carry an authorization note naming a
+     * person. `null_out` would orphan that text with nobody to attribute it to; deleting the row is
+     * the only operation that provably reaches it.
+     *
+     * ⚠️ IT ALSO FREES THE SHOWCASE IMAGES A DRAFT WAS HOLDING. `showcase_launch_write_up_image.
+     * draft_id` is `set null`, so the sweeper reaps them within a day rather than them becoming
+     * permanently unreferenced rows nothing can find.
+     */
+    "blueprint_draft.owner_user_id": { kind: "delete_rows" },
     "teardown_submission.reviewed_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",

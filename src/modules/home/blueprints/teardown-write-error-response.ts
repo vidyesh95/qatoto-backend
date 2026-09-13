@@ -105,6 +105,13 @@ export function mapTeardownWriteErrorToResponse(error: TeardownWriteError): {
         message:
           "One of the uploaded files is no longer available. Upload the files again and resubmit.",
       };
+    /*
+     * ⚠️ 404, AND IT IS THE SAME ANSWER A STRANGER'S ID GETS. A 403 would confirm the submission
+     * exists, which is an existence oracle over other people's unpublished surveys — the rule
+     * `TEARDOWN_SUBMISSION_NOT_FOUND` above already follows.
+     */
+    case "TEARDOWN_SUBMISSION_NOT_MINE":
+      return { statusCode: 404, message: "No submission with that id." };
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled teardown write error: ${JSON.stringify(exhaustiveCheck)}`);

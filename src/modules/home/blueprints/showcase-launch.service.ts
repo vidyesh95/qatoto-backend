@@ -156,6 +156,13 @@ export async function uploadShowcaseWriteUpImage(
       and(
         eq(showcaseLaunchWriteUpImage.uploadedByUserId, uploaderUserId),
         isNull(showcaseLaunchWriteUpImage.launchId),
+        /*
+         * ⚠️ A DRAFT'S IMAGES ARE NOT "UNCLAIMED", so they do not spend this budget. The ceiling
+         * exists to bound images nothing references; a draft references them, and counting them
+         * would stop an author uploading into the draft they are actively writing. Same conjunct
+         * the sweeper and the partial index carry — one rule in three places, deliberately.
+         */
+        isNull(showcaseLaunchWriteUpImage.draftId),
       ),
     );
   if ((stagingRow?.unclaimedImageCount ?? 0) >= MAX_UNCLAIMED_SHOWCASE_WRITE_UP_IMAGES_PER_MAKER) {

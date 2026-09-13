@@ -23,6 +23,7 @@ import {
   showcaseLaunchSubmitLimiter,
   showcaseWriteUpImageUploadLimiter,
   teardownModerationLimiter,
+  blueprintDraftSaveLimiter,
   teardownFileDownloadLimiter,
   teardownFileUploadLimiter,
   teardownSubmitLimiter,
@@ -30,6 +31,7 @@ import {
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as blueprintContentReportController from "#src/modules/home/blueprints/blueprint-content-report.controller.js";
+import * as blueprintDraftController from "#src/modules/home/blueprints/blueprint-draft.controller.js";
 import * as blueprintEngagementController from "#src/modules/home/blueprints/blueprint-engagement.controller.js";
 import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
 import * as caseStudyController from "#src/modules/home/blueprints/case-study.controller.js";
@@ -319,6 +321,21 @@ router.post(
  * address this literal shadows.
  */
 router.get("/teardowns/mine", requireAuth, teardownController.listMyTeardowns);
+
+/*
+ * GET /blueprints/teardowns/mine/:submissionId — one of the author's own, document and all.
+ *
+ * ⚠️ UNDER `/mine/` RATHER THAN A NEW LITERAL, AND THAT IS NOT COSMETIC. The obvious spelling —
+ * `/teardowns/submissions/:submissionId` — is THREE segments, which puts it in the same shape as
+ * `/teardowns/:teardownSlug/claim-targets`: a teardown slugged `submissions` would have its
+ * claim-targets shadowed by this route. `mine` is already in `teardown_slug_ck`'s reserved list, so
+ * nesting here costs no migration and cannot collide with any slug that could ever exist.
+ *
+ * ⚠️ IT DOES NOT REOPEN A DECISION. A rejection stays terminal — this hands the author their own
+ * document so a wizard can seed a DRAFT from it and submit afresh, which
+ * `teardown_submission_subject_live_uidx` already permits by excluding `rejected`.
+ */
+router.get("/teardowns/mine/:submissionId", requireAuth, teardownController.getMySubmission);
 
 /** GET /blueprints/teardowns/options — LITERAL, must stay above /:teardownSlug. */
 router.get("/teardowns/options", teardownController.listTeardownOptions);
@@ -638,6 +655,52 @@ router.post(
   requireIdentifiedUser,
   compactBody,
   blueprintContentReportController.makeCreateReportHandler("showcase", "launchSlug"),
+);
+
+/*
+ * THE DRAFT STORE — `/blueprints/drafts`.
+ *
+ * ⚠️ MOUNTED AT THE ROUTER ROOT RATHER THAN UNDER AN ARM, because one table serves all three
+ * wizards. The arm is a column, not a path segment: three per-arm prefixes would each be a new
+ * literal needing its own reserved-slug entry and CHECK widening, for a set of routes whose only
+ * queries are "list mine" and "load one".
+ *
+ * ⚠️ THERE IS NO STAFF ROUTE HERE, AND THERE WILL NOT BE. A case-study draft can hold a company
+ * name its author means to withhold, and §6's guarantee is that exactly ONE route in this router
+ * serves such a name. A moderator-visible draft would make it two.
+ *
+ * `longFormBody` on both writers — the document is capped at 256 KiB by the column, and a route
+ * with no declared cap fails `json-body-budget.test.ts` by name.
+ */
+router.post(
+  "/drafts",
+  requireAuth,
+  blueprintDraftSaveLimiter,
+  requireIdentifiedUser,
+  longFormBody,
+  blueprintDraftController.createDraft,
+);
+
+/** A flat list, labels only — a wizard index must not pull three 256 KiB documents to draw it. */
+router.get("/drafts", requireAuth, blueprintDraftController.listMyDrafts);
+
+router.get("/drafts/:draftId", requireAuth, blueprintDraftController.getMyDraft);
+
+router.put(
+  "/drafts/:draftId",
+  requireAuth,
+  blueprintDraftSaveLimiter,
+  requireIdentifiedUser,
+  longFormBody,
+  blueprintDraftController.replaceDraft,
+);
+
+router.delete(
+  "/drafts/:draftId",
+  requireAuth,
+  blueprintDraftSaveLimiter,
+  requireIdentifiedUser,
+  blueprintDraftController.deleteDraft,
 );
 
 /**
