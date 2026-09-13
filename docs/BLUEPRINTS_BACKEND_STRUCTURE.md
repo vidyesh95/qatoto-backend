@@ -306,19 +306,41 @@ sentinel and sweeping raw response bytes.
 ## 7. Verification
 
 ```bash
-pnpm db:verify-teardown-constraints     # 94 assertions in one rolled-back transaction
-pnpm db:verify-case-study-constraints   # 46
-pnpm db:smoke-teardown-authoring        # submit → duplicate refusal → publish → public read
-pnpm db:seed-blueprint-teardowns        # the import schema is unchanged by the write path
-pnpm gate                               # specifiers, typecheck ×3, fmt:check, lint, test
+pnpm db:verify-teardown-constraints        # 94 assertions in one rolled-back transaction
+pnpm db:verify-case-study-constraints      # 46
+pnpm db:verify-showcase-launch-constraints # 91
+pnpm db:verify-blueprint-hero-constraints  # 27
+pnpm db:smoke-teardown-authoring           # submit → duplicate refusal → publish → public read
+pnpm db:seed-blueprint-teardowns           # the import schema is unchanged by the write path
+pnpm gate                                  # specifiers, typecheck ×3, fmt:check, lint, test
 ```
 
 The constraint scripts exist because vitest mocks `#src/db/index.js` wholesale, so no test here can
 prove anything about Postgres. The smoke script exists for the same reason one layer up: no test can
 prove the publish TRANSACTION runs, only that the controller calls it.
 
-⚠️ **There is still no constraint script for `showcase_launch` or for the hero table.** Only teardowns
-and case studies are proven against a real database.
+**ALL FOUR ARMS ARE NOW PROVEN AGAINST A REAL DATABASE.** This section used to carry a standing
+warning that `showcase_launch` and the hero table had no script. Writing the two that were missing
+found a defect in each, which is the argument for the warning having been worth acting on rather
+than restating:
+
+- ⚠️ **`showcase_launch_call_to_action_ck` accepted a half-filled pair** — a label with no URL, or a
+  URL with no label. It is migration 0172's bug in the shape nobody had looked for: with a label and
+  no URL the "neither" arm is FALSE, `char_length(NULL)` is NULL, the "both" arm is therefore NULL,
+  and `false OR NULL` is NULL — which a CHECK treats as passing. The fix is the two `IS NOT NULL`
+  clauses that read as redundant beside the length tests and are the whole constraint.
+  `showcase_launch_cost_range_ck` never had it, because it was written that way round.
+- ⚠️ **Both hero URL CHECKs refused `//evil.tld` and accepted `/\evil.tld`** — the same attack in the
+  spelling nobody tested. `promotional_slide_destination_ck` carried it too. The hero image check
+  now shares `assetUrlCheck` with the teardown tables, which already refused both spellings.
+
+A sweep of all 338 CHECK constraints for the multi-column NULL-pair shape found three candidates:
+the call-to-action one (fixed), `commerce_seller_profile_sample_policy_ck` (safe — its second arm
+compares columns rather than measuring them), and `compensation_period_line_equity_ck`, which is
+**not** fixed here. That one is equity, so it is CLAUDE.md §0 high-stakes and wants its own change.
+
+⚠️ **The two pre-existing scripts still pass UNEDITED** — 94 and 46 — which is the tell that this
+work agrees with those files rather than editing them into agreement.
 
 ---
 

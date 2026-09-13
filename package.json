@@ -53,6 +53,7 @@
     "db:verify-teardown-constraints": "tsx --conditions=development scripts/verify-teardown-constraints.ts",
     "db:verify-case-study-constraints": "tsx --conditions=development scripts/verify-case-study-constraints.ts",
     "db:verify-showcase-launch-constraints": "tsx --conditions=development scripts/verify-showcase-launch-constraints.ts",
+    "db:verify-blueprint-hero-constraints": "tsx --conditions=development scripts/verify-blueprint-hero-constraints.ts",
     "db:smoke-promotional-slides": "tsx --conditions=development scripts/smoke-promotional-slides.ts",
     "db:smoke-store-phase-10": "tsx --conditions=development scripts/smoke-store-phase-10.ts",
     "db:smoke-store-phase-12": "tsx --conditions=development scripts/smoke-store-phase-12.ts",
