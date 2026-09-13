@@ -2,6 +2,7 @@ import type { Express } from "express";
 import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ListFeedVideosInput } from "#src/modules/home/feed/feed.service.js";
 import { signInAs, signOut } from "#src/test-support/auth-mock.js";
 import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
@@ -33,7 +34,10 @@ vi.mock("#src/modules/home/engagement/video-watch.service.js", () => ({
   getWatchPayload: (...args: readonly unknown[]) => getWatchPayload(...args),
 }));
 
-const listFeedVideosService = vi.fn<(...args: readonly unknown[]) => unknown>();
+// Typed by its INPUT so `mock.calls[0]` destructures as a real `ListFeedVideosInput` below.
+// The return stays `unknown`: binding it to the service's `Result<FeedPage, FeedError>` would
+// force every `mockResolvedValue` here to carry `FeedPage` fields the response never shows.
+const listFeedVideosService = vi.fn<(input: ListFeedVideosInput) => Promise<unknown>>();
 const searchVideosService = vi.fn<(...args: readonly unknown[]) => unknown>();
 vi.mock("#src/modules/home/feed/feed.service.js", async () => {
   const actual = await vi.importActual<typeof import("#src/modules/home/feed/feed.service.js")>(
@@ -41,7 +45,7 @@ vi.mock("#src/modules/home/feed/feed.service.js", async () => {
   );
   return {
     FEED_MODES: actual.FEED_MODES,
-    listFeedVideos: (...args: readonly unknown[]) => listFeedVideosService(...args),
+    listFeedVideos: (input: ListFeedVideosInput) => listFeedVideosService(input),
     searchVideos: (...args: readonly unknown[]) => searchVideosService(...args),
   };
 });
@@ -148,7 +152,7 @@ describe("feed routes", () => {
 
       await request(app).get("/feed/videos");
 
-      const [callArgs] = listFeedVideosService.mock.calls[0] as [{ rankSeed: string }];
+      const [callArgs] = listFeedVideosService.mock.calls[0];
       expect(callArgs.rankSeed).toMatch(/^[0-9a-f]{32}$/);
     });
 
@@ -167,7 +171,7 @@ describe("feed routes", () => {
       const response = await request(app).get(`/feed/videos?rankSeed=${sameLengthNonHexSeed}`);
 
       expect(response.status).toBe(200);
-      const [callArgs] = listFeedVideosService.mock.calls[0] as [{ rankSeed: string }];
+      const [callArgs] = listFeedVideosService.mock.calls[0];
       expect(callArgs.rankSeed).toMatch(/^[0-9a-f]{32}$/);
       expect(callArgs.rankSeed).not.toBe(sameLengthNonHexSeed);
     });

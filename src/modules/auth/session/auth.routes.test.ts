@@ -36,9 +36,16 @@ vi.mock("#src/lib/auth.js", async () => (await import("#src/test-support/auth-mo
 const { user, account } = await import("#src/db/schema.js");
 
 /** What the next `db.select().from(user)...limit(1)` resolves to. */
-let userLookupRows: readonly (typeof user.$inferSelect)[] = [];
+// Narrowed to the columns the route actually reads (`existingUser.id` in
+// `auth.controller.ts`), so the literals below typecheck as themselves rather than needing a cast
+// to a 20-column row whose other 15 values would be invented noise.
+let userLookupRows: readonly Pick<
+  typeof user.$inferSelect,
+  "id" | "email" | "name" | "emailVerified" | "isAnonymous"
+>[] = [];
 /** What the next `db.select().from(account)...limit(1)` resolves to. */
-let accountLookupRows: readonly (typeof account.$inferSelect)[] = [];
+// Only EXISTENCE of a credential row is checked, never its contents.
+let accountLookupRows: readonly Pick<typeof account.$inferSelect, "userId" | "providerId">[] = [];
 
 const updateSetMock = vi.fn<() => { where: () => Promise<undefined> }>(() => ({
   where: vi.fn<() => Promise<undefined>>(async () => undefined),
@@ -66,7 +73,7 @@ const EXISTING_USER_ROW = {
   name: "Existing User",
   emailVerified: true,
   isAnonymous: false,
-} as unknown as typeof user.$inferSelect;
+};
 
 describe("auth session routes", () => {
   let app: Express;
@@ -231,7 +238,7 @@ describe("auth session routes", () => {
     });
 
     it("rejects with 409 when the user already has a credential (password) account", async () => {
-      accountLookupRows = [{ userId: "user_existing", providerId: "credential" } as never];
+      accountLookupRows = [{ userId: "user_existing", providerId: "credential" }];
 
       const response = await request(app).post(path).send(validBody);
 

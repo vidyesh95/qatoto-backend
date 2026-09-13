@@ -293,7 +293,7 @@ async function loadTagFacets(): Promise<readonly ShowcaseTagFacet[]> {
     .groupBy(tagExpression)
     .orderBy(desc(count()), asc(tagExpression));
 
-  return facetRows.map((facetRow) => ({ value: facetRow.value, count: Number(facetRow.count) }));
+  return facetRows.map((facetRow) => ({ value: facetRow.value, count: facetRow.count }));
 }
 
 export async function listPublicShowcases(input: {

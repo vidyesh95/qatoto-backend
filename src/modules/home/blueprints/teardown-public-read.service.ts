@@ -766,7 +766,7 @@ async function loadTeardownTagFacets(): Promise<readonly TeardownTagFacet[]> {
     .groupBy(tagExpression)
     .orderBy(desc(count()), asc(tagExpression));
 
-  return facetRows.map((facetRow) => ({ value: facetRow.value, count: Number(facetRow.count) }));
+  return facetRows.map((facetRow) => ({ value: facetRow.value, count: facetRow.count }));
 }
 
 /**

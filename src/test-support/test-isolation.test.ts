@@ -103,7 +103,7 @@ function findDiscardedRequests(path: string, source: string): readonly string[] 
     // The nearest preceding line with anything on it. An arrow body sits under its own `=>`.
     const previousMeaningfulLine = lines
       .slice(0, index)
-      .reverse()
+      .toReversed()
       .find((candidate) => candidate.trim().length > 0);
     if (previousMeaningfulLine?.trimEnd().endsWith("=>") === true) continue;
 

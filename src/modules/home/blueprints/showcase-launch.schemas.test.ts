@@ -96,9 +96,9 @@ describe("ShowcaseLaunchDraftSchema", () => {
       // the test would pass while exercising nothing.
       const draftJson = JSON.stringify(buildValidDraft());
       const withProtoKey = `{"__proto__":{"isAdmin":true},${draftJson.slice(1)}`;
-      const parsedDraft: unknown = JSON.parse(withProtoKey);
+      const parsedDraft: object = JSON.parse(withProtoKey);
 
-      expect(Object.hasOwn(parsedDraft as object, "__proto__"), "JSON.parse must make it an own key").toBe(true);
+      expect(Object.hasOwn(parsedDraft, "__proto__"), "JSON.parse must make it an own key").toBe(true);
       expect(ShowcaseLaunchDraftSchema.safeParse(parsedDraft).success).toBe(false);
     });
 

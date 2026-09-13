@@ -207,7 +207,7 @@ describe("the blueprints router", () => {
     const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
     const routes = declaredRoutes(blueprintsRouter).filter((route) => route.path === "/teardowns");
 
-    expect(routes.flatMap((route) => route.methods).sort()).toEqual(["get", "post"]);
+    expect(routes.flatMap((route) => route.methods).toSorted()).toEqual(["get", "post"]);
   });
 
   /**

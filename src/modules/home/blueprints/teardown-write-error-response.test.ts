@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   mapTeardownWriteErrorToResponse,
   respondTeardownWriteError,
   type TeardownWriteError,
 } from "#src/modules/home/blueprints/teardown-write-error-response.js";
+import { createResponseSpy } from "#src/test-support/response-spy.js";
 
 /**
  * The pure mapper for the teardown write path.
@@ -126,11 +127,9 @@ describe("mapTeardownWriteErrorToResponse", () => {
 
 describe("respondTeardownWriteError", () => {
   it("writes the mapped status and body onto the response", () => {
-    const json = vi.fn<(body: unknown) => void>();
-    const status = vi.fn<(statusCode: number) => { json: typeof json }>(() => ({ json }));
-    const response = { status } as unknown as Parameters<typeof respondTeardownWriteError>[0];
+    const { res, status, json } = createResponseSpy();
 
-    respondTeardownWriteError(response, EVERY_TEARDOWN_WRITE_ERROR.TEARDOWN_SUBMISSION_NOT_FOUND);
+    respondTeardownWriteError(res, EVERY_TEARDOWN_WRITE_ERROR.TEARDOWN_SUBMISSION_NOT_FOUND);
 
     expect(status).toHaveBeenCalledWith(404);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ status: "error", statusCode: 404 }));

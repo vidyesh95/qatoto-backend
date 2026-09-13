@@ -384,21 +384,21 @@ describe("listShowcaseReviewQueue", () => {
   });
 });
 
+function pendingLaunch(overrides: Partial<LaunchRow> = {}): LaunchRow {
+  return {
+    id: "launch_1",
+    title: "Solar cold storage unit",
+    authorUserId: "user_maker",
+    moderationState: "pending_review",
+    ...overrides,
+  };
+}
+
 describe("decideShowcaseLaunch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetModerationState();
   });
-
-  function pendingLaunch(overrides: Partial<LaunchRow> = {}): LaunchRow {
-    return {
-      id: "launch_1",
-      title: "Solar cold storage unit",
-      authorUserId: "user_maker",
-      moderationState: "pending_review",
-      ...overrides,
-    };
-  }
 
   it("locks the launch row for update before deciding anything", async () => {
     moderationState.lockedLaunch = pendingLaunch();

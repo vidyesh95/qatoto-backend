@@ -19,22 +19,30 @@ import {
  * of a field.
  */
 
+/**
+ * Returned as its own INFERRED object type rather than read back off `buildValidSubmission()`,
+ * whose `Record<string, unknown>` makes `provenance` `unknown` and so unspreadable without a cast.
+ */
+function buildValidProvenance() {
+  return {
+    kind: "community_reverse_engineered",
+    subjectProductName: "Rotel RD-18 cordless drill",
+    unitAcquisition: "retail_purchase",
+    surveyMethods: ["empirical_teardown"],
+    surveyedAt: "2026-01-05T12:00:00.000Z",
+    licence: null,
+    authorizationNote: null,
+    attestationAcceptedAt: "2026-01-06T09:00:00.000Z",
+    notes: null,
+  };
+}
+
 function buildValidSubmission(): Record<string, unknown> {
   return {
     subjectKind: "existing_physical_product",
     title: "Inside a supermarket cordless drill",
     summary: "Eleven fasteners, two of them hidden under the label, and a gearbox that comes out in one piece.",
-    provenance: {
-      kind: "community_reverse_engineered",
-      subjectProductName: "Rotel RD-18 cordless drill",
-      unitAcquisition: "retail_purchase",
-      surveyMethods: ["empirical_teardown"],
-      surveyedAt: "2026-01-05T12:00:00.000Z",
-      licence: null,
-      authorizationNote: null,
-      attestationAcceptedAt: "2026-01-06T09:00:00.000Z",
-      notes: null,
-    },
+    provenance: buildValidProvenance(),
     materials: [],
     parts: [{ label: "Gearbox housing", material: "Glass-filled nylon" }],
     documents: [],
@@ -208,9 +216,11 @@ describe("TeardownSubmissionSchema", () => {
    * it is added.
    */
   it("keeps the two file vocabularies disjoint", () => {
-    const sharedKinds = TEARDOWN_DOCUMENT_KINDS.filter((documentKind) =>
-      TEARDOWN_MANUFACTURING_FILE_KINDS.some((manufacturingKind) => String(manufacturingKind) === String(documentKind)),
-    );
+    // Widened to `string[]` because the two tuples share no member: compared at their literal
+    // types, `===` is a TS2367 "no overlap" error rather than the runtime check this test wants.
+    const documentKinds: readonly string[] = TEARDOWN_DOCUMENT_KINDS;
+    const manufacturingKinds: readonly string[] = TEARDOWN_MANUFACTURING_FILE_KINDS;
+    const sharedKinds = documentKinds.filter((documentKind) => manufacturingKinds.includes(documentKind));
 
     expect(sharedKinds).toEqual([]);
   });
@@ -220,7 +230,7 @@ describe("TeardownSubmissionSchema", () => {
     const submission = buildValidSubmission();
     const parsed = TeardownSubmissionSchema.safeParse({
       ...submission,
-      provenance: { ...(submission.provenance as object), surveyedAt: nextYear },
+      provenance: { ...buildValidProvenance(), surveyedAt: nextYear },
     });
 
     expect(parsed.success).toBe(false);
@@ -231,7 +241,7 @@ describe("TeardownSubmissionSchema", () => {
     const submission = buildValidSubmission();
     const parsed = TeardownSubmissionSchema.safeParse({
       ...submission,
-      provenance: { ...(submission.provenance as object), surveyedAt: "" },
+      provenance: { ...buildValidProvenance(), surveyedAt: "" },
     });
 
     expect(parsed.success).toBe(false);
@@ -265,7 +275,7 @@ describe("TeardownSubmissionSchema", () => {
     const parsed = TeardownSubmissionSchema.safeParse({
       ...submission,
       provenance: {
-        ...(submission.provenance as object),
+        ...buildValidProvenance(),
         licence: { name: "CERN-OHL-S-2.0", url: "https://licences.example.com/cern-ohl-s" },
       },
     });

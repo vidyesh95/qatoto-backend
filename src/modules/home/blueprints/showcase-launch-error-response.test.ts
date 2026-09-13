@@ -1,5 +1,4 @@
-import type { Response } from "express";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ExternalUrlError } from "#src/lib/external-url.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
@@ -8,6 +7,7 @@ import {
   respondShowcaseLaunchError,
   type ShowcaseLaunchError,
 } from "#src/modules/home/blueprints/showcase-launch-error-response.js";
+import { createResponseSpy } from "#src/test-support/response-spy.js";
 
 /**
  * UNIT tests for the showcase launch error mapper — a pure, total function over the union of
@@ -340,18 +340,6 @@ describe("mapShowcaseLaunchErrorToResponse", () => {
 });
 
 describe("respondShowcaseLaunchError", () => {
-  function createResponseSpy(): {
-    readonly res: Response;
-    readonly status: ReturnType<typeof vi.fn>;
-    readonly json: ReturnType<typeof vi.fn>;
-  } {
-    const json = vi.fn<(body: unknown) => unknown>();
-    const status = vi.fn<(statusCode: number) => { json: typeof json }>(() => ({ json }));
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-    const res = { status } as unknown as Response;
-    return { res, status, json };
-  }
-
   it("writes the mapped status and the standard error envelope", () => {
     const { res, status, json } = createResponseSpy();
 
