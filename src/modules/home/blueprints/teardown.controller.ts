@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+import { presignTeardownFileDownload } from "#src/lib/object-storage.js";
 import {
   firstParam,
   respondValidationFailed,
@@ -21,13 +22,20 @@ import {
   TeardownModerationDecisionSchema,
   TeardownReviewQueueQuerySchema,
   TeardownSubmissionSchema,
+  TeardownUploadFormatSchema,
 } from "#src/modules/home/blueprints/teardown-submission.schemas.js";
 import * as teardownSubmissionService from "#src/modules/home/blueprints/teardown-submission.service.js";
+import {
+  respondTeardownFileNotFound,
+  respondTeardownUploadError,
+} from "#src/modules/home/blueprints/teardown-upload-error-response.js";
+import * as teardownUploadService from "#src/modules/home/blueprints/teardown-upload.service.js";
 import { respondTeardownWriteError } from "#src/modules/home/blueprints/teardown-write-error-response.js";
 import {
   requirePlatformCapability,
   type PlatformStaffContext,
 } from "#src/modules/platform/roles/platform-role.service.js";
+import { respondFieldRefusal } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**
@@ -395,3 +403,101 @@ export async function getTeardownMarketSignal(req: Request, res: Response): Prom
 
   respondOk(res, "What the market is doing around this teardown.", result.value);
 }
+
+/**
+ * `POST /blueprints/teardowns/uploads` — one CAD file or PDF, staged for a later submission.
+ *
+ * The receipt carries an id, the validated format, the MEASURED size and the author's own filename
+ * — and NO address. A staged file has no public address yet: one exists only once a moderator
+ * publishes the submission that claims it, which is the same rule the submit receipt follows in
+ * carrying no slug.
+ */
+export async function uploadSubmissionFile(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+  if (!req.file) {
+    respondFieldRefusal(res, "file", "Choose a file to upload.");
+    return;
+  }
+
+  const parsedFormat = TeardownUploadFormatSchema.safeParse(req.body);
+  if (!parsedFormat.success) {
+    respondValidationFailed(res, parsedFormat.error);
+    return;
+  }
+
+  const uploadResult = await teardownUploadService.uploadTeardownSubmissionFile({
+    uploaderUserId: req.user.id,
+    declaredFormat: parsedFormat.data.format,
+    fileBytes: req.file.buffer,
+    // Multer gives the client's own filename. It reaches storage as a download disposition only,
+    // sanitized there, and never as any part of an object key.
+    originalFileName: req.file.originalname,
+  });
+  if (!uploadResult.success) {
+    respondTeardownUploadError(res, uploadResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "File uploaded successfully",
+    data: uploadResult.value,
+  };
+  res.status(201).json(response);
+}
+
+/**
+ * The two download routes: `.../documents/:fileId` and `.../fabrication-files/:fileId`.
+ *
+ * ⚠️ NOT BARE READS, AND THEY DO NOT BREAK THE BARE-READ RULE — they fail both of its own clauses.
+ * That rule is about reads whose payload is IDENTICAL FOR EVERY VISITOR and which a cache belongs
+ * in front of. This answers a 302 to a 300-second bearer capability minted per request, and sets
+ * `Cache-Control: no-store`. `GET /videos/:videoId/documents/:documentId/file` is the shipped
+ * precedent: anonymous-reachable, private bucket, same shape.
+ *
+ * ⚠️ THE GATE IS RE-CHECKED HERE, ON EVERY REQUEST, WHICH IS THE POINT OF THE WHOLE DESIGN. A
+ * presigned URL is a bearer capability that knows nothing about moderation state — so the moment a
+ * teardown is quarantined this route stops minting one, and a link somebody saved yesterday is
+ * dead. That is a quarantine actually withholding files rather than merely stopping advertising
+ * them, which is all it could do while every file was a link to someone else's host.
+ */
+function makeTeardownFileDownloadHandler(segment: "documents" | "fabrication-files") {
+  return async function downloadTeardownFile(req: Request, res: Response): Promise<void> {
+    const teardownSlug = firstParam(req.params.teardownSlug ?? "");
+    const fileId = firstParam(req.params.fileId ?? "");
+
+    const resolved = await teardownPublicReadService.resolveDownloadableTeardownFile({
+      teardownSlug,
+      fileId,
+      segment,
+    });
+    // One answer for every reason — see `respondTeardownFileNotFound`.
+    if (resolved === null) {
+      respondTeardownFileNotFound(res);
+      return;
+    }
+
+    const presigned = await presignTeardownFileDownload(resolved.objectStorageKey);
+    if (!presigned.success) {
+      res.status(presigned.error.type === "NOT_CONFIGURED" ? 503 : 502).json({
+        status: "error",
+        statusCode: presigned.error.type === "NOT_CONFIGURED" ? 503 : 502,
+        message: "That file could not be fetched right now.",
+      });
+      return;
+    }
+
+    // ⚠️ `no-store`, ALWAYS. The redirect target is a credential with a 300-second life; a cache or
+    // a CDN holding this response would hand that credential to somebody the gate never saw.
+    res.setHeader("Cache-Control", "no-store");
+    res.redirect(302, presigned.value.downloadUrl);
+  };
+}
+
+export const downloadTeardownDocument = makeTeardownFileDownloadHandler("documents");
+export const downloadTeardownManufacturingFile =
+  makeTeardownFileDownloadHandler("fabrication-files");

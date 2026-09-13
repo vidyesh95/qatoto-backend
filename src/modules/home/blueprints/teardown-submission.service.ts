@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { teardown, teardownSubmission } from "#src/db/schema.js";
+import { teardown, teardownSubmission, teardownSubmissionFileUpload } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { buildErrorWithoutQueryParameters } from "#src/modules/home/blueprints/blueprint-write-errors.js";
 import {
@@ -30,14 +30,27 @@ import type { Result } from "#src/types/index.js";
  *      and it must stay that way — the frontend's own receipt schema asks for exactly those three.
  */
 
-export type TeardownSubmitError = {
-  readonly type: "TEARDOWN_SUBJECT_ALREADY_SURVEYED";
+export type TeardownSubmitError =
+  | {
+      readonly type: "TEARDOWN_SUBJECT_ALREADY_SURVEYED";
+      /**
+       * The clashing survey's title, or `null` when naming it would disclose somebody's unpublished
+       * work. See `findExistingSurveyOfSubject`.
+       */
+      readonly existingTitle: string | null;
+    }
   /**
-   * The clashing survey's title, or `null` when naming it would disclose somebody's unpublished
-   * work. See `findExistingSurveyOfSubject`.
+   * ⚠️ ONE REFUSAL FOR THREE FACTS: an upload id that never existed, one belonging to another
+   * author, and one an earlier submission already claimed. Distinguishing them would confirm that a
+   * stranger's id exists — the same oracle rule this surface applies to submission ids. It names no
+   * id for the same reason.
    */
-  readonly existingTitle: string | null;
-};
+  | { readonly type: "TEARDOWN_UPLOAD_NOT_AVAILABLE" };
+
+/** Drizzle's `transaction.rollback()` throws a sentinel rather than returning; this recognises it. */
+function isTransactionRollbackError(thrown: unknown): boolean {
+  return thrown instanceof Error && thrown.name === "TransactionRollbackError";
+}
 
 export interface TeardownSubmissionReceipt {
   readonly submissionId: string;
@@ -183,36 +196,88 @@ export async function submitTeardown(input: {
 
   const receivedAt = new Date();
 
-  try {
-    const [insertedSubmission] = await db
-      .insert(teardownSubmission)
-      .values({
-        authorUserId: input.authorUserId,
-        title: submission.title,
-        subjectProductName: submission.provenance.subjectProductName,
-        documentJson: JSON.stringify(submission),
-        documentSchemaVersion: TEARDOWN_SUBMISSION_DOCUMENT_SCHEMA_VERSION,
-        /*
-         * Written explicitly rather than left to the column default, so this call answers "what
-         * state does a submission start in" without opening the schema.
-         */
-        moderationState: "pending_review",
-        createdAt: receivedAt,
-        updatedAt: receivedAt,
-      })
-      .returning({ id: teardownSubmission.id });
+  /*
+   * Every staged upload this document names. Collected before the transaction so an unknown id is a
+   * cheap refusal rather than a rollback.
+   */
+  const namedUploadIds = [...submission.documents, ...submission.manufacturingFiles].flatMap(
+    (file) => (file.source === "uploaded" ? [file.uploadId] : []),
+  );
 
-    if (!insertedSubmission) throw new Error("teardown submission insert returned no row");
+  try {
+    const outcome = await db.transaction(async (transaction) => {
+      const [insertedSubmission] = await transaction
+        .insert(teardownSubmission)
+        .values({
+          authorUserId: input.authorUserId,
+          title: submission.title,
+          subjectProductName: submission.provenance.subjectProductName,
+          documentJson: JSON.stringify(submission),
+          documentSchemaVersion: TEARDOWN_SUBMISSION_DOCUMENT_SCHEMA_VERSION,
+          /*
+           * Written explicitly rather than left to the column default, so this call answers "what
+           * state does a submission start in" without opening the schema.
+           */
+          moderationState: "pending_review",
+          createdAt: receivedAt,
+          updatedAt: receivedAt,
+        })
+        .returning({ id: teardownSubmission.id });
+
+      if (!insertedSubmission) throw new Error("teardown submission insert returned no row");
+
+      /*
+       * ⚠️ THE CLAIM, AND IT PROVES THREE THINGS AT ONCE. The `UPDATE` names this author, requires
+       * `submission_id IS NULL`, and matches only the ids this document listed — so an upload
+       * belonging to somebody else, one already claimed by an earlier submission, and one that
+       * never existed all fail the SAME way: fewer rows updated than ids named.
+       *
+       * ⚠️ A SHORTFALL IS ONE REFUSAL FOR ALL THREE CASES, deliberately. Telling an author which of
+       * their ids was a stranger's would confirm that the stranger's id exists, which is the oracle
+       * rule this surface applies to submission ids already.
+       *
+       * ⚠️ CLAIMED AT SUBMIT, NOT AT PUBLISH. The sweeper reaps anything still unclaimed after a
+       * day, and a submission can wait in the review queue for weeks — claiming later would let it
+       * delete an author's files out from under their own pending survey.
+       */
+      if (namedUploadIds.length > 0) {
+        const claimed = await transaction
+          .update(teardownSubmissionFileUpload)
+          .set({ submissionId: insertedSubmission.id })
+          .where(
+            and(
+              inArray(teardownSubmissionFileUpload.id, namedUploadIds),
+              eq(teardownSubmissionFileUpload.uploadedByUserId, input.authorUserId),
+              isNull(teardownSubmissionFileUpload.submissionId),
+            ),
+          )
+          .returning({ id: teardownSubmissionFileUpload.id });
+
+        if (claimed.length !== namedUploadIds.length) {
+          transaction.rollback();
+        }
+      }
+
+      return insertedSubmission.id;
+    });
 
     return {
       success: true,
       value: {
-        submissionId: insertedSubmission.id,
+        submissionId: outcome,
         moderationState: "pending_review",
         receivedAt,
       },
     };
   } catch (writeError: unknown) {
+    /*
+     * ⚠️ `transaction.rollback()` THROWS A SENTINEL, which lands here rather than in the caller —
+     * so the unavailable-upload refusal is recognised BEFORE the 23505 handling below, which would
+     * otherwise read it as an unexpected fault.
+     */
+    if (isTransactionRollbackError(writeError)) {
+      return { success: false, error: { type: "TEARDOWN_UPLOAD_NOT_AVAILABLE" } };
+    }
     /*
      * A 23505 HERE IS THE UNIT RACE the pre-check cannot close, and it is the only expected fault on
      * this path — the other unique key on this table guards `published_teardown_id`, which a

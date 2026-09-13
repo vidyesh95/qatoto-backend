@@ -206,6 +206,11 @@ describe("per-route body caps", () => {
       // Its bytes are bounded by multer: 5 MB for the file, `SHOWCASE_DRAFT_PART_MAXIMUM_BYTES`
       // for the draft part. The write-up image route in the same module never reads a body.
       import("#src/modules/home/blueprints/upload-showcase-launch-images.js"),
+      // The teardown file upload. Same reason as the launch submit above: it carries a TEXT PART
+      // (`format`) beside its file, so without this import `isMultipart()` would read it as a JSON
+      // route and report it as missing a cap. Its bytes are bounded by multer at the largest
+      // format's ceiling, and the per-format limits narrow it inside the validator.
+      import("#src/modules/home/blueprints/upload-teardown-submission-file.js"),
       // A13's company photography. Like the promotional-carousel route above, it carries
       // TEXT PARTS (`mediaKind`, `altText`) alongside the file, so without this import
       // `isMultipart()` would not recognize it, the sweep would treat it as a JSON

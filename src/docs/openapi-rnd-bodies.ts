@@ -135,6 +135,7 @@ import { CaseStudySubmissionSchema } from "#src/modules/home/blueprints/case-stu
 import {
   TeardownModerationDecisionSchema,
   TeardownSubmissionSchema,
+  TeardownUploadFormatSchema,
 } from "#src/modules/home/blueprints/teardown-submission.schemas.js";
 import {
   ModerateShowcaseLaunchSchema,
@@ -543,6 +544,15 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
    */
   "post /blueprints/teardowns": {
     schema: TeardownSubmissionSchema,
+    required: true,
+  },
+  /**
+   * MULTIPART, and registered rather than "deliberately absent" like the file-only upload routes:
+   * this one carries a `format` TEXT PART that the handler reads, which is what the body sweep
+   * detects. The file itself is bounded by multer, not by a schema.
+   */
+  "post /blueprints/teardowns/uploads": {
+    schema: TeardownUploadFormatSchema,
     required: true,
   },
   "post /blueprints/admin/teardowns/{submissionId}/moderate": {

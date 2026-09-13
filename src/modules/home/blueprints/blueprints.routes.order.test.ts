@@ -232,10 +232,18 @@ describe("the blueprints router", () => {
     expect(parameterizedIndex, "/teardowns/:teardownSlug must be declared at all").toBeGreaterThanOrEqual(0);
 
     const literalPaths = paths.filter((path) => path.startsWith("/teardowns/") && !path.includes(":"));
+    /*
+     * ⚠️ THE LIST IS DERIVED FROM THE ROUTER AND COMPARED AGAINST A NAMED SET, so adding a literal
+     * under this prefix fails HERE as well as needing a `teardown_slug_ck` entry. `uploads` is the
+     * newest member: without it reserved, a teardown published at that address would shadow the
+     * upload route, and without it declared above `/:teardownSlug` the upload route would never be
+     * reached at all.
+     */
     expect(literalPaths, "the derived literal list must not be empty").toEqual([
       "/teardowns/mine",
       "/teardowns/options",
       "/teardowns/slugs",
+      "/teardowns/uploads",
     ]);
     for (const literalPath of literalPaths) {
       expect(paths.indexOf(literalPath), `${literalPath} must precede /teardowns/:teardownSlug`).toBeLessThan(

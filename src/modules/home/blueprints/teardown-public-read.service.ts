@@ -87,6 +87,63 @@ function readableTeardownCondition(): SQL {
 }
 
 /**
+ * Resolves one uploaded file to the object key its bytes live at — or `null`, for every reason.
+ *
+ * ⚠️ THE GATE HERE IS THE **LIST** PREDICATE, NOT THE READABLE ONE, AND THAT IS THE THIRD DISTINCT
+ * ANSWER ON THIS SURFACE. A quarantined teardown is still REACHABLE — its page answers, which is
+ * what `readableTeardownCondition` is for — but a quarantine is precisely a withholding of the
+ * publisher's FILES, and `withheldPayload()` already blanks `documents` and `manufacturingFiles`
+ * for exactly that reason. Serving the bytes from a separate route while the page hides them would
+ * put the whole control back where it was before it moved server-side: present on the wire, absent
+ * only from the rendering.
+ *
+ * ⚠️ ONE `null` FOR EVERY REASON, and the caller answers 404 to all of them. A missing slug, a
+ * missing file id, a file that belongs to a DIFFERENT teardown, and a quarantine are deliberately
+ * indistinguishable. Any finer answer turns this into an enumeration oracle over withheld files —
+ * which is the one thing a rights claimant's opponent would most like to have.
+ */
+export async function resolveDownloadableTeardownFile(input: {
+  readonly teardownSlug: string;
+  readonly fileId: string;
+  readonly segment: "documents" | "fabrication-files";
+}): Promise<{ readonly objectStorageKey: string } | null> {
+  const [teardownRow] = await db
+    .select({ id: teardown.id })
+    .from(teardown)
+    .where(and(eq(teardown.slug, input.teardownSlug), listVisibleTeardownCondition()))
+    .limit(1);
+  if (!teardownRow) return null;
+
+  if (input.segment === "documents") {
+    const [documentRow] = await db
+      .select({ objectStorageKey: teardownDocument.objectStorageKey })
+      .from(teardownDocument)
+      .where(
+        and(eq(teardownDocument.id, input.fileId), eq(teardownDocument.teardownId, teardownRow.id)),
+      )
+      .limit(1);
+    // A pasted-link row has no key: this route exists only for the uploaded arm.
+    return documentRow?.objectStorageKey === null || documentRow === undefined
+      ? null
+      : { objectStorageKey: documentRow.objectStorageKey };
+  }
+
+  const [fileRow] = await db
+    .select({ objectStorageKey: teardownManufacturingFile.objectStorageKey })
+    .from(teardownManufacturingFile)
+    .where(
+      and(
+        eq(teardownManufacturingFile.id, input.fileId),
+        eq(teardownManufacturingFile.teardownId, teardownRow.id),
+      ),
+    )
+    .limit(1);
+  return fileRow?.objectStorageKey === null || fileRow === undefined
+    ? null
+    : { objectStorageKey: fileRow.objectStorageKey };
+}
+
+/**
  * One teardown on the wire, and the type is the import contract ON PURPOSE.
  *
  * `TeardownImportSchema` is the gate everything written to these tables passed through, so typing

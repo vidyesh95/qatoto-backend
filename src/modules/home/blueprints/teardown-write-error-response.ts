@@ -93,6 +93,18 @@ export function mapTeardownWriteErrorToResponse(error: TeardownWriteError): {
         errors: { document: error.issues },
       };
 
+    /*
+     * ⚠️ 409, AND IT NAMES NO ID. The three facts behind it — an upload that never existed, one
+     * belonging to another author, and one an earlier submission already claimed — are deliberately
+     * indistinguishable, so the message describes what the author should DO rather than which of
+     * their ids was the problem.
+     */
+    case "TEARDOWN_UPLOAD_NOT_AVAILABLE":
+      return {
+        statusCode: 409,
+        message:
+          "One of the uploaded files is no longer available. Upload the files again and resubmit.",
+      };
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled teardown write error: ${JSON.stringify(exhaustiveCheck)}`);

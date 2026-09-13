@@ -138,6 +138,88 @@ describe("TeardownSubmissionSchema", () => {
     expect(parsed.success).toBe(false);
   });
 
+  describe("the two arms a submitted file may take", () => {
+    const UPLOAD_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+    /**
+     * ⚠️ THE DEFAULTED DISCRIMINATOR IS WHAT KEEPS v1 DOCUMENTS PARSING. Every submission stored
+     * before uploads existed carries no `source` key at all, and `.strict()` refuses unknown keys
+     * rather than absent ones — so a document written in March still reads as the pasted arm.
+     */
+    it("reads a file with no source as a pasted link, which is the v1 shape", () => {
+      const parsed = TeardownSubmissionSchema.safeParse({
+        ...buildValidSubmission(),
+        documents: [
+          {
+            kind: "schematic",
+            title: "Control board schematic",
+            url: "https://files.example.com/drill-schematic.pdf",
+          },
+        ],
+      });
+
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.documents[0]?.source).toBe("pasted_link");
+    });
+
+    it("accepts an uploaded file naming a staged upload id", () => {
+      const parsed = TeardownSubmissionSchema.safeParse({
+        ...buildValidSubmission(),
+        documents: [{ source: "uploaded", kind: "schematic", title: "Schematic", uploadId: UPLOAD_ID }],
+      });
+
+      expect(parsed.success).toBe(true);
+    });
+
+    /**
+     * ⚠️ AN UPLOADED FILE MAY NOT CARRY A URL, and the two arms being `.strict()` is what enforces
+     * it. The address of an uploaded file does not exist until a moderator publishes the
+     * submission — a client sending one would be asserting a fact it cannot know.
+     */
+    it("refuses an uploaded file that also carries a url", () => {
+      const parsed = TeardownSubmissionSchema.safeParse({
+        ...buildValidSubmission(),
+        documents: [
+          {
+            source: "uploaded",
+            kind: "schematic",
+            title: "Schematic",
+            uploadId: UPLOAD_ID,
+            url: "https://files.example.com/drill-schematic.pdf",
+          },
+        ],
+      });
+
+      expect(parsed.success).toBe(false);
+    });
+
+    it("refuses a pasted link that carries an upload id", () => {
+      const parsed = TeardownSubmissionSchema.safeParse({
+        ...buildValidSubmission(),
+        documents: [
+          {
+            source: "pasted_link",
+            kind: "schematic",
+            title: "Schematic",
+            url: "https://files.example.com/drill-schematic.pdf",
+            uploadId: UPLOAD_ID,
+          },
+        ],
+      });
+
+      expect(parsed.success).toBe(false);
+    });
+
+    it("refuses an upload id that is not a uuid — the server minted it, so it has a shape", () => {
+      const parsed = TeardownSubmissionSchema.safeParse({
+        ...buildValidSubmission(),
+        documents: [{ source: "uploaded", kind: "schematic", title: "Schematic", uploadId: "upl_1" }],
+      });
+
+      expect(parsed.success).toBe(false);
+    });
+  });
+
   /**
    * ⚠️ BOTH SPELLINGS. A browser reads `//host` and the backslash variant as "same scheme,
    * different host", so a leading-slash test alone is an open redirect wearing a same-site test.

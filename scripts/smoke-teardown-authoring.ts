@@ -31,15 +31,25 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 
 import { db, pool } from "#src/db/index.js";
-import { teardown, teardownSubmission, user } from "#src/db/schema.js";
+import {
+  teardown,
+  teardownSubmission,
+  teardownSubmissionFileUpload,
+  user,
+} from "#src/db/schema.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import { isObjectStorageConfigured } from "#src/lib/object-storage.js";
 import { decideTeardown } from "#src/modules/home/blueprints/teardown-moderation.service.js";
-import { getPublicTeardownBySlug } from "#src/modules/home/blueprints/teardown-public-read.service.js";
+import {
+  getPublicTeardownBySlug,
+  resolveDownloadableTeardownFile,
+} from "#src/modules/home/blueprints/teardown-public-read.service.js";
 import type { TeardownSubmissionInput } from "#src/modules/home/blueprints/teardown-submission.schemas.js";
 import {
   listMyTeardowns,
   submitTeardown,
 } from "#src/modules/home/blueprints/teardown-submission.service.js";
+import { uploadTeardownSubmissionFile } from "#src/modules/home/blueprints/teardown-upload.service.js";
 
 let failureCount = 0;
 
@@ -48,7 +58,25 @@ function check(label: string, passed: boolean, detail: string): void {
   if (!passed) failureCount += 1;
 }
 
-function buildSubmission(subjectProductName: string): TeardownSubmissionInput {
+/** A minimal PDF that clears `validatePdfBytes`' own 512-byte floor. */
+function buildSmokePdfBytes(): Buffer {
+  const lines = [
+    "%PDF-1.7",
+    "1 0 obj",
+    "<< /Type /Catalog >>",
+    "endobj",
+    ...Array.from({ length: 80 }, () => "% padding"),
+    "trailer",
+    "<< /Root 1 0 R >>",
+    "%%EOF",
+  ];
+  return Buffer.from(lines.join("\n") + "\n", "latin1");
+}
+
+function buildSubmission(
+  subjectProductName: string,
+  uploadedUploadId: string | undefined,
+): TeardownSubmissionInput {
   return {
     subjectKind: "existing_physical_product",
     title: "Inside a supermarket cordless drill",
@@ -83,20 +111,42 @@ function buildSubmission(subjectProductName: string): TeardownSubmissionInput {
     ],
     // One of each vocabulary, so the publish's routing by label is exercised in both directions.
     documents: [
+      /*
+       * ⚠️ THE UPLOADED ARM, PRESENT ONLY WHEN STORAGE IS CONFIGURED. It carries an upload id and
+       * NO url: the address of an uploaded file does not exist until a moderator publishes the
+       * submission that claims it.
+       */
+      ...(uploadedUploadId === undefined
+        ? []
+        : [
+            {
+              source: "uploaded" as const,
+              kind: "datasheet" as const,
+              title: "Controller datasheet",
+              uploadId: uploadedUploadId,
+            },
+          ]),
       {
+        source: "pasted_link" as const,
         kind: "schematic",
         title: "Control board schematic",
         url: "https://files.example.com/drill-schematic.pdf",
       },
       // What the frontend actually sends today: a fab label in the documents array.
       {
+        source: "pasted_link" as const,
         kind: "gerber",
         title: "Board gerbers",
         url: "https://files.example.com/drill-gerbers.zip",
       },
     ],
     manufacturingFiles: [
-      { kind: "step", title: "Housing STEP", url: "https://files.example.com/housing.step" },
+      {
+        source: "pasted_link" as const,
+        kind: "step",
+        title: "Housing STEP",
+        url: "https://files.example.com/housing.step",
+      },
     ],
     walkthroughVideo: {
       source: "youtube",
@@ -147,12 +197,69 @@ async function main(): Promise<void> {
 
   let submissionId: string | undefined;
   let publishedTeardownId: string | undefined;
+  let uploadedUploadId: string | undefined;
 
   try {
+    /*
+     * --- 0. THE UPLOAD, BEFORE ANY SUBMISSION EXISTS.
+     *
+     * ⚠️ THIS HALF IS SKIPPED WITHOUT OBJECT STORAGE, and skipped LOUDLY rather than silently
+     * passing: a run that quietly dropped the only assertions proving a quarantine withholds bytes
+     * would be worse than one that says it could not check.
+     */
+    const storageConfigured = isObjectStorageConfigured();
+    if (!storageConfigured) {
+      console.log("\n  (object storage is not configured — the upload half is skipped)");
+    }
+
+    if (storageConfigured) {
+      const uploadResult = await uploadTeardownSubmissionFile({
+        uploaderUserId: authorRow.id,
+        declaredFormat: "pdf",
+        fileBytes: buildSmokePdfBytes(),
+        originalFileName: "controller-datasheet.pdf",
+      });
+      check(
+        "a file uploads before any submission exists",
+        uploadResult.success,
+        uploadResult.success ? uploadResult.value.uploadId : JSON.stringify(uploadResult.error),
+      );
+      if (!uploadResult.success) return;
+      uploadedUploadId = uploadResult.value.uploadId;
+
+      const [unclaimedRow] = await db
+        .select({ submissionId: teardownSubmissionFileUpload.submissionId })
+        .from(teardownSubmissionFileUpload)
+        .where(eq(teardownSubmissionFileUpload.id, uploadedUploadId));
+      check(
+        "and it is UNCLAIMED — submission_id is NULL until a submit names it",
+        unclaimedRow?.submissionId === null,
+        String(unclaimedRow?.submissionId),
+      );
+
+      /*
+       * ⚠️ A RE-UPLOAD OF THE SAME BYTES CONVERGES RATHER THAN DUPLICATING, which is why this route
+       * carries no idempotency key. The object key is content-addressed and the column is unique.
+       */
+      const repeatResult = await uploadTeardownSubmissionFile({
+        uploaderUserId: authorRow.id,
+        declaredFormat: "pdf",
+        fileBytes: buildSmokePdfBytes(),
+        originalFileName: "controller-datasheet.pdf",
+      });
+      check(
+        "re-uploading the same bytes converges on the same row, rather than a 409",
+        repeatResult.success && repeatResult.value.uploadId === uploadedUploadId,
+        repeatResult.success ? repeatResult.value.uploadId : JSON.stringify(repeatResult.error),
+      );
+
+      /* A file the author does not own cannot be claimed — proven at submit, below. */
+    }
+
     // --- 1. The submit.
     const submitResult = await submitTeardown({
       authorUserId: authorRow.id,
-      submission: buildSubmission(subjectProductName),
+      submission: buildSubmission(subjectProductName, uploadedUploadId),
     });
     check(
       "a submission is accepted and lands pending_review",
@@ -189,7 +296,7 @@ async function main(): Promise<void> {
     // --- 3. One live survey per unit.
     const duplicateResult = await submitTeardown({
       authorUserId: authorRow.id,
-      submission: buildSubmission(` ${subjectProductName.toUpperCase()} `),
+      submission: buildSubmission(` ${subjectProductName.toUpperCase()} `, undefined),
     });
     check(
       "a second live survey of the same unit is refused",
@@ -197,10 +304,19 @@ async function main(): Promise<void> {
         duplicateResult.error.type === "TEARDOWN_SUBJECT_ALREADY_SURVEYED",
       duplicateResult.success ? "it was ACCEPTED" : duplicateResult.error.type,
     );
+    /*
+     * ⚠️ NARROWED ON `type` BEFORE READING `existingTitle`. `TeardownSubmitError` became a union
+     * when uploads landed, and the other arm carries no such field — so the check that used to read
+     * the property directly now has to say which arm it means.
+     */
+    const namedOwnSurvey =
+      !duplicateResult.success &&
+      duplicateResult.error.type === "TEARDOWN_SUBJECT_ALREADY_SURVEYED" &&
+      duplicateResult.error.existingTitle !== null;
     check(
       "and the refusal names the caller's own survey",
-      !duplicateResult.success && duplicateResult.error.existingTitle !== null,
-      duplicateResult.success ? "n/a" : String(duplicateResult.error.existingTitle),
+      namedOwnSurvey,
+      namedOwnSurvey ? "named" : "not named",
     );
 
     if (isSelfModerating) {
@@ -259,9 +375,17 @@ async function main(): Promise<void> {
         publicTeardown.partsList[0]?.label === "Gearbox housing",
       `${String(publicTeardown.partsList.length)} listed parts`,
     );
+    /*
+     * The schematic is a reader's document and is filed as one. The count varies with whether the
+     * upload half ran, so this asserts the ROUTING rather than a total — which is what the
+     * assertion was always about.
+     */
+    const schematicDocument = publicTeardown.documents.find(
+      (document) => document.kind === "schematic",
+    );
     check(
       "a reader's document is filed as a document",
-      publicTeardown.documents.length === 1 && publicTeardown.documents[0]?.kind === "schematic",
+      schematicDocument !== undefined,
       `${String(publicTeardown.documents.length)} documents`,
     );
     /*
@@ -274,10 +398,16 @@ async function main(): Promise<void> {
       publicTeardown.manufacturingFiles.length === 2,
       `${String(publicTeardown.manufacturingFiles.length)} manufacturing files`,
     );
+    /*
+     * ⚠️ TARGETED AT THE PASTED ROW, NOT AT `documents[0]`. Once the uploaded arm exists the two
+     * kinds sit in one array with different honest answers: an upload measured its bytes, a pasted
+     * link never did. Indexing would have made this assertion depend on insertion order and quietly
+     * start reading the wrong row — §3.3's NULL is a claim about PASTED links specifically.
+     */
     check(
       "no byte size was invented for a pasted link",
-      publicTeardown.documents[0]?.byteSize === null,
-      String(publicTeardown.documents[0]?.byteSize),
+      schematicDocument?.byteSize === null,
+      String(schematicDocument?.byteSize),
     );
     check(
       "the walkthrough poster was rebuilt, not stored as sent",
@@ -309,6 +439,120 @@ async function main(): Promise<void> {
       publishedRow?.moderationState === "published" && publishedRow.publicSlug === publicSlug,
       `${String(publishedRow?.moderationState)}, slug ${String(publishedRow?.publicSlug)}`,
     );
+
+    /*
+     * --- 6b. THE UPLOADED FILE, AND THE PAIR NO VITEST CAN PROVE.
+     *
+     * ⚠️ THIS IS THE POINT OF THE WHOLE FEATURE. Before uploads, a quarantine could only stop
+     * ADVERTISING a file — the bytes sat on somebody else's host and stayed live for anyone who had
+     * saved the link. An uploaded file's only address is a route that consults the LIST gate on
+     * every request, so the moment a teardown is quarantined the bytes stop being reachable at any
+     * address anyone holds. These four assertions are that claim, against a real database.
+     */
+    if (uploadedUploadId !== undefined && publishedTeardownId !== undefined) {
+      const [claimedRow] = await db
+        .select({ submissionId: teardownSubmissionFileUpload.submissionId })
+        .from(teardownSubmissionFileUpload)
+        .where(eq(teardownSubmissionFileUpload.id, uploadedUploadId));
+      check(
+        "the submit CLAIMED the upload the document named",
+        claimedRow?.submissionId === submissionId,
+        String(claimedRow?.submissionId),
+      );
+
+      const uploadedDocument = publicTeardown.documents.find(
+        (document) => document.title === "Controller datasheet",
+      );
+      check(
+        "the published document's address is a route on this server, not a stored link",
+        uploadedDocument?.url.startsWith(`/blueprints/teardowns/${publicSlug}/documents/`) === true,
+        String(uploadedDocument?.url),
+      );
+      check(
+        "and the publish copied the MEASURED byte size the upload recorded",
+        typeof uploadedDocument?.byteSize === "number" && uploadedDocument.byteSize > 0,
+        String(uploadedDocument?.byteSize),
+      );
+      /*
+       * ⚠️ THE OBJECT KEY NEVER REACHES THE WIRE — it describes our bucket layout and embeds the
+       * uploader's account id. Asserted against the STORED key rather than against a substring:
+       * the first spelling of this check looked for "teardowns/" and failed on the route address
+       * itself, which legitimately contains it. A test that cannot tell the address from the key
+       * is not testing the thing it names.
+       */
+      const [storedKeyRow] = await db
+        .select({ objectStorageKey: teardownSubmissionFileUpload.objectStorageKey })
+        .from(teardownSubmissionFileUpload)
+        .where(eq(teardownSubmissionFileUpload.id, uploadedUploadId));
+      const storedKey = storedKeyRow?.objectStorageKey ?? "";
+      const payloadJson = JSON.stringify(publicTeardown);
+      check(
+        "and the object key is absent from the whole public payload",
+        storedKey.length > 0 && !payloadJson.includes(storedKey),
+        payloadJson.includes(storedKey) ? "THE KEY LEAKED" : "absent",
+      );
+      check(
+        "and so is the uploader's account id, which the key embeds",
+        !payloadJson.includes(authorRow.id),
+        payloadJson.includes(authorRow.id) ? "THE UPLOADER ID LEAKED" : "absent",
+      );
+
+      const documentId = uploadedDocument?.url.split("/").at(-1) ?? "";
+      const beforeQuarantine = await resolveDownloadableTeardownFile({
+        teardownSlug: publicSlug,
+        fileId: documentId,
+        segment: "documents",
+      });
+      check(
+        "the download gate resolves the file while the teardown is published",
+        beforeQuarantine !== null,
+        beforeQuarantine === null ? "refused" : "resolved",
+      );
+
+      /*
+       * ⚠️ A FILE ON ANOTHER TEARDOWN IS REFUSED — the composite check that stops one teardown's
+       * slug being used to reach another's files.
+       */
+      const crossTeardown = await resolveDownloadableTeardownFile({
+        teardownSlug: publicSlug,
+        fileId: randomUUID(),
+        segment: "documents",
+      });
+      check(
+        "a file id that does not belong to this teardown is refused",
+        crossTeardown === null,
+        crossTeardown === null ? "refused" : "RESOLVED, which is a leak",
+      );
+
+      await db
+        .update(teardown)
+        .set({ moderationState: "quarantined" })
+        .where(eq(teardown.id, publishedTeardownId));
+      const duringQuarantine = await resolveDownloadableTeardownFile({
+        teardownSlug: publicSlug,
+        fileId: documentId,
+        segment: "documents",
+      });
+      check(
+        "A QUARANTINE STOPS THE BYTES BEING REACHABLE — no presign is mintable at any address",
+        duringQuarantine === null,
+        duringQuarantine === null ? "refused, as designed" : "STILL RESOLVED — the gate is open",
+      );
+
+      const quarantinedRead = await getPublicTeardownBySlug(publicSlug);
+      check(
+        "and the page still answers, with its documents withheld",
+        quarantinedRead.success && quarantinedRead.value.documents.length === 0,
+        quarantinedRead.success
+          ? `${String(quarantinedRead.value.documents.length)} documents`
+          : "the read failed",
+      );
+
+      await db
+        .update(teardown)
+        .set({ moderationState: "published" })
+        .where(eq(teardown.id, publishedTeardownId));
+    }
 
     // --- 7. A decision is taken once.
     const secondDecision = await decideTeardown({

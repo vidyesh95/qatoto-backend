@@ -7,6 +7,7 @@ import {
   teardown,
   teardownDocument,
   teardownManufacturingFile,
+  teardownSubmissionFileUpload,
   teardownMaterial,
   teardownMaterialElement,
   teardownPartListing,
@@ -20,6 +21,7 @@ import { buildErrorWithoutQueryParameters } from "#src/modules/home/blueprints/b
 import { RESERVED_TEARDOWN_SLUGS } from "#src/modules/home/blueprints/teardown-import.schemas.js";
 import {
   isTeardownDocumentKind,
+  type SubmittedTeardownFile,
   TeardownSubmissionDocumentSchema,
   type TeardownModerationDecisionInput,
   type TeardownSubmissionDocument,
@@ -284,12 +286,103 @@ async function insertTeardownUnderFreeSlug(
  * that release a no-op here, and it now stands as the backstop for a caller on a cached bundle:
  * whatever array a file arrives in, it lands in the table that can hold what its author said it was.
  */
+/**
+ * The three storage columns one submitted file becomes, on whichever arm it arrived.
+ *
+ * ⚠️ A `switch` WITH A `never` DEFAULT, AND IT RETURNS ALL FIVE KEYS ON BOTH ARMS.
+ * `teardown_document_source_ck` decides which combination is legal, and writing every column makes
+ * the two that stay NULL visible at the call site rather than resting on which properties happened
+ * to be omitted — the same reason `targetColumnsForArm` spells its nulls out.
+ *
+ * ⚠️ THE UPLOADED ARM COPIES THE MEASURED SIZE, WHICH IS THE FACT §3.3 SAID NOBODY HAD. Its
+ * argument for a NULL `byte_size` was that the only ways to fill it were a HEAD inside this very
+ * transaction or a moderator typing a number about a file they never opened. An upload measured the
+ * bytes at intake, so the figure is neither of those.
+ */
+function storageColumnsForSubmittedFile(
+  file: SubmittedTeardownFile,
+  stagedUploadsById: ReadonlyMap<string, StagedUploadRow>,
+): {
+  source: "pasted_link" | "uploaded";
+  url: string | null;
+  objectStorageKey: string | null;
+  contentSha256: string | null;
+  byteSize: number | null;
+} {
+  switch (file.source) {
+    case "pasted_link":
+      return {
+        source: "pasted_link",
+        url: file.url,
+        objectStorageKey: null,
+        contentSha256: null,
+        // Unmeasured: the wire carried a pasted link and no size.
+        byteSize: null,
+      };
+    case "uploaded": {
+      const staged = stagedUploadsById.get(file.uploadId);
+      if (staged === undefined) {
+        /*
+         * Unreachable: `submitTeardown` proved every id belongs to this author and claimed it, and
+         * this runs inside the publish transaction that loaded them. A throw is correct HERE — an
+         * absent row means the claim and this read disagree about the same table, which is a
+         * programmer error rather than an operational one, and rolling the publish back is the only
+         * safe answer.
+         */
+        throw new Error(`Submission names upload ${file.uploadId}, which no longer exists.`);
+      }
+      return {
+        source: "uploaded",
+        url: null,
+        objectStorageKey: staged.objectStorageKey,
+        contentSha256: staged.contentSha256,
+        byteSize: staged.byteSize,
+      };
+    }
+    default: {
+      const exhaustiveCheck: never = file;
+      throw new Error(`Unhandled submitted file source: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+interface StagedUploadRow {
+  readonly objectStorageKey: string;
+  readonly contentSha256: string;
+  readonly byteSize: number;
+}
+
 async function copySubmissionIntoTeardown(
   transaction: DatabaseExecutor,
   teardownId: string,
   document: TeardownSubmissionDocument,
+  submissionId: string,
 ): Promise<void> {
   await transaction.insert(teardownStats).values({ teardownId });
+
+  /*
+   * The staged uploads this submission claimed, in ONE read rather than one per file. Keyed by
+   * upload id because that is what the document names.
+   */
+  const stagedUploadRows = await transaction
+    .select({
+      id: teardownSubmissionFileUpload.id,
+      objectStorageKey: teardownSubmissionFileUpload.objectStorageKey,
+      contentSha256: teardownSubmissionFileUpload.contentSha256,
+      byteSize: teardownSubmissionFileUpload.byteSize,
+    })
+    .from(teardownSubmissionFileUpload)
+    .where(eq(teardownSubmissionFileUpload.submissionId, submissionId));
+  const stagedUploadsById = new Map<string, StagedUploadRow>(
+    stagedUploadRows.map((row) => [
+      row.id,
+      {
+        objectStorageKey: row.objectStorageKey,
+        contentSha256: row.contentSha256,
+        byteSize: row.byteSize,
+      },
+    ]),
+  );
 
   if (document.parts.length > 0) {
     await transaction.insert(teardownPartListing).values(
@@ -319,9 +412,7 @@ async function copySubmissionIntoTeardown(
         position,
         kind: file.kind,
         title: file.title,
-        url: file.url,
-        // Unmeasured: the wire carries a pasted link and no size.
-        byteSize: null,
+        ...storageColumnsForSubmittedFile(file, stagedUploadsById),
         pageCount: null,
       })),
     );
@@ -335,8 +426,7 @@ async function copySubmissionIntoTeardown(
         position,
         kind: file.kind,
         title: file.title,
-        url: file.url,
-        byteSize: null,
+        ...storageColumnsForSubmittedFile(file, stagedUploadsById),
       })),
     );
   }
@@ -534,7 +624,7 @@ export async function decideTeardown(input: {
         input.decision.desiredSlug,
       );
 
-      await copySubmissionIntoTeardown(transaction, teardownId, document);
+      await copySubmissionIntoTeardown(transaction, teardownId, document, input.submissionId);
 
       await transaction
         .update(teardownSubmission)

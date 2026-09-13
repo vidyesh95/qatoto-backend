@@ -765,6 +765,23 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
     "teardown_save.user_id": { kind: "delete_rows" },
     "teardown_view_session.viewer_user_id": { kind: "null_out" },
     "teardown_submission.author_user_id": { kind: "delete_rows" },
+    /**
+     * The author's own paperwork about their own upload, so it goes with them.
+     *
+     * ⚠️ `delete_rows`, NOT `null_out`, AND THE CONTRAST WITH A REPORT IS THE REASON. A report is
+     * evidence about SOMEBODY ELSE'S work, which is why `blueprint_content_report.reporter_user_id`
+     * is nulled rather than deleted — a departing reporter must not erase the complaint. A staged
+     * upload names no third party and is evidence of nothing: it is a file this account uploaded
+     * and has not yet attached to anything. `original_file_name` is free text the author typed,
+     * and deleting the row is what reaches it.
+     *
+     * ⚠️ THE BUCKET OBJECT IS NOT DELETED BY THIS, and that gap is platform-wide rather than this
+     * table's: nothing in this module calls any `object-storage.ts` delete, for papers, commerce
+     * documents, video documents or product documents either. The orphan sweep reaches an
+     * unclaimed upload within a day; a claimed one cascades with the submission and leaves its
+     * bytes behind, exactly as the other four families do.
+     */
+    "teardown_submission_file_upload.uploaded_by_user_id": { kind: "delete_rows" },
     "teardown_submission.reviewed_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",

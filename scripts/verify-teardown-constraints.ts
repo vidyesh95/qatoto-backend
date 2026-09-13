@@ -39,6 +39,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
 import { pool } from "#src/db/index.js";
+import { teardownFileObjectKey } from "#src/lib/object-storage.js";
 import { RESERVED_TEARDOWN_SLUGS } from "#src/modules/home/blueprints/teardown-import.schemas.js";
 
 const PG_CHECK_VIOLATION = "23514";
@@ -888,6 +889,194 @@ async function main(): Promise<void> {
       manufacturingFileStatement,
       [`${suffix}-mfg-zero`, teardownId, 91, 0],
     );
+
+    /*
+     * ⚠️ THE `>= 0` / `> 0` SPLIT IS ASSERTED IN BOTH DIRECTIONS, and the pair is the point. The
+     * schema comment calls the asymmetry deliberate; a zero-byte file would therefore satisfy one
+     * table and be refused by the other, as a 23514 nobody could read. The boundary refuses an
+     * empty upload so the asymmetry is never exercised by a real file — these two assertions are
+     * what turn that comment into a control somebody would have to break on purpose.
+     */
+    await expectAccepted(
+      "a zero-byte DOCUMENT is accepted — the split is real",
+      documentStatement,
+      [`${suffix}-doc-zero`, teardownId, 92, 0],
+    );
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 11b. the pasted/uploaded union on both file tables ---");
+
+    const uploadedDocumentStatement = `INSERT INTO teardown_document
+        (id, teardown_id, position, kind, title, url, source, object_storage_key, content_sha256, byte_size)
+      VALUES ($1, $2, $3, 'datasheet', 'Verify upload', $4, $5, $6, $7, $8)`;
+    const validKey = `teardowns/user-${suffix}/uploads/${"a".repeat(64)}.pdf`;
+    const validSha = "a".repeat(64);
+
+    await expectAccepted(
+      "an uploaded document with a key, a sha and a measured size is accepted",
+      uploadedDocumentStatement,
+      [`${suffix}-up-ok`, teardownId, 100, null, "uploaded", validKey, validSha, 4096],
+    );
+    await expectAccepted(
+      "a pasted document with a url and no storage columns is accepted",
+      uploadedDocumentStatement,
+      [
+        `${suffix}-paste-ok`,
+        teardownId,
+        101,
+        "https://files.example.com/a.pdf",
+        "pasted_link",
+        null,
+        null,
+        null,
+      ],
+    );
+
+    /*
+     * ⚠️ THE FOUR ILLEGAL COMBINATIONS, NOT JUST THE TWO OBVIOUS ONES. A nullable `url` admits a
+     * row that is NEITHER a link nor an upload, which is the shape the union exists to forbid and
+     * the one nobody thinks to try.
+     */
+    for (const [label, parameters] of [
+      [
+        "an uploaded document carrying a url is refused",
+        [
+          `${suffix}-up-url`,
+          teardownId,
+          102,
+          "https://files.example.com/a.pdf",
+          "uploaded",
+          validKey,
+          validSha,
+          4096,
+        ],
+      ],
+      [
+        "an uploaded document with no measured size is refused",
+        [`${suffix}-up-nosize`, teardownId, 103, null, "uploaded", validKey, validSha, null],
+      ],
+      [
+        "a pasted document with no url is refused — neither arm is not a row",
+        [`${suffix}-paste-nourl`, teardownId, 104, null, "pasted_link", null, null, null],
+      ],
+      [
+        "a pasted document carrying a storage key is refused",
+        [
+          `${suffix}-paste-key`,
+          teardownId,
+          105,
+          "https://files.example.com/a.pdf",
+          "pasted_link",
+          validKey,
+          validSha,
+          null,
+        ],
+      ],
+      [
+        "an object key with a traversal segment is refused",
+        [
+          `${suffix}-up-dots`,
+          teardownId,
+          106,
+          null,
+          "uploaded",
+          "teardowns/../../etc/passwd",
+          validSha,
+          4096,
+        ],
+      ],
+      [
+        "an object key with a leading slash is refused",
+        [`${suffix}-up-abs`, teardownId, 107, null, "uploaded", `/${validKey}`, validSha, 4096],
+      ],
+      [
+        "a content hash that is not 64 hex characters is refused",
+        [`${suffix}-up-sha`, teardownId, 108, null, "uploaded", validKey, "z".repeat(64), 4096],
+      ],
+    ] as const) {
+      await expectRefused(label, "23514", uploadedDocumentStatement, [...parameters]);
+    }
+
+    /*
+     * ⚠️ DERIVED FROM THE TYPESCRIPT BUILDER RATHER THAN RETYPED. The CHECK pins the key's SHAPE and
+     * deliberately not its prefix — writing `^teardowns/` into SQL would make any change to
+     * `teardownFileObjectKey` a migration. This is the assertion that keeps the two agreeing
+     * without coupling them, the same move the reserved-slug check below makes.
+     */
+    await expectAccepted(
+      "the key teardownFileObjectKey() builds satisfies the column's own CHECK",
+      uploadedDocumentStatement,
+      [
+        `${suffix}-up-derived`,
+        teardownId,
+        109,
+        null,
+        "uploaded",
+        teardownFileObjectKey(`user-${suffix}`, validSha, "step"),
+        validSha,
+        4096,
+      ],
+    );
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 11c. the upload staging table ---");
+
+    /*
+     * The staging table names an account, unlike every other `teardown_*` table — which is exactly
+     * why `db:verify-anonymization-coverage` fails the build until the manifest classifies it.
+     */
+    const stagingAuthorRow = await client.query<{ id: string }>(`SELECT id FROM "user" LIMIT 1`);
+    const authorId = stagingAuthorRow.rows[0]?.id;
+    if (authorId === undefined) {
+      throw new Error("No user rows exist. Seed an account before running this verifier.");
+    }
+
+    const stagingStatement = `INSERT INTO teardown_submission_file_upload
+        (id, uploaded_by_user_id, object_storage_key, content_sha256, byte_size, format, original_file_name)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)`;
+
+    await expectAccepted("a staged upload inserts", stagingStatement, [
+      `${suffix}-stage-ok`,
+      authorId,
+      `${validKey}.one`,
+      validSha,
+      4096,
+      "pdf",
+      "datasheet.pdf",
+    ]);
+    await expectRefused(
+      "a zero-byte staged upload is refused — an empty file never reaches either table",
+      "23514",
+      stagingStatement,
+      [`${suffix}-stage-zero`, authorId, `${validKey}.two`, validSha, 0, "pdf", "datasheet.pdf"],
+    );
+    /*
+     * ⚠️ THE UNIQUE KEY IS THE IDEMPOTENCY. It is what lets the upload route carry no
+     * `Idempotency-Key`: the same author re-uploading the same bytes converges here rather than
+     * minting a second row.
+     *
+     * Its own savepoint, because the duplicate needs a row that is STILL THERE — `expectAccepted`
+     * rolls its insert back, so a probe that leaned on an earlier one would find an empty table and
+     * report 23502 rather than the 23505 it means to prove.
+     */
+    const duplicateKey = `${validKey}.dup`;
+    await client.query("SAVEPOINT staging_duplicate_probe");
+    await client.query(stagingStatement, [
+      `${suffix}-stage-first`,
+      authorId,
+      duplicateKey,
+      validSha,
+      4096,
+      "pdf",
+      "datasheet.pdf",
+    ]);
+    await expectRefused(
+      "a second row at the same object key is refused — this is what makes a retry converge",
+      "23505",
+      stagingStatement,
+      [`${suffix}-stage-dup`, authorId, duplicateKey, validSha, 4096, "pdf", "again.pdf"],
+    );
+    await client.query("ROLLBACK TO SAVEPOINT staging_duplicate_probe");
 
     // -----------------------------------------------------------------------
     console.log("\n--- 12. the author link, and the reserved-slug list ---");

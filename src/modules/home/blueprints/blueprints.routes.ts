@@ -23,6 +23,8 @@ import {
   showcaseLaunchSubmitLimiter,
   showcaseWriteUpImageUploadLimiter,
   teardownModerationLimiter,
+  teardownFileDownloadLimiter,
+  teardownFileUploadLimiter,
   teardownSubmitLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
@@ -38,6 +40,7 @@ import {
   uploadShowcaseLaunchSubmissionFiles,
   uploadShowcaseWriteUpImageFile,
 } from "#src/modules/home/blueprints/upload-showcase-launch-images.js";
+import { uploadTeardownSubmissionFileParser } from "#src/modules/home/blueprints/upload-teardown-submission-file.js";
 
 const router = express.Router();
 
@@ -323,6 +326,31 @@ router.get("/teardowns/options", teardownController.listTeardownOptions);
 /** GET /blueprints/teardowns/slugs — LITERAL, must stay above /:teardownSlug. Readable gate. */
 router.get("/teardowns/slugs", teardownController.listPublicTeardownSlugs);
 
+/*
+ * POST /blueprints/teardowns/uploads — one CAD file or PDF, staged until a submission claims it.
+ *
+ * A NEW LITERAL under this arm's prefix, so it must stay above `/:teardownSlug` AND be reserved by
+ * `teardown_slug_ck` — otherwise a teardown could one day be published at `/teardowns/uploads` and
+ * shadow it. `RESERVED_TEARDOWN_SLUGS` carries the same member and the verify script compares the
+ * two as data.
+ *
+ * CHAIN ORDER auth -> limiter -> requireIdentifiedUser -> parser, matching the showcase multipart
+ * rule: an anonymous or credential-less caller is refused BEFORE multer buffers 50 MB into memory.
+ *
+ * ⚠️ NO `idempotency()`. The object key is content-addressed on `(uploader, sha256)` and the column
+ * is unique, so a retry converges on the same object and the same row — the storage layer is
+ * idempotent by construction, which `attachVideoDocument` argues is stronger than a replayed
+ * response. `POST /blueprints/showcases/write-up-images` carries none for the same reason.
+ */
+router.post(
+  "/teardowns/uploads",
+  requireAuth,
+  teardownFileUploadLimiter,
+  requireIdentifiedUser,
+  uploadTeardownSubmissionFileParser,
+  teardownController.uploadSubmissionFile,
+);
+
 /** GET /blueprints/teardowns — the index, its filters and its tag facets in one payload. */
 router.get("/teardowns", teardownController.listPublicTeardowns);
 
@@ -337,6 +365,33 @@ router.get("/teardowns/:teardownSlug/claim-targets", teardownController.getTeard
  * let a moderation action quietly delete an unrelated fact. Same gate as the detail read beside it.
  */
 router.get("/teardowns/:teardownSlug/market-signal", teardownController.getTeardownMarketSignal);
+
+/*
+ * THE TWO FILE DOWNLOADS. Four segments each, so neither adds a literal and neither can shadow
+ * `/:teardownSlug`.
+ *
+ * ⚠️ NOT BARE READS, AND NOT AN EXCEPTION TO THE BARE-READ RULE — they fail both of its own
+ * clauses. That rule is about reads whose payload is IDENTICAL FOR EVERY VISITOR and which a cache
+ * belongs in front of; these answer a 302 to a 300-second bearer capability minted per request,
+ * under `Cache-Control: no-store`. `GET /videos/:videoId/documents/:documentId/file` is the shipped
+ * precedent: anonymous-reachable, private bucket, same shape.
+ *
+ * ⚠️ GATED ON **LIST**, NOT ON READABLE, WHICH IS THE ONE PLACE THIS DIFFERS FROM THE DETAIL READ
+ * BESIDE IT. A quarantined teardown's PAGE is served — that is what READABLE is for — but a
+ * quarantine is precisely a withholding of the publisher's FILES, and `withheldPayload()` already
+ * blanks both lists for exactly that reason. Serving the bytes from a separate route while the page
+ * hides them would put the control back where it was before it moved server-side.
+ */
+router.get(
+  "/teardowns/:teardownSlug/documents/:fileId",
+  teardownFileDownloadLimiter,
+  teardownController.downloadTeardownDocument,
+);
+router.get(
+  "/teardowns/:teardownSlug/fabrication-files/:fileId",
+  teardownFileDownloadLimiter,
+  teardownController.downloadTeardownManufacturingFile,
+);
 
 /** GET /blueprints/teardowns/:teardownSlug — one readable teardown. DECLARED LAST of the five. */
 router.get("/teardowns/:teardownSlug", teardownController.getPublicTeardown);

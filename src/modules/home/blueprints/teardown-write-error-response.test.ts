@@ -33,9 +33,22 @@ const EVERY_TEARDOWN_WRITE_ERROR: Readonly<Record<TeardownWriteError["type"], Te
     schemaVersion: 1,
     issues: ["parts.0.label: Required"],
   },
+  TEARDOWN_UPLOAD_NOT_AVAILABLE: { type: "TEARDOWN_UPLOAD_NOT_AVAILABLE" },
 };
 
 describe("mapTeardownWriteErrorToResponse", () => {
+  /**
+   * ⚠️ 409 AND NO ID. The three facts behind this refusal — an upload that never existed, one
+   * belonging to another author, and one an earlier submission already claimed — are deliberately
+   * indistinguishable, so the message tells the author what to DO rather than which id failed.
+   */
+  it("refuses an unavailable upload with 409 and names no id", () => {
+    const mapped = mapTeardownWriteErrorToResponse(EVERY_TEARDOWN_WRITE_ERROR.TEARDOWN_UPLOAD_NOT_AVAILABLE);
+
+    expect(mapped.statusCode).toBe(409);
+    expect(mapped.message).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/);
+  });
+
   it("refuses a caller without the capability with 403", () => {
     const mapped = mapTeardownWriteErrorToResponse(EVERY_TEARDOWN_WRITE_ERROR.PLATFORM_CAPABILITY_REQUIRED);
 
@@ -100,7 +113,7 @@ describe("mapTeardownWriteErrorToResponse", () => {
     it("maps every variant the union declares without throwing", () => {
       const everyError = Object.values(EVERY_TEARDOWN_WRITE_ERROR);
 
-      expect(everyError, "the variant table must not silently empty out").toHaveLength(6);
+      expect(everyError, "the variant table must not silently empty out").toHaveLength(7);
       for (const error of everyError) {
         const mapped = mapTeardownWriteErrorToResponse(error);
 

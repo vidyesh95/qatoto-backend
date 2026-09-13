@@ -6,6 +6,7 @@ import {
   createAssetUrlSchema,
   createExternalUrlSchema,
 } from "#src/modules/home/blueprints/blueprint-url.schemas.js";
+import { TEARDOWN_UPLOAD_FORMATS } from "#src/modules/home/blueprints/teardown-file-bytes.js";
 import {
   CompositionElementSchema,
   MaterialSchema,
@@ -33,8 +34,15 @@ import {
  * A submission written today is read by a publish weeks later, against whatever this schema has
  * become. The reader's `unparseable` arm handles the failure; this number decides WHICH schema to
  * try. Bump it when a stored shape changes, and keep the old parser beside the new one.
+ *
+ * ⚠️ VERSION 2 ADDED THE UPLOADED FILE ARM, AND NEEDS NO SECOND PARSER — which is worth writing
+ * down, because "bump it and keep the old parser beside the new one" invites one. A v1 document
+ * carries no `source` key on any file, and `source` DEFAULTS to `pasted_link`, so the v2 schema
+ * reads every v1 document as exactly what it is. The bump happens anyway: §3.2's argument for this
+ * column is that it is free now and impossible to add later, and a version that only moves when a
+ * migration is unavoidable is a version nobody can rely on.
  */
-export const TEARDOWN_SUBMISSION_DOCUMENT_SCHEMA_VERSION = 1;
+export const TEARDOWN_SUBMISSION_DOCUMENT_SCHEMA_VERSION = 2;
 
 /**
  * ⚠️ 512, NOT 2048, AND HTTPS ONLY — two tightenings the read path does not need.
@@ -71,13 +79,43 @@ const SubmittedFileUrlSchema = createExternalUrlSchema(512);
  * ⚠️ SO THE TWO ENUMS MUST STAY DISJOINT. Routing by label is only unambiguous while no value
  * appears in both, which `teardown-submission.schemas.test.ts` asserts.
  */
-const SubmittedFileSchema = z
-  .object({
-    kind: z.enum([...TEARDOWN_DOCUMENT_KINDS, ...TEARDOWN_MANUFACTURING_FILE_KINDS]),
-    title: z.string().min(1).max(200),
-    url: SubmittedFileUrlSchema,
-  })
-  .strict();
+const SubmittedFileKindSchema = z.enum([
+  ...TEARDOWN_DOCUMENT_KINDS,
+  ...TEARDOWN_MANUFACTURING_FILE_KINDS,
+]);
+
+/**
+ * ⚠️ A TWO-ARM UNION, DISCRIMINATED ON `source`, MIRRORING THE ROW IT BECOMES. A pasted-link file
+ * names a URL; an uploaded one names a staged `uploadId` and no URL at all — because the address of
+ * an uploaded file does not exist until a moderator publishes the submission, and a client that
+ * sent one would be sending a fact it cannot know.
+ *
+ * ⚠️ `source` DEFAULTS TO `pasted_link`, WHICH IS WHAT KEEPS v1 DOCUMENTS PARSING. Every submission
+ * stored before uploads existed carries no `source` key, and `.strict()` refuses unknown keys
+ * rather than absent ones — so the defaulted discriminator reads those documents as exactly what
+ * they are. That the v1 shape IS the pasted arm is why the version bump costs nothing today, and
+ * the bump happens anyway: §3.2's whole argument for `document_schema_version` is that it is free
+ * now and impossible to add later.
+ */
+const SubmittedFileSchema = z.discriminatedUnion("source", [
+  z
+    .object({
+      source: z.literal("pasted_link").default("pasted_link"),
+      kind: SubmittedFileKindSchema,
+      title: z.string().min(1).max(200),
+      url: SubmittedFileUrlSchema,
+    })
+    .strict(),
+  z
+    .object({
+      source: z.literal("uploaded"),
+      kind: SubmittedFileKindSchema,
+      title: z.string().min(1).max(200),
+      /** The receipt from `POST /blueprints/teardowns/uploads`. Never a URL, never a byte size. */
+      uploadId: z.uuid("An upload id is a UUID."),
+    })
+    .strict(),
+]);
 
 export type SubmittedTeardownFile = z.infer<typeof SubmittedFileSchema>;
 
@@ -275,3 +313,17 @@ export const TeardownModerationDecisionSchema = z.discriminatedUnion("decision",
 ]);
 
 export type TeardownModerationDecisionInput = z.infer<typeof TeardownModerationDecisionSchema>;
+
+/**
+ * The `format` text part on `POST /blueprints/teardowns/uploads`.
+ *
+ * ⚠️ REQUIRED, AND IT IS THE CONTROL THE MIMETYPE GATE CANNOT BE. Browsers send
+ * `application/octet-stream` for CAD files, so the multipart layer refuses almost nothing — making
+ * the client NAME the format and then proving the bytes support that name is what stops it storing
+ * bytes under a label they do not carry. `.strict()` so a stray part is a loud 422 rather than a
+ * silently ignored field.
+ */
+export const TeardownUploadFormatSchema = z
+  .object({ format: z.enum(TEARDOWN_UPLOAD_FORMATS) })
+  .strict();
+export type TeardownUploadFormatInput = z.infer<typeof TeardownUploadFormatSchema>;

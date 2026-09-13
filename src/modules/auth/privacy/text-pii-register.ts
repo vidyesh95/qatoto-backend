@@ -505,6 +505,12 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
    * stopped being true the moment `teardown.author_user_id` existed, and leaving the old
    * disposition would have been a claim about the schema that the schema contradicts.
    *
+   * ⚠️ THE PUBLISHED FAMILY STILL NAMES NO ACCOUNT BEYOND THAT ONE COLUMN, and uploads did not
+   * change it. `teardown_document` and `teardown_manufacturing_file` gained `source`,
+   * `object_storage_key` and `content_sha256` — no uploader. The account that uploaded a file is
+   * named on `teardown_submission_file_upload`, in the SUBMISSION family, because §3.1's rule is
+   * that the paperwork is a different domain object from the published row.
+   *
    * TWO POPULATIONS SHARE THESE COLUMNS. The twelve seeded rows carry invented bylines and a NULL
    * `author_user_id`; no erasure reaches them, and none needs to. An authored row names an account,
    * and the whole row goes when that account does.
@@ -688,6 +694,17 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
   "teardown_submission.subject_product_name_normalized": {
     kind: "not_personal_data",
     note: "The same product name, lowercased and whitespace-collapsed, so one live survey per unit is a unique index rather than an application rule.",
+  },
+  /**
+   * ⚠️ FREE TEXT THE AUTHOR TYPED, and the one field on the staging table that could carry a name.
+   * A filename is whatever was on somebody's disk — "notes for dave.pdf" is an ordinary thing to
+   * upload by accident. It reaches storage only as a download disposition, sanitized there, and is
+   * never part of an object key; deleting the row is what reaches the stored copy.
+   */
+  "teardown_submission_file_upload.original_file_name": {
+    kind: "covered_by_row_delete",
+    manifestKey: "teardown_submission_file_upload.uploaded_by_user_id",
+    note: "The author's own filename, kept for the download disposition. The row dies with the account that uploaded it.",
   },
   "teardown.provenance_licence_name": {
     kind: "not_personal_data",

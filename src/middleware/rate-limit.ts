@@ -1414,6 +1414,36 @@ export const blueprintContentReportLimiter = createLimiter({
   limit: 20,
 });
 
+/**
+ * POST /blueprints/teardowns/uploads — one CAD file or PDF, up to 50 MB.
+ *
+ * ⚠️ `skipFailedRequests` IS DELIBERATELY NOT SET, so a REFUSED upload still spends budget. That is
+ * the opposite of the limiters that set it, and the reason is what a refusal costs here: multer has
+ * already buffered up to 50 MB in memory and the service has hashed it before anything can decide
+ * the bytes are wrong. A budget that only charged for successes would let somebody spend that
+ * repeatedly for free by uploading files that fail validation.
+ */
+export const teardownFileUploadLimiter = createLimiter({
+  namespace: "teardownFileUpload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
+ * GET /blueprints/teardowns/:teardownSlug/{documents,fabrication-files}/:fileId
+ *
+ * ⚠️ THE BUDGET BETWEEN THE OPEN INTERNET AND AN ENUMERATION OF PRESIGNED URLS, which is the same
+ * sentence `videoDocumentDownloadLimiter` carries and the same number. The route takes no session,
+ * so `userKey` falls through to IP — the NAT hazard the bare-read rule warns about — but the page has already
+ * rendered by the time anyone reaches it, and a teardown carries at most sixteen files. It is
+ * deliberately NOT pre-raised for a hypothetical prefetch: raise it when something real needs it.
+ */
+export const teardownFileDownloadLimiter = createLimiter({
+  namespace: "teardownFileDownload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
 /** POST /blueprints/admin/content-reports/:reportId/dismiss — a moderator working the queue. */
 export const blueprintReportModerationLimiter = createLimiter({
   namespace: "blueprintReportModeration",
