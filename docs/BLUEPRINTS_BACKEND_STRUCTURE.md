@@ -60,7 +60,15 @@ under an unresolved rights claim, or a live URL that 404s.
 
 The withholding is SERVER-SIDE. It used to live in a React component, where the disputed files were
 already on the wire; that is not a control at all (CLAUDE.md §1.1), and the component had also missed
-`repairabilityIndex`. `claim-targets` exists so that moving it did not break the rights-claim flow: it
+`repairabilityIndex`.
+
+⚠️ **AND FOR AN UPLOADED FILE IT IS NOW A REAL WITHHOLDING RATHER THAN A REFUSAL TO ADVERTISE.** A
+pasted link points at somebody else's host: omitting it from the payload stops Qatoto showing the
+file, and does nothing at all to anyone who saved the URL. An uploaded file's only address is a
+route on this server that consults the **LIST** gate on every request and refuses to mint a presign
+for a quarantined teardown — so a link saved yesterday is dead the moment the quarantine lands. That
+is the first time this control has actually taken a file away, and it is the strongest argument for
+preferring uploads over pasted links. See §11. `claim-targets` exists so that moving it did not break the rights-claim flow: it
 serves ids and titles with no column that could hold a URL, so a second rights holder can still name
 the specific file they mean.
 
@@ -232,8 +240,10 @@ sending a non-moderator a request that is ALSO malformed and requiring **403, no
 
 - **No drafts.** The wizard parses its whole draft once at submit and keeps its state in React; there
   is no draft id, no autosave and no resume-later on either side.
-- **No uploads.** Documents and manufacturing files are pasted `https://` links. The wizard has no
-  file input anywhere, and says so to the author.
+- ~~**No uploads.**~~ **UPLOADS LANDED — see §11.** Documents and manufacturing files could only be
+  pasted `https://` links. Both tables now carry a `pasted_link | uploaded` union, and the pasted
+  arm is unchanged: the bullet's reasoning still describes it exactly, which is why it is struck
+  through rather than deleted.
 - **No edit-and-resubmit.** A rejection is terminal, which is why the note is mandatory on one: it is
   the author's entire remedy. The partial unique index deliberately excludes `rejected`, so a
   sent-back author may survey the same unit again as a fresh submission.
@@ -309,13 +319,13 @@ sentinel and sweeping raw response bytes.
 ## 7. Verification
 
 ```bash
-pnpm db:verify-teardown-constraints        # 94 assertions in one rolled-back transaction
+pnpm db:verify-teardown-constraints        # 108 assertions in one rolled-back transaction
 pnpm db:verify-case-study-constraints      # 46
 pnpm db:verify-showcase-launch-constraints # 103
 pnpm db:verify-blueprint-hero-constraints  # 27
 pnpm db:verify-blueprint-engagement-constraints # 33
 pnpm db:reconcile-blueprint-stats          # counter drift; -- --fix repairs
-pnpm db:smoke-teardown-authoring           # submit → duplicate refusal → publish → public read
+pnpm db:smoke-teardown-authoring           # upload → submit → publish → read → quarantine withholds
 pnpm db:smoke-case-study-authoring         # 16, and a byte sweep for the withheld company name
 pnpm db:smoke-showcase-authoring           # 36, upload-before-submit, the stats tripwire, the flag walk and `actioned`
 pnpm db:smoke-blueprint-hero               # 19, AVIF and the seeded site-relative arm
@@ -645,3 +655,113 @@ reason.
 Twelve assertions, including the four that matter: filing did not move the state; filing wrote no
 audit entry; the **dismissal** did write one, because that is a staff action; and the resolution
 note stayed **off** the hash-linked chain.
+
+---
+
+## 11. Uploaded documents and fabrication files
+
+```
+POST /blueprints/teardowns/uploads                                      one file + its format
+GET  /blueprints/teardowns/:teardownSlug/documents/:fileId              302 → 300s presign
+GET  /blueprints/teardowns/:teardownSlug/fabrication-files/:fileId      302 → 300s presign
+```
+
+### 11.1 The private bucket, and why not Cloudinary
+
+`object-storage.ts`'s own header decides it: Cloudinary is the IMAGE pipeline here, and everything
+reaching it is first re-encoded by `image.ts`, which answers `NOT_AN_IMAGE` for a PDF.
+`uploadProductModel` is the one `raw` exception, and its stated condition is *"a PUBLIC asset
+rendered in place on a public page"* — a `.step` is not rendered in place, it is downloaded and
+opened in somebody's CAD tool. The error vocabulary comes free: `NOT_CONFIGURED | UPLOAD_FAILED |
+DELETE_FAILED` → 503/502/502, which is the stated payoff of that module sharing one vocabulary with
+`cloudinary.ts`.
+
+### 11.2 A discriminated union on the row
+
+⚠️ **A PRESIGNED URL CANNOT BE STORED AND A RAW KEY CANNOT GO IN `url`.** The first expires in 300
+seconds; the second is refused by `assetUrlCheck`, which admits `https://` or a leading slash and
+nothing else. So the uploaded arm gets `object_storage_key` and `content_sha256` with their own
+CHECK, `url` becomes nullable under an `IS NULL OR` (the shape
+`teardown_fastener_supplier_url_ck` already uses), and `source` pins which combination is legal.
+
+**The address a reader follows is COMPUTED, never stored** — a route on this server, the same move
+`/teardowns/mine` makes for `publicSlug`. That is what lets the download re-check the gate per
+request, and it is why the object key never reaches the wire (it names the bucket layout and embeds
+the uploader's account id; the smoke asserts both are absent from the payload).
+
+⚠️ **`byte_size` IS NOT NULL ON THE UPLOADED ARM ONLY.** §3.3 argued NULL because the two honest
+ways to fill it were a HEAD inside the publish transaction or a moderator typing a number about a
+file they never opened. An upload measures the bytes at intake — the condition that reasoning always
+lacked — so the pasted arm keeps its NULL and §3.3 stays true *of it*.
+
+### 11.3 The download gate is LIST, not READABLE
+
+⚠️ **A THIRD PREDICATE, ON A SURFACE THAT ALREADY KEEPS TWO APART.** A quarantined teardown's page
+answers — that is what READABLE is for — but a quarantine *is* a withholding of the publisher's
+files, and `withheldPayload()` already blanks both lists. Serving bytes from a separate route while
+the page hid them would put the control back where it was before it moved server-side.
+
+⚠️ **ONE 404 FOR EVERY REASON**: no such slug, no such file, a file belonging to a *different*
+teardown, and a quarantine are deliberately indistinguishable. Anything finer is an enumeration
+oracle over withheld files.
+
+⚠️ **NOT BARE READS, AND NOT AN EXCEPTION TO THE RULE.** §1's bare-read rule is about reads whose
+payload is identical for every visitor and which a cache belongs in front of. These answer a 302 to
+a per-request bearer capability under `Cache-Control: no-store`, failing both clauses on their face.
+`GET /videos/:videoId/documents/:documentId/file` is the shipped precedent — anonymous-reachable,
+private bucket, same shape.
+
+### 11.4 Validation, and what it does not prove
+
+The multipart mimetype gate is **weaker here than on any other upload**, and the parser says so:
+browsers send `application/octet-stream` for `.step`, `.stl` and `.dxf` far more often than any
+registered type, so it must admit that and therefore refuses almost nothing. The control is a
+required `format` text part that `teardown-file-bytes.ts` proves against the actual bytes — checked
+in both directions, so a STEP declared as a PDF is refused as loudly as the reverse.
+
+| Format | What is proven |
+| --- | --- |
+| `pdf` | Delegated to `validatePdfBytes` verbatim, reusing `MAX_PAPER_BYTES` because that validator hardcodes the cap in its own `TOO_LARGE` branch |
+| `step` | The two markers ISO 10303-21 mandates: `ISO-10303-21;` … `END-ISO-10303-21;` |
+| `stl` | ASCII framing, or binary's **arithmetic invariant** `84 + 50 × triangleCount` — the strongest check here, and one a truncated file cannot satisfy |
+| `dxf` | ASCII group-code opening plus `EOF`. Binary DXF is refused: one fewer parser surface |
+
+`gerber`, `drill`, `pick_and_place` and `bill_of_materials_csv` stay **pasted-link-only**. The first
+two are sniffable and can be added; the last two are plain text with no framing at all, so a
+validator for them would assert nothing while reading as though it did — §3.7's rule about not
+adding a label before its lever exists.
+
+⚠️ **WHAT NONE OF IT PROVES, and no copy may claim:** that a file is what its title says, that it
+opens, or that it is safe to hand to a CAD program. A hostile STEP is fully representable inside a
+well-framed one, and a PDF that passes may carry JavaScript, embedded files and external references.
+**Nothing on this path claims the file was scanned, because it was not.** What actually moves the
+needle is delivery: the bytes never render on a Qatoto origin, `Content-Type` is pinned to the
+format *we* detected, and `Content-Disposition: attachment` is set at **PUT** time so the object
+cannot be coaxed into rendering inline even if a URL escapes — which takes PDF active content out of
+the same-origin threat model entirely.
+
+### 11.5 Staged, then claimed at SUBMIT
+
+The staging table is `teardown_submission_file_upload`, in the **submission** family — §3.1's rule
+that the paperwork is a different domain object. The published `teardown_*` family gains only
+`source`, `object_storage_key` and `content_sha256`; no uploader, so the sentence
+`text-pii-register.ts` keeps about that family survives (amended to say so precisely).
+
+⚠️ **CLAIMED AT SUBMIT, NOT AT PUBLISH** — the one departure from the showcase image pattern this
+otherwise copies. The sweeper reaps anything unclaimed after a day, and a submission can wait weeks
+in the review queue, so claiming at publish would let it delete an author's files out from under
+their own pending survey. The claim is a single `UPDATE` proving three things at once — this author,
+still unclaimed, among the ids named — so a stranger's id, an already-claimed one and a nonexistent
+one all fail identically, and the refusal names none of them.
+
+⚠️ **NO IDEMPOTENCY KEY.** The object key is content-addressed on `(uploader, sha256)` and the column
+is unique, so a retry converges on the same object and the same row and is answered as SUCCESS with
+the existing receipt rather than a 409 — `attachVideoDocument`'s argument that the storage layer
+being idempotent by construction is stronger than a replayed response.
+
+⚠️ **THE BUCKET OBJECT SURVIVES AN ERASURE, and that gap is platform-wide rather than this feature's.**
+Nothing in `src/modules/auth/privacy/` calls any `object-storage.ts` delete — not for papers,
+commerce documents, video documents or product documents either. The manifest entry is
+`delete_rows` and the orphan sweep reaches an unclaimed upload within a day; a claimed one cascades
+with its submission and leaves its bytes, exactly as the other four families do. Worth closing once,
+for all five.

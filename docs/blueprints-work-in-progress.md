@@ -18,7 +18,7 @@ Every API client in `qatoto-frontend/src/lib/blueprints/` maps to an active Expr
 | **Teardowns** | Index (`/teardowns`), options, slugs, detail, claim targets, market signal | Submission intake (`POST /teardowns`), `/mine` | View beacons, likes, saves, threaded comments with likes | Review queue + flag, quarantine, and restore verbs |
 | **Cross-arm** | `/engagement/state` | — | `/comments/:commentId` (edit/delete/like) | `/admin/content-reports` (reader report queue + dismissal) |
 
-All 30 backend blueprint test suites (766 tests), 5 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly. The full project gate is 205 files / 3985 tests.
+All 32 backend blueprint test suites (807 tests), 5 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly. The full project gate is 207 files / 4026 tests.
 
 ---
 
@@ -45,9 +45,16 @@ If you are planning the next phase of capabilities, the following features are n
   writes `blueprint_moderation_action.report_id` and moves the answered report to `actioned`. Both
   had shipped unreachable — see `BLUEPRINTS_BACKEND_STRUCTURE.md` §10.7.
 
-### C. Direct File Uploads for Teardown Documents & Fabrication Files
-- **Current State:** Showcases and Hero slides support direct multipart image uploads to Cloudinary.
-- **What's Missing:** Teardown documents and CAD/manufacturing files currently only accept pasted `https://` URLs in the wizard. There is no multipart file upload endpoint for `.step`, `.dxf`, or `.pdf` attachments.
+### ~~C. Direct File Uploads for Teardown Documents & Fabrication Files~~ — **DONE**
+- **Landed:** `POST /blueprints/teardowns/uploads` accepts `.pdf`, `.step`, `.stl` and `.dxf`, stores
+  them in the private Backblaze bucket, and serves them through two gated routes that mint a
+  300-second presign per request. Both file tables carry a `pasted_link | uploaded` union.
+- ⚠️ **This is what made a quarantine a real withholding.** A pasted link lives on someone else's
+  host, so withholding it only ever meant "stop advertising it". An uploaded file's only address is
+  a route that refuses to mint a presign for a quarantined teardown.
+- ⚠️ **Nothing on this path claims a file was scanned, because it was not.** The format check proves
+  container framing, not safety. See `BLUEPRINTS_BACKEND_STRUCTURE.md` §11.4.
+- **Still pasted-link-only:** `gerber`, `drill`, `pick_and_place`, `bill_of_materials_csv`.
 
 ### D. Server-Side Draft Storage & Edit-and-Resubmit
 - **Current State:** The authoring wizards for teardowns, showcases, and case studies retain draft state entirely on the client side (React state).
