@@ -1,6 +1,10 @@
 import type { z } from "zod";
 
 import {
+  CreateBlueprintCommentSchema,
+  UpdateBlueprintCommentSchema,
+} from "#src/modules/home/blueprints/blueprint-engagement.schemas.js";
+import {
   CountersignPeriodSchema,
   DeclineAgreementSchema,
   FinalizePeriodSchema,
@@ -538,6 +542,30 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   },
   "post /blueprints/admin/teardowns/{submissionId}/moderate": {
     schema: TeardownModerationDecisionSchema,
+    required: true,
+  },
+  /*
+   * THE ENGAGEMENT WRITES.
+   *
+   * ⚠️ ONLY THE THREE THAT CARRY A BODY ARE HERE. The like, upvote, save and comment-like routes
+   * are `PUT`/`DELETE` and read no body at all — the METHOD is the verb's direction, and the
+   * composite primary key is the idempotence. An entry for one of them would be an orphan, which
+   * fails the build exactly as a missing entry does.
+   *
+   * ⚠️ AND THE VIEW BEACON IS ABSENT FOR THE SAME REASON, not by oversight. It reads no body:
+   * a blueprint page has no duration and no position, so there is nothing a client could honestly
+   * report. `json-body-budget.test.ts` would fail a cap mounted on it.
+   */
+  "post /blueprints/showcases/{launchSlug}/comments": {
+    schema: CreateBlueprintCommentSchema,
+    required: true,
+  },
+  "post /blueprints/teardowns/{teardownSlug}/comments": {
+    schema: CreateBlueprintCommentSchema,
+    required: true,
+  },
+  "patch /blueprints/comments/{commentId}": {
+    schema: UpdateBlueprintCommentSchema,
     required: true,
   },
   "post /research-programs/{programSlug}/papers/{paperId}/file": {

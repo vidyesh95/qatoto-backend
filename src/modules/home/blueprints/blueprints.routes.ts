@@ -1,10 +1,20 @@
 import express from "express";
 
+import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
+  blueprintCommentCreateLimiter,
+  blueprintCommentLikeLimiter,
+  blueprintCommentUpdateLimiter,
+  blueprintEngagementReadLimiter,
   blueprintHeroImageUploadLimiter,
   blueprintHeroWriteLimiter,
+  blueprintLikeLimiter,
+  blueprintSaveLimiter,
+  blueprintUpvoteLimiter,
+  blueprintViewBeaconBurstLimiter,
+  blueprintViewBeaconSustainedLimiter,
   caseStudyModerationLimiter,
   caseStudySubmitLimiter,
   showcaseLaunchModerationLimiter,
@@ -15,6 +25,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as blueprintEngagementController from "#src/modules/home/blueprints/blueprint-engagement.controller.js";
 import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
 import * as caseStudyController from "#src/modules/home/blueprints/case-study.controller.js";
 import * as showcaseLaunchController from "#src/modules/home/blueprints/showcase-launch.controller.js";
@@ -173,6 +184,83 @@ router.get("/showcases", showcaseLaunchController.listPublicShowcaseFeed);
 router.get("/showcases/:launchSlug", showcaseLaunchController.getPublicShowcaseLaunch);
 
 /*
+ * THE SHOWCASE ENGAGEMENT WRITES.
+ *
+ * ⚠️ NONE OF THESE IS A NEW LITERAL. Every path below contains a `:`, so the derived literal lists
+ * `blueprints.routes.order.test.ts` asserts with `toEqual` are UNCHANGED — `mine`, `slugs` and the
+ * rest still sit above `/:launchSlug` and nothing new joins them. Each is also two segments longer
+ * than the bare param route, so Express cannot confuse them.
+ *
+ * ⚠️ THE BEACON IS NOT A BARE PUBLIC READ, and must never be added to `barePublicRoutes`. That rule
+ * is about reads whose payload is identical for every visitor; this inserts a row and moves a
+ * counter. `attachOptionalUser` precedes BOTH limiters because they key on `req.user.id` first and
+ * fall back to the IP — limiter-first would bucket every signed-in reader by NAT.
+ *
+ * ⚠️ LIKE AND UPVOTE ARE `PUT`/`DELETE`, NOT `POST`. The composite primary key is the idempotence
+ * mechanism, so there is no body, no idempotency key and no body-size cap: a double-tap on a slow
+ * connection is a no-op rather than a second row.
+ *
+ * `requireIdentifiedUser` on every authenticated write, because Better Auth's `anonymous()` mints
+ * real sessions — and `upvote_count` is the leading key of `showcase_launch_stats_top_idx`, which
+ * ranks the feed's `top` page. That is the highest-value counter on this surface.
+ */
+
+router.post(
+  "/showcases/:launchSlug/view-beacon",
+  attachOptionalUser,
+  blueprintViewBeaconBurstLimiter,
+  blueprintViewBeaconSustainedLimiter,
+  blueprintEngagementController.makeViewBeaconHandler("showcase", "launchSlug"),
+);
+
+router.put(
+  "/showcases/:launchSlug/like",
+  requireAuth,
+  blueprintLikeLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("showcase", "like", "launchSlug"),
+);
+router.delete(
+  "/showcases/:launchSlug/like",
+  requireAuth,
+  blueprintLikeLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("showcase", "like", "launchSlug"),
+);
+
+router.put(
+  "/showcases/:launchSlug/upvote",
+  requireAuth,
+  blueprintUpvoteLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("showcase", "upvote", "launchSlug"),
+);
+router.delete(
+  "/showcases/:launchSlug/upvote",
+  requireAuth,
+  blueprintUpvoteLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("showcase", "upvote", "launchSlug"),
+);
+
+/** GET is optional-auth so a signed-in reader sees their own comment likes in one read. */
+router.get(
+  "/showcases/:launchSlug/comments",
+  attachOptionalUser,
+  blueprintEngagementReadLimiter,
+  blueprintEngagementController.makeListCommentsHandler("showcase", "launchSlug"),
+);
+router.post(
+  "/showcases/:launchSlug/comments",
+  requireAuth,
+  blueprintCommentCreateLimiter,
+  idempotency(),
+  requireIdentifiedUser,
+  compactBody,
+  blueprintEngagementController.makeCreateCommentHandler("showcase", "launchSlug"),
+);
+
+/*
  * TEARDOWNS — five PUBLIC reads and nothing else. There is no teardown write path yet; the twelve
  * rows arrive through `pnpm db:seed-blueprint-teardowns`, which parses them with the same schema an
  * authoring route will.
@@ -242,6 +330,71 @@ router.get("/teardowns/:teardownSlug/claim-targets", teardownController.getTeard
 router.get("/teardowns/:teardownSlug", teardownController.getPublicTeardown);
 
 /*
+ * THE TEARDOWN ENGAGEMENT WRITES. Same shape as the showcase arm's, with `save` in place of
+ * `upvote` — `teardown_stats` carries `save_count` and no `upvote_count`, and the schema says so.
+ *
+ * ⚠️ THE BEACON HERE GATES ON READABLE, NOT ON ENGAGEABLE, which is the one place this arm differs.
+ * A quarantined teardown's page IS served, with its notice and its files withheld, so recording
+ * that it was opened is the honest record. Every other write below refuses a quarantined row:
+ * nothing new may be endorsed while a rights claim is unresolved. `blueprint-engagement-gate.ts`
+ * holds those two predicates apart and explains why they must not be merged.
+ */
+
+router.post(
+  "/teardowns/:teardownSlug/view-beacon",
+  attachOptionalUser,
+  blueprintViewBeaconBurstLimiter,
+  blueprintViewBeaconSustainedLimiter,
+  blueprintEngagementController.makeViewBeaconHandler("teardown", "teardownSlug"),
+);
+
+router.put(
+  "/teardowns/:teardownSlug/like",
+  requireAuth,
+  blueprintLikeLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("teardown", "like", "teardownSlug"),
+);
+router.delete(
+  "/teardowns/:teardownSlug/like",
+  requireAuth,
+  blueprintLikeLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("teardown", "like", "teardownSlug"),
+);
+
+router.put(
+  "/teardowns/:teardownSlug/save",
+  requireAuth,
+  blueprintSaveLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("teardown", "save", "teardownSlug"),
+);
+router.delete(
+  "/teardowns/:teardownSlug/save",
+  requireAuth,
+  blueprintSaveLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("teardown", "save", "teardownSlug"),
+);
+
+router.get(
+  "/teardowns/:teardownSlug/comments",
+  attachOptionalUser,
+  blueprintEngagementReadLimiter,
+  blueprintEngagementController.makeListCommentsHandler("teardown", "teardownSlug"),
+);
+router.post(
+  "/teardowns/:teardownSlug/comments",
+  requireAuth,
+  blueprintCommentCreateLimiter,
+  idempotency(),
+  requireIdentifiedUser,
+  compactBody,
+  blueprintEngagementController.makeCreateCommentHandler("teardown", "teardownSlug"),
+);
+
+/*
  * CASE STUDIES — the third arm, and the first with a write path on the backend. Four PUBLIC reads,
  * two writer routes and two moderator routes.
  *
@@ -292,6 +445,89 @@ router.get("/case-studies", caseStudyController.listPublicCaseStudies);
 
 /** GET /blueprints/case-studies/:caseStudySlug — one case study. DECLARED LAST of the reads. */
 router.get("/case-studies/:caseStudySlug", caseStudyController.getPublicCaseStudy);
+
+/*
+ * THE CASE-STUDY ENGAGEMENT WRITES — A BEACON AND A LIKE, AND NOTHING ELSE.
+ *
+ * ⚠️ NO COMMENTS, NO UPVOTE, NO SAVE, AND THE ABSENCE IS THE CONTRACT. `case_study_stats` has
+ * exactly two counters, and this arm "is a numbered lesson with no discussion surface". A route
+ * whose counter does not exist is the unverified code the field sweeps exist to catch — and the
+ * service refuses the verb outright rather than no-oping, so a client that tries gets told why.
+ */
+
+router.post(
+  "/case-studies/:caseStudySlug/view-beacon",
+  attachOptionalUser,
+  blueprintViewBeaconBurstLimiter,
+  blueprintViewBeaconSustainedLimiter,
+  blueprintEngagementController.makeViewBeaconHandler("case_study", "caseStudySlug"),
+);
+
+router.put(
+  "/case-studies/:caseStudySlug/like",
+  requireAuth,
+  blueprintLikeLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("case_study", "like", "caseStudySlug"),
+);
+router.delete(
+  "/case-studies/:caseStudySlug/like",
+  requireAuth,
+  blueprintLikeLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.makeToggleHandler("case_study", "like", "caseStudySlug"),
+);
+
+/*
+ * THE TWO CROSS-ARM ENGAGEMENT ROUTES.
+ *
+ * ⚠️ `/comments/:commentId` IS MOUNTED HERE RATHER THAN AT THE ROOT. A second root-mounted
+ * `/comments/:commentId` would collide with `engagement.routes.ts`'s `commentRouter` in `app.ts`.
+ * The service resolves the id with two primary-key lookups — showcase, then teardown — and
+ * collapses "no such comment" with "a comment under a blueprint you cannot see" into one 404.
+ *
+ * ⚠️ `/engagement/state` EXISTS SO THE PUBLIC READS CAN STAY BARE. Adding `viewerState` to them
+ * would make every one per-viewer, force a session resolve on a page's opening element, and destroy
+ * the cacheability that is the whole justification for their having no limiter.
+ */
+
+router.get(
+  "/engagement/state",
+  requireAuth,
+  blueprintEngagementReadLimiter,
+  blueprintEngagementController.getBlueprintViewerState,
+);
+
+router.patch(
+  "/comments/:commentId",
+  requireAuth,
+  blueprintCommentUpdateLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  blueprintEngagementController.updateBlueprintComment,
+);
+router.delete(
+  "/comments/:commentId",
+  requireAuth,
+  blueprintCommentUpdateLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.deleteBlueprintComment,
+);
+
+router.put(
+  "/comments/:commentId/like",
+  requireAuth,
+  blueprintCommentLikeLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.setBlueprintCommentLike,
+);
+router.delete(
+  "/comments/:commentId/like",
+  requireAuth,
+  blueprintCommentLikeLimiter,
+  requireIdentifiedUser,
+  blueprintEngagementController.setBlueprintCommentLike,
+);
 
 /** GET /blueprints/admin/case-studies/review-queue — `moderate_content`, oldest first. */
 router.get("/admin/case-studies/review-queue", requireAuth, caseStudyController.listReviewQueue);

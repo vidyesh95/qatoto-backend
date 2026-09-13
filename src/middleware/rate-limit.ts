@@ -1288,6 +1288,115 @@ export const teardownModerationLimiter = createLimiter({
 });
 
 // ---------------------------------------------------------------------------
+// BLUEPRINT ENGAGEMENT
+//
+// ⚠️ EVERY LIMITER HERE USES THE DEFAULT `userKey`, and on the beacon that makes
+// `attachOptionalUser` ORDER-CRITICAL. `userKey` prefers `req.user.id` and falls back to the IP,
+// so a limiter mounted BEFORE the optional-auth middleware drops every signed-in reader into the
+// shared NAT bucket alongside everyone else at their office. Same hazard the feed-engagement block
+// below records, same answer.
+//
+// ⚠️ AND THE BEACON IS NOT COVERED BY THE "PUBLIC READS ARE BARE" RULE. Every clause of that rule
+// is about a READ: identical payload, nothing to personalise, a limiter on a page's opening element
+// being a self-inflicted outage behind a CDN. A beacon inserts a row and moves a counter, its
+// response is not cacheable, and the page is already rendered by the time it fires.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /blueprints/<arm>/:slug/view-beacon — the BURST half.
+ *
+ * TIGHTER THAN THE VIDEO BEACON'S 60/min, and the difference is the shape of the signal. A player
+ * heartbeats every ~15 seconds, so that route has to tolerate sustained traffic from one honest
+ * tab; a blueprint beacon fires ONCE PER PAGE OPEN. 30/min is already ten times an honest reader
+ * clicking through an index.
+ *
+ * Declared FIRST so a burst violator's `Retry-After` names the minute rather than the hour.
+ */
+export const blueprintViewBeaconBurstLimiter = createLimiter({
+  namespace: "blueprintViewBeaconBurst",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * POST /blueprints/<arm>/:slug/view-beacon — the SUSTAINED half.
+ *
+ * TWO LIMITERS RATHER THAN ONE, because `LimiterSpec` carries a single window — the `/signup/start`
+ * stacking shape. Separate namespaces mean separate store prefixes, which is what keeps
+ * express-rate-limit's double-count guard quiet.
+ *
+ * The burst bound alone permits 1,800/hr. 200/hr is a reader opening a blueprint every eighteen
+ * seconds for an hour, which is already generous, and it is the bound that costs a farm something.
+ */
+export const blueprintViewBeaconSustainedLimiter = createLimiter({
+  namespace: "blueprintViewBeaconSustained",
+  windowMs: ONE_HOUR_MS,
+  limit: 200,
+});
+
+/** PUT|DELETE /blueprints/<arm>/:slug/like — the same budget as `videoLikeLimiter`. */
+export const blueprintLikeLimiter = createLimiter({
+  namespace: "blueprintLike",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
+ * PUT|DELETE /blueprints/showcases/:launchSlug/upvote.
+ *
+ * ⚠️ ITS OWN NAMESPACE RATHER THAN SHARING THE LIKE'S, even though the budget matches. An upvote
+ * is the leading key of `showcase_launch_stats_top_idx` and therefore RANKS the feed's `top` page;
+ * a like ranks nothing. Sharing a bucket would let upvote abuse hide inside ordinary like traffic.
+ */
+export const blueprintUpvoteLimiter = createLimiter({
+  namespace: "blueprintUpvote",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/** PUT|DELETE /blueprints/teardowns/:teardownSlug/save — matches `videoSaveLimiter`. */
+export const blueprintSaveLimiter = createLimiter({
+  namespace: "blueprintSave",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/** POST /blueprints/<arm>/:slug/comments — `commentCreateLimiter`'s budget. */
+export const blueprintCommentCreateLimiter = createLimiter({
+  namespace: "blueprintCommentCreate",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
+/** PATCH|DELETE /blueprints/comments/:commentId — one limiter serving both verbs. */
+export const blueprintCommentUpdateLimiter = createLimiter({
+  namespace: "blueprintCommentUpdate",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/** PUT|DELETE /blueprints/comments/:commentId/like. */
+export const blueprintCommentLikeLimiter = createLimiter({
+  namespace: "blueprintCommentLike",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
+ * GET /blueprints/<arm>/:slug/comments, and GET /blueprints/engagement/state.
+ *
+ * ⚠️ A LIMITER ON A READ, WHICH THE BARE-READS RULE OTHERWISE FORBIDS — and `feedReadLimiter`
+ * states the same exception for the same reason. These two responses carry `viewerState`, so they
+ * are PER-VIEWER: no cache absorbs them, they run real joins, and there is a session to key on
+ * rather than only an IP. 300/min is set so a large NAT never reaches it and a scraper does.
+ */
+export const blueprintEngagementReadLimiter = createLimiter({
+  namespace: "blueprintEngagementRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 300,
+});
+
+// ---------------------------------------------------------------------------
 // HOME FEED ENGAGEMENT (HOME_BACKEND_STRUCTURE.md §7)
 //
 // EVERY LIMITER BELOW USES THE DEFAULT `userKey`, including the ones on optional-auth
