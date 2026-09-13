@@ -2105,10 +2105,18 @@ export const showcaseLaunch = pgTable(
     /**
      * A NAME IS TAKEN WHILE IT IS IN REVIEW OR LIVE, NOT AFTER A REJECTION — so a maker who was
      * sent back can post again under the same name.
+     *
+     * ⚠️ `flagged` IS IN THIS PREDICATE, and it is the one of the three that nobody looks for. A
+     * flagged launch WAS published, keeps its `public_slug` and its address still answers — so its
+     * title is still live, and freeing it would let a second row claim a name a reader can reach.
+     * `case_study_title_live_uidx` reached the same conclusion first; this is its sentence.
+     *
+     * The duplicate pre-check in `showcase-launch.service.ts` runs this same three-state list. If
+     * the two ever disagree the pre-check passes and the index raises 23505 at insert.
      */
     uniqueIndex("showcase_launch_title_live_uidx")
       .on(table.titleNormalized)
-      .where(sql`moderation_state IN ('pending_review', 'published')`),
+      .where(sql`moderation_state IN ('pending_review', 'published', 'flagged')`),
     // My Launches, newest first.
     /**
      * ⚠️ THE REVERSE LOOKUP FOR THE TEARDOWN MARKET SIGNAL — "which launches were built from this
@@ -2117,10 +2125,18 @@ export const showcaseLaunch = pgTable(
      *
      * Partial on both conditions the query carries, because a launch with no
      * `built_from_blueprint_slug` can never match and most of them have none.
+     *
+     * ⚠️ THIS PREDICATE AND `teardown-market-signal.service.ts`'s WHERE CLAUSE MUST CHANGE
+     * TOGETHER. Partial-index matching is textual about the predicate's satisfiability: widen one
+     * to `IN ('published', 'flagged')` and leave the other on `= 'published'`, and Postgres simply
+     * stops using the index. Nothing fails — the query just gets slower, silently, which is the
+     * worst way for these two to drift.
      */
     index("showcase_launch_built_from_idx")
       .on(table.builtFromBlueprintSlug, desc(table.launchedAt), table.id)
-      .where(sql`moderation_state = 'published' AND built_from_blueprint_slug IS NOT NULL`),
+      .where(
+        sql`moderation_state IN ('published', 'flagged') AND built_from_blueprint_slug IS NOT NULL`,
+      ),
     index("showcase_launch_author_idx").on(table.authorUserId, table.createdAt, table.id),
     // The review queue, oldest first. Partial, because a decided launch never re-enters it.
     index("showcase_launch_review_queue_idx")
@@ -2134,19 +2150,30 @@ export const showcaseLaunch = pgTable(
      * walk an index for an ORDER BY whose directions match it pair for pair, so a plain
      * `(launched_at, id)` index would be ignored and the feed would sort in memory.
      *
-     * Partial on `published`: nothing else is ever public, and keeping drafts and rejected rows out
-     * keeps the index the size of the readable set rather than the size of the table.
+     * Partial on the PUBLICLY VISIBLE set — `published` and `flagged` — not on `published` alone.
+     * Keeping drafts and rejected rows out still keeps the index the size of the readable set
+     * rather than the size of the table.
+     *
+     * ⚠️ `flagged` IS IN THE FEED, AND THAT IS THE POINT OF THE LABEL. A flag marks a row for the
+     * report queue and stops it accruing new engagement; it changes NOTHING a visitor sees. The
+     * alternative — hiding the row — would make filing a report a way to take somebody's work down
+     * before a human read the complaint, which is the brigading outcome §10.1 refuses. This
+     * predicate and `publiclyVisibleLaunchCondition()` are one rule in two places.
      *
      * The `top` page has no index here on purpose — its leading key is `upvote_count`, which lives
      * in `showcase_launch_stats`, and no single index spans two tables.
      */
     index("showcase_launch_public_newest_idx")
       .on(desc(table.launchedAt), table.id)
-      .where(sql`moderation_state = 'published'`),
+      .where(sql`moderation_state IN ('published', 'flagged')`),
 
+    /**
+     * Four states, and `quarantined` is deliberately not the fifth — see the moderation block
+     * comment further down this file for why a showcase has nothing a quarantine could withhold.
+     */
     check(
       "showcase_launch_moderation_state_ck",
-      sql`moderation_state IN ('pending_review', 'published', 'rejected')`,
+      sql`moderation_state IN ('pending_review', 'published', 'rejected', 'flagged')`,
     ),
     check(
       "showcase_launch_text_lengths_ck",
@@ -2244,7 +2271,17 @@ export const showcaseLaunch = pgTable(
     /**
      * THE DECISION COLUMNS MOVE TOGETHER. A launch in review has no reviewer, no decision time and
      * no note; a decided one has a reviewer and a time; a rejection carries its reason; and a
-     * launch has a public address exactly when it is published.
+     * launch has a public address exactly when a reader can reach it.
+     *
+     * ⚠️ THE LAST CLAUSE IS `IN ('published', 'flagged')`, NOT `= 'published'`, AND THAT IS THE
+     * WHOLE REASON FLAGGING IS A FEATURE RATHER THAN AN ENUM VALUE. Spelled the old way, moving a
+     * row to `flagged` would have forced `public_slug` to NULL — silently un-addressing a live
+     * page as a side effect of marking it for review, and losing the slug forever, since nothing
+     * remembers it. A flag must leave the address alone; that is what makes `restore` a real
+     * inverse rather than a re-publication under a new name.
+     *
+     * Spelled `(public_slug IS NOT NULL) = (moderation_state IN (...))` to match
+     * `case_study_decision_ck`, so the two arms' constraints read alike.
      */
     check(
       "showcase_launch_decision_ck",
@@ -2252,7 +2289,7 @@ export const showcaseLaunch = pgTable(
           AND (reviewed_at IS NULL) = (reviewed_by_user_id IS NULL)
           AND (moderation_state <> 'pending_review' OR moderator_note IS NULL)
           AND (moderation_state <> 'rejected' OR moderator_note IS NOT NULL)
-          AND (moderation_state = 'published') = (public_slug IS NOT NULL)`,
+          AND (public_slug IS NOT NULL) = (moderation_state IN ('published', 'flagged'))`,
     ),
     check(
       "showcase_launch_moderator_note_ck",
@@ -3761,6 +3798,9 @@ export const blueprintModerationAction = pgTable(
     /** `set null`: the decision outlives the row it was about. */
     teardownId: text("teardown_id").references(() => teardown.id, { onDelete: "set null" }),
     caseStudyId: text("case_study_id").references(() => caseStudy.id, { onDelete: "set null" }),
+    showcaseLaunchId: text("showcase_launch_id").references(() => showcaseLaunch.id, {
+      onDelete: "set null",
+    }),
     /** `restrict`: a moderation decision stays attributable for as long as it exists. */
     moderatorUserId: text("moderator_user_id")
       .notNull()
@@ -3792,23 +3832,35 @@ export const blueprintModerationAction = pgTable(
     index("blueprint_moderation_action_case_study_idx")
       .on(table.caseStudyId, table.createdAt)
       .where(sql`case_study_id IS NOT NULL`),
+    index("blueprint_moderation_action_showcase_idx")
+      .on(table.showcaseLaunchId, table.createdAt)
+      .where(sql`showcase_launch_id IS NOT NULL`),
     /**
-     * ⚠️ `<= 1`, NOT `= 1`, AND THE DIFFERENCE IS DELIBERATE. Both target columns are `set null`,
-     * so a decision whose subject was later deleted ends with NO target at all — and `target_kind`
-     * is what still records which kind it was. `blueprint_content_report` uses `= 1` because its
-     * targets CASCADE, so a targetless report cannot exist. Two tables, two correct answers.
+     * ⚠️ `<= 1`, NOT `= 1`, AND THE DIFFERENCE IS DELIBERATE. All three target columns are
+     * `set null`, so a decision whose subject was later deleted ends with NO target at all — and
+     * `target_kind` is what still records which kind it was. `blueprint_content_report` uses `= 1`
+     * because its targets CASCADE, so a targetless report cannot exist. Two tables, two correct
+     * answers.
      */
     check(
       "blueprint_moderation_action_target_ck",
-      sql`num_nonnulls(teardown_id, case_study_id) <= 1
+      sql`num_nonnulls(teardown_id, case_study_id, showcase_launch_id) <= 1
           AND (teardown_id IS NULL OR target_kind = 'teardown')
-          AND (case_study_id IS NULL OR target_kind = 'case_study')`,
+          AND (case_study_id IS NULL OR target_kind = 'case_study')
+          AND (showcase_launch_id IS NULL OR target_kind = 'showcase')`,
     ),
     check("blueprint_moderation_action_note_ck", sql`char_length(reason_note) BETWEEN 1 AND 2000`),
     /**
      * ⚠️ THE SQL-LEVEL STATEMENT THAT QUARANTINE IS TEARDOWN-ONLY. `case_study_moderation_state_ck`
-     * refuses the `quarantined` state on that arm — a case study has no files to withhold — but
-     * nothing else would stop a LOG entry claiming one happened. This does.
+     * and `showcase_launch_moderation_state_ck` both refuse the `quarantined` state on their arms —
+     * a case study has no files to withhold, and a showcase's are its own maker's — but nothing
+     * else would stop a LOG entry claiming one happened. This does.
+     *
+     * ⚠️ THE LINE IS UNCHANGED AND NOW SAYS MORE THAN IT DID. Written when `target_kind` had two
+     * values, it read as a statement about case studies. With three it is the general rule —
+     * quarantine is teardown-only, full stop — and it will keep refusing a fourth arm by default
+     * rather than needing to be remembered. That is the shape to preserve if an arm is ever added:
+     * name the arm that MAY, never the arms that may not.
      */
     check(
       "blueprint_moderation_action_quarantine_arm_ck",
@@ -3846,9 +3898,12 @@ export const blueprintContentReport = pgTable(
       .primaryKey()
       .$defaultFn(() => randomUUID()),
     targetKind: blueprintContentTargetKindEnum("target_kind").notNull(),
-    /** `cascade` on both: a report about a deleted blueprint is noise. */
+    /** `cascade` on all three: a report about a deleted blueprint is noise. */
     teardownId: text("teardown_id").references(() => teardown.id, { onDelete: "cascade" }),
     caseStudyId: text("case_study_id").references(() => caseStudy.id, { onDelete: "cascade" }),
+    showcaseLaunchId: text("showcase_launch_id").references(() => showcaseLaunch.id, {
+      onDelete: "cascade",
+    }),
     reason: blueprintContentReportReasonEnum("reason").notNull(),
     /** The one free-text field, and it lives here BECAUSE an erasure can reach it. */
     detailText: text("detail_text"),
@@ -3878,6 +3933,9 @@ export const blueprintContentReport = pgTable(
     uniqueIndex("blueprint_content_report_case_study_reporter_uidx")
       .on(table.caseStudyId, table.reporterUserId)
       .where(sql`case_study_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    uniqueIndex("blueprint_content_report_showcase_reporter_uidx")
+      .on(table.showcaseLaunchId, table.reporterUserId)
+      .where(sql`showcase_launch_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
     /** The queue, oldest first: the report that has waited longest is the one owed an answer. */
     index("blueprint_content_report_queue_idx").on(table.status, table.createdAt, table.id),
     index("blueprint_content_report_target_idx").on(
@@ -3894,9 +3952,10 @@ export const blueprintContentReport = pgTable(
      */
     check(
       "blueprint_content_report_target_ck",
-      sql`num_nonnulls(teardown_id, case_study_id) = 1
+      sql`num_nonnulls(teardown_id, case_study_id, showcase_launch_id) = 1
           AND (target_kind = 'teardown') = (teardown_id IS NOT NULL)
-          AND (target_kind = 'case_study') = (case_study_id IS NOT NULL)`,
+          AND (target_kind = 'case_study') = (case_study_id IS NOT NULL)
+          AND (target_kind = 'showcase') = (showcase_launch_id IS NOT NULL)`,
     ),
     check(
       "blueprint_content_report_detail_ck",

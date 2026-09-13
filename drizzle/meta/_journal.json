@@ -1317,6 +1317,13 @@
       "when": 1789302464215,
       "tag": "0187_futuristic_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 188,
+      "version": "7",
+      "when": 1789302607658,
+      "tag": "0188_damp_professor_monster",
+      "breakpoints": true
     }
   ]
 }
