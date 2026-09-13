@@ -30,7 +30,7 @@ review queue are untouched. Read every `/anime` name in the schema as historical
 | Arm | Public reads | Author writes | Staff moderation | Where the rows come from |
 | --- | --- | --- | --- | --- |
 | Hero carousel | 1 | — | 6 | `pnpm db:seed-blueprint-hero-slides` re-points four seeded rows |
-| Showcase launches | 3 | 3 | 2 | authored |
+| Showcase launches | 3 | 3 | 3 | authored |
 | Case studies | 4 | 2 | 2 | authored + `pnpm db:seed-blueprint-case-studies` (10) |
 | Teardowns | 5 | 2 | 2 | authored + `pnpm db:seed-blueprint-teardowns` (12) |
 
@@ -70,9 +70,12 @@ not decide it — but what a rights claim disputes is the SURVEY, and a parts li
 findings about somebody else's product in the plainest form it takes. Withholding the composition
 table while publishing the parts it describes would be a distinction nobody could defend.
 
-The case-study arm has **one** gate (`published`, `flagged`) and copying the teardown shape there
-would be the more expensive mistake: a case study has no files, and a report moves a published row to
-`flagged`, full stop. What that arm withholds instead is one FIELD, by a per-row flag — see §6.
+The case-study and showcase arms each have **one** gate (`published`, `flagged`) and copying the
+teardown shape to either would be the more expensive mistake: neither has a quarantine, so a report
+moves a published row to `flagged`, full stop. What the case-study arm withholds instead is one
+FIELD, by a per-row flag — see §6. The showcase arm withholds nothing: a flag there marks the row for
+the queue and stops it accruing engagement, and the page goes on answering. §9.3 has the reasoning
+for why quarantine does not reach that arm despite it genuinely hosting files.
 
 ---
 
@@ -308,13 +311,13 @@ sentinel and sweeping raw response bytes.
 ```bash
 pnpm db:verify-teardown-constraints        # 94 assertions in one rolled-back transaction
 pnpm db:verify-case-study-constraints      # 46
-pnpm db:verify-showcase-launch-constraints # 91
+pnpm db:verify-showcase-launch-constraints # 103
 pnpm db:verify-blueprint-hero-constraints  # 27
 pnpm db:verify-blueprint-engagement-constraints # 33
 pnpm db:reconcile-blueprint-stats          # counter drift; -- --fix repairs
 pnpm db:smoke-teardown-authoring           # submit → duplicate refusal → publish → public read
 pnpm db:smoke-case-study-authoring         # 16, and a byte sweep for the withheld company name
-pnpm db:smoke-showcase-authoring           # 20, upload-before-submit and the stats tripwire
+pnpm db:smoke-showcase-authoring           # 28, upload-before-submit, the stats tripwire, and the flag walk
 pnpm db:smoke-blueprint-hero               # 19, AVIF and the seeded site-relative arm
 pnpm db:seed-blueprint-teardowns           # the import schema is unchanged by the write path
 pnpm gate                                  # specifiers, typecheck ×3, fmt:check, lint, test
@@ -386,6 +389,7 @@ rather than deleted, because the reasoning is what stops each one being re-intro
 ```
 POST /blueprints/admin/teardowns/:teardownId/moderation-state
 POST /blueprints/admin/case-studies/:caseStudyId/moderation-state
+POST /blueprints/admin/showcases/:launchId/moderation-state
 ```
 
 ### 9.1 A different object from `/:submissionId/moderate`
@@ -393,6 +397,14 @@ POST /blueprints/admin/case-studies/:caseStudyId/moderation-state
 That route decides a SUBMISSION — publish it or send it back. These move a row that is **already
 public**, and on the teardown arm that is literally a different table with a different id. The path
 parameter is named `:teardownId`, never `:submissionId`, so the two cannot be confused in code.
+
+⚠️ **ON THE SHOWCASE ARM THE TWO IDS ARE THE SAME ID, and the param is still named `:launchId`.**
+`showcase_launch` is both the paperwork and the published row, so `/:submissionId/moderate` and
+`/:launchId/moderation-state` really do select the same record — the qualifier this paragraph needs.
+The name still earns its place, because what it records is which ACT is being performed rather than
+which table is being hit: one decides a launch awaiting review, the other moves one that is already
+public, and their verb vocabularies are disjoint. Naming it `:submissionId` here would make two
+routes that share nothing but a row look interchangeable.
 
 ⚠️ **Id-addressed, which is the opposite of the engagement routes, and the split is principled.** A
 reader is standing on a public page and the slug is the only handle they have; a moderator is
@@ -411,7 +423,9 @@ re-states one.
 | `quarantined` | **refuse** | refuse (already) | → `published` |
 | `pending_review` | refuse | refuse | refuse |
 
-Case studies: the same, minus every quarantine cell.
+Case studies **and showcase launches**: the same, minus every quarantine cell. The two arms reach
+that shape for different reasons — see §9.3 — which is why `resolveBlueprintTransition` spells the
+guard `arm !== "teardown"` rather than naming the arms that are excluded.
 
 ⚠️ **`quarantined → flagged` is refused, not quietly allowed.** A quarantine withholds a publisher's
 files under an unresolved rights claim; downgrading to a flag **republishes them**. That is a
@@ -425,15 +439,57 @@ never public.
 `case_study_moderation_state_ck` has no such label, the matrix returns `not_available_on_arm`, and
 `blueprint_moderation_action_quarantine_arm_ck` refuses a LOG entry claiming one happened.
 
-### 9.3 What is not built, and why
+### 9.3 The showcase arm, and what it still does not get
 
-⚠️ **No showcase arm at all.** `showcase_launch_moderation_state_ck` admits
-`pending_review | published | rejected` and the public feed gate is a bare `eq(published)`. Adding
-the verbs there is a CHECK widening, a gate rewrite, `flagged` added to two partial index
-predicates, and a fix to `showcase_launch_decision_ck` so flagging does not strip the public slug —
-a feature, not an enum value. `blueprint_content_target_kind` therefore has two values, and
-`verify-showcase-launch-constraints` asserts `flagged` and `quarantined` are still *refused* there,
-with a comment saying the refusal is a decision.
+~~**No showcase arm at all.**~~ **THE FLAG AND RESTORE VERBS LANDED — and the bullet is kept struck
+through rather than deleted, because it priced the work correctly and that pricing is the reason it
+waited.** It read: *"Adding the verbs there is a CHECK widening, a gate rewrite, `flagged` added to
+two partial index predicates, and a fix to `showcase_launch_decision_ck` so flagging does not strip
+the public slug — a feature, not an enum value."* All of that was true, and all of it was done.
+
+⚠️ **IT WAS THREE PARTIAL INDEX PREDICATES, NOT TWO.** The bullet counted the two the public feed
+reads — `showcase_launch_public_newest_idx` and `showcase_launch_built_from_idx` — and missed
+`showcase_launch_title_live_uidx`, which is the one nobody looks for. A flagged launch was published,
+keeps its `public_slug` and still answers at its address, so its **title is still live**; leaving it
+out of that predicate would free the name for a second row while a reader could still reach the
+first. `case_study_title_live_uidx` had already reached that conclusion on its own arm.
+
+⚠️ **`showcase_launch_built_from_idx` HAS EXACTLY ONE CALLER, IN ANOTHER MODULE.**
+`teardown-market-signal.service.ts` is it, and the index predicate and that query must be widened
+together. The failure when they disagree is silent: nothing errors, Postgres just stops using the
+index.
+
+⚠️ **`quarantine` IS STILL REFUSED ON THIS ARM, AND NOT BY COPYING THE CASE-STUDY RULE.** That arm's
+reason is that a case study has no files. A showcase *has* files — a heading image, write-up images
+— so the rule does not transfer, and the refusal rests on two other grounds:
+
+1. **There is no representable withheld state.** `heading_image_url` is NOT NULL, and by the exact
+   analogy `withheldPayload()` draws for a teardown's `thumbnailUrl` — kept, because the header
+   renders an unconditional image — it would survive a quarantine. Withholding only the write-up
+   images leaves a Markdown body full of dead `![]()` references, which is a broken page rather than
+   a redaction. A showcase quarantine would have to withhold the whole row, and that is `rejected`.
+2. **The third-party failure mode is structurally absent.** A teardown surveys *somebody else's*
+   shipped product, which is why a stranger's rights claim is its expected failure.
+   `showcase_launch_statements_ck` pins a launch to `built_it_ourselves` and `results_are_our_own`,
+   so a rights claim against one alleges the maker **lied on that attestation** — a fraud finding,
+   answered by `flag` then `reject`, not a withholding pending somebody else's dispute.
+
+`blueprint_content_target_kind` therefore has **three** values, and
+`verify-showcase-launch-constraints` now asserts `flagged` is *accepted* and `quarantined` is still
+*refused*, each with its reasoning in place.
+
+⚠️ **`blueprint_moderation_action_quarantine_arm_ck` IS UNCHANGED AND NOW SAYS MORE THAN IT DID.**
+Written when `target_kind` had two values it read as a statement about case studies; with three it is
+the general rule — quarantine is teardown-only, full stop — and it refuses a fourth arm by default.
+Naming the arm that MAY, rather than the arms that may not, is the shape to preserve.
+
+⚠️ **THE COMPILER DOES NOT CATCH A NEW ARM, AND THIS IS THE LESSON WORTH KEEPING.** Widening
+`BlueprintModerationArm` from two values to three produced **zero** type errors, because every
+arm-shaped branch was a binary ternary: `arm === "teardown" ? a : b` keeps compiling and silently
+routes the new arm down the `b` branch — which, in `applyVerb`, means locking, narrowing and
+UPDATING the wrong row in the wrong table. Seven such sites were found by grep rather than by `tsc`.
+Every one is now a `switch` with a `never` default, so a fourth arm is a build failure. Anywhere on
+this surface that an arm decides between two things, the ternary is the bug waiting to happen.
 
 ### 9.4 Where the note lives, and where it must not
 
@@ -466,6 +522,7 @@ anywhere. The alternative is a second state machine writing back into the paperw
 ```
 POST /blueprints/teardowns/:teardownSlug/reports
 POST /blueprints/case-studies/:caseStudySlug/reports
+POST /blueprints/showcases/:launchSlug/reports
 GET  /blueprints/reports/mine
 GET  /blueprints/admin/content-reports              moderate_content, oldest first
 POST /blueprints/admin/content-reports/:reportId/dismiss

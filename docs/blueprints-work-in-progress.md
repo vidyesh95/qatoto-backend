@@ -13,12 +13,12 @@ Every API client in `qatoto-frontend/src/lib/blueprints/` maps to an active Expr
 | Arm | Public Reads | Author Writes | Engagement | Moderation / Staff |
 | :--- | :--- | :--- | :--- | :--- |
 | **Hero Carousel** | `GET /hero-slides` | — | — | Full CRUD + atomic reordering (`/admin/hero-slides/*`) |
-| **Showcase Launches** | Feed (`/showcases`), slugs (`/slugs`), detail (`/:launchSlug`) | Multipart submit (`POST /showcases`), write-up image uploads, `/mine` | View beacons, likes, upvotes, threaded comments with likes | Review queue & publish/reject (`/admin/showcases/*`) |
+| **Showcase Launches** | Feed (`/showcases`), slugs (`/slugs`), detail (`/:launchSlug`) | Multipart submit (`POST /showcases`), write-up image uploads, `/mine` | View beacons, likes, upvotes, threaded comments with likes | Review queue & publish/reject, reader reports, plus `flag` / `restore` (`/admin/showcases/*`) |
 | **Case Studies** | Index (`/case-studies`), slugs, options, detail (`/:caseStudySlug`) | JSON submit (`POST /case-studies`), cursor-paged `/mine` | View beacons, likes | Review queue (with withheld company reveal) + flag/restore |
 | **Teardowns** | Index (`/teardowns`), options, slugs, detail, claim targets, market signal | Submission intake (`POST /teardowns`), `/mine` | View beacons, likes, saves, threaded comments with likes | Review queue + flag, quarantine, and restore verbs |
 | **Cross-arm** | `/engagement/state` | — | `/comments/:commentId` (edit/delete/like) | `/admin/content-reports` (reader report queue + dismissal) |
 
-All 29 backend test suites (752 tests), 5 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly.
+All 30 backend blueprint test suites (766 tests), 5 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly. The full project gate is 205 files / 3985 tests.
 
 ---
 
@@ -30,9 +30,17 @@ If you are planning the next phase of capabilities, the following features are n
 - **Current State:** The authoring wizard (`POST /blueprints/teardowns`) collects part listings ([`teardown_part_listing`](file:///Users/vinitchuri/code/backend/qatoto-backend/src/db/schema/home.ts)), document links, and manufacturing files.
 - **What's Missing:** The interactive 3D explode/layer viewer tables ([`teardown_assembly`](file:///Users/vinitchuri/code/backend/qatoto-backend/src/db/schema/home.ts), `teardown_part`, `teardown_assembly_step`, `teardown_fastener`) can currently only be created via database seeds (`pnpm db:seed-blueprint-teardowns`). There is no user submission schema or endpoint to upload `.glb` models or configure 3D exploded assemblies.
 
-### B. Reader Reports and Post-Publish Moderation on Showcase Launches
-- **Current State:** Teardowns and Case Studies have reader reporting (`POST /reports`) and post-publish moderation verbs (`flag`, `quarantine`, `restore`).
-- **What's Missing:** `showcase_launch` only supports `pending_review`, `published`, and `rejected`. There are currently no endpoints for readers to report a showcase launch, nor for moderators to flag or quarantine a live showcase.
+### ~~B. Reader Reports and Post-Publish Moderation on Showcase Launches~~ — **DONE**
+- **Landed:** `showcase_launch` now admits `flagged`, readers can report a launch
+  (`POST /blueprints/showcases/:launchSlug/reports`), and moderators can `flag` / `restore` it
+  (`POST /blueprints/admin/showcases/:launchId/moderation-state`).
+- ⚠️ **`quarantine` is still refused on this arm, deliberately.** Not because a showcase has no files
+  — it has a heading image and write-up images — but because they are the maker's *own* by
+  attestation, and because `heading_image_url` is NOT NULL so there is no representable withheld
+  state. See `BLUEPRINTS_BACKEND_STRUCTURE.md` §9.3.
+- ⚠️ **A flag does not hide anything.** The page still answers, the row stays in the feed, and the
+  public slug survives; what a flag changes is that the launch stops accruing new engagement and
+  appears in the report queue. Hiding it would make filing a report a takedown.
 
 ### C. Direct File Uploads for Teardown Documents & Fabrication Files
 - **Current State:** Showcases and Hero slides support direct multipart image uploads to Cloudinary.
