@@ -60,6 +60,18 @@ type CountRow = {
 };
 
 /** The snapshot tables that age out. Named explicitly rather than discovered. */
+/**
+ * The three blueprint view-session tables, pruned on the same window as `video_view_session`.
+ *
+ * Listed rather than derived, and named as literals, because `sql.identifier` takes a string and a
+ * derived list would make it possible to interpolate one that is not a table here.
+ */
+const PRUNABLE_BLUEPRINT_SESSION_TABLES = [
+  "showcase_launch_view_session",
+  "teardown_view_session",
+  "case_study_view_session",
+] as const;
+
 const PRUNABLE_SNAPSHOT_TABLES = [
   "video_quality_score_snapshot",
   "user_topic_affinity_snapshot",
@@ -97,6 +109,35 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
     await db.execute(sql`
       DELETE FROM video_view_session WHERE first_beacon_at < ${utcTimestamp(sessionCutoff)}
     `);
+  }
+
+  /*
+   * --- 1b. Expired BLUEPRINT view sessions.
+   *
+   * ⚠️ WITHOUT THIS PHASE THE FINGERPRINT'S OWN DEFENCE IS FALSE HERE. `viewer-fingerprint.ts`
+   * describes what it stores as "a per-day bucket key with a 90-day life, not an identity" — the
+   * 90-day life is this job, and a table it does not visit keeps those keys forever.
+   *
+   * Same cutoff and same gate as the video sessions above; the column is `first_seen_at` rather
+   * than `first_beacon_at`, because a blueprint session has no second beacon to record.
+   */
+  const blueprintSessionCounts: Record<string, number> = {};
+  for (const tableName of PRUNABLE_BLUEPRINT_SESSION_TABLES) {
+    const [expired] = (
+      await db.execute<CountRow>(sql`
+        SELECT count(*)::int AS affected_count
+        FROM ${sql.identifier(tableName)}
+        WHERE first_seen_at < ${utcTimestamp(sessionCutoff)}
+      `)
+    ).rows;
+    const expiredCount = expired?.affected_count ?? 0;
+    blueprintSessionCounts[tableName] = expiredCount;
+
+    if (isEnabled && expiredCount > 0) {
+      await db.execute(sql`
+        DELETE FROM ${sql.identifier(tableName)} WHERE first_seen_at < ${utcTimestamp(sessionCutoff)}
+      `);
+    }
   }
 
   // --- 2. Expired snapshots, one table at a time so a partial failure is legible.
@@ -224,6 +265,7 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
       activityHourCutoffDate,
       watchRollupCutoffDate,
       expiredSessionCount,
+      expiredBlueprintSessionCounts: blueprintSessionCounts,
       expiredSnapshotCounts: snapshotCounts,
       outlierSessionCount,
       expiredWatchRetentionCounts: watchRetentionCounts,

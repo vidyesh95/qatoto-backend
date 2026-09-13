@@ -164,6 +164,39 @@ export function planFreeTextSteps(userId: string): readonly StepPlan[] {
     },
     {
       /**
+       * THE TWO BLUEPRINT COMMENT ARMS, AND THEY WORK EXACTLY AS `video_comment` DOES ABOVE —
+       * `showcase_launch_comment_body_ck` and `teardown_comment_body_ck` each permit a body only
+       * while `is_deleted` is false and demand the empty string once it is true, so the text
+       * genuinely leaves the table.
+       *
+       * ⚠️ ORDER IS LOAD-BEARING, AND THIS FILE'S OWN DOCBLOCK SAYS WHY: the manifest's `null_out`
+       * on `author_user_id` severs the only link back to this person's comments, so anything
+       * needing that link must run FIRST. `showcase_launch_comment_author_idx` exists for this
+       * query and nothing else.
+       *
+       * ⚠️ THE CASE-STUDY ARM HAS NO STEP HERE AND THAT IS NOT AN OMISSION. It has no comment
+       * table: `case_study_stats` carries two counters, and the arm is a numbered lesson with no
+       * discussion surface.
+       */
+      stepName: "tombstone:showcase_launch_comment",
+      tableName: "showcase_launch_comment",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM showcase_launch_comment
+                    WHERE author_user_id = ${userId} AND is_deleted = false`,
+      applySql: sql`UPDATE showcase_launch_comment
+                    SET is_deleted = true, deleted_at = now(), body_text = ''
+                    WHERE author_user_id = ${userId} AND is_deleted = false`,
+    },
+    {
+      stepName: "tombstone:teardown_comment",
+      tableName: "teardown_comment",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM teardown_comment
+                    WHERE author_user_id = ${userId} AND is_deleted = false`,
+      applySql: sql`UPDATE teardown_comment
+                    SET is_deleted = true, deleted_at = now(), body_text = ''
+                    WHERE author_user_id = ${userId} AND is_deleted = false`,
+    },
+    {
+      /**
        * `community_forum_reply` HAS NO TOMBSTONE, and cannot be given one from a job.
        * `body` is NOT NULL with `char_length BETWEEN 2 AND 10000`, so it cannot be
        * emptied; and its `hidden` state is paired by CHECK with a `hidden_by_user_id`

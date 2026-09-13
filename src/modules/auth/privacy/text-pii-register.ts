@@ -164,6 +164,22 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
     stepName: "tombstone:video_comment",
     note: "Emptied. `video_comment_body_ck` demands the empty string once `is_deleted` is true, so the text genuinely leaves the table rather than being hidden by a rendering convention.",
   },
+  /*
+   * ⚠️ NEITHER OF THESE MATCHES `PERSON_SHAPED_COLUMN_PATTERN`, and they are registered anyway —
+   * for the reason `user.location_label`'s note gives: a column is here because the scrub WRITES
+   * it, not because it looked like a name. Check 3 then binds each `stepName` to a step the job
+   * really plans, and check 6 proves the statement executes against a real Postgres.
+   */
+  "showcase_launch_comment.body_text": {
+    kind: "scrub",
+    stepName: "tombstone:showcase_launch_comment",
+    note: "Emptied. `showcase_launch_comment_body_ck` demands the empty string once `is_deleted` is true, so the text genuinely leaves the table rather than being hidden by a rendering convention.",
+  },
+  "teardown_comment.body_text": {
+    kind: "scrub",
+    stepName: "tombstone:teardown_comment",
+    note: "Emptied. `teardown_comment_body_ck` demands the empty string once `is_deleted` is true, so the text genuinely leaves the table rather than being hidden by a rendering convention.",
+  },
   "community_forum_reply.body": {
     kind: "scrub",
     stepName: "tombstone:community_forum_reply",

@@ -619,6 +619,23 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
      * applied to the same kind of content written through the same kind of route.
      */
     "case_study.author_user_id": { kind: "delete_rows" },
+    /*
+     * ⚠️ THE BLUEPRINT ENGAGEMENT ROWS, AND THE ONE THING THEY ALL SHARE: ERASING THEM DRIFTS A
+     * COUNTER, AND NOTHING HERE REPAIRS IT.
+     *
+     * A `delete_rows` step is raw SQL with no counter update, so removing an account's likes leaves
+     * `like_count` high on every row they touched. That is inherited from the video path, which has
+     * the same property — but inheriting it silently would be the mistake. `db:reconcile-blueprint-stats --fix`
+     * is the designated repair, exactly the relationship `reconcile-creator-stats.ts` documents for
+     * `published_video_count`.
+     *
+     * ⚠️ AND WHY THE VIEW SESSIONS ARE `null_out` RATHER THAN `delete_rows`. `view_count` was already
+     * incremented and cannot be walked back, so DELETING the row REOPENS the replay window the
+     * unique index exists to close: remove the row, revisit the same day, increment again. The
+     * disposition is also the only one the column permits — the FK is `set null`.
+     */
+    "case_study_like.user_id": { kind: "delete_rows" },
+    "case_study_view_session.viewer_user_id": { kind: "null_out" },
     "case_study.reviewed_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",
@@ -634,6 +651,21 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
     },
     "showcase_launch_write_up_image.uploaded_by_user_id": { kind: "delete_rows" },
+    /*
+     * The comment author is `null_out` and NOT `delete_rows`, unlike the like and the upvote:
+     * closing an account must not erase a thread other people replied to, and a NULL author renders
+     * as "deleted user", which is a true statement.
+     *
+     * ⚠️ THE COMMENT TEXT IS NOT HANDLED HERE. `body_text` is free text, so it belongs to
+     * `text-pii-register.ts` and to a tombstone step in `anonymize-account.service.ts` that runs
+     * BEFORE this column is severed — once the author link is NULL there is no way left to find
+     * this person's comments. `showcase_launch_comment_author_idx` exists for that query.
+     */
+    "showcase_launch_comment.author_user_id": { kind: "null_out" },
+    "showcase_launch_comment_like.user_id": { kind: "delete_rows" },
+    "showcase_launch_like.user_id": { kind: "delete_rows" },
+    "showcase_launch_upvote.user_id": { kind: "delete_rows" },
+    "showcase_launch_view_session.viewer_user_id": { kind: "null_out" },
     "store_pathway.created_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",
@@ -687,6 +719,12 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
      * teardown FIRST nulls that column under a `published` row and raises 23514, dead-lettering the
      * scrub. The submission must go first. `anonymize-account.service.ts` orders it explicitly.
      */
+    /* Same three dispositions, same reasons, as the showcase arm above. */
+    "teardown_comment.author_user_id": { kind: "null_out" },
+    "teardown_comment_like.user_id": { kind: "delete_rows" },
+    "teardown_like.user_id": { kind: "delete_rows" },
+    "teardown_save.user_id": { kind: "delete_rows" },
+    "teardown_view_session.viewer_user_id": { kind: "null_out" },
     "teardown_submission.author_user_id": { kind: "delete_rows" },
     "teardown_submission.reviewed_by_user_id": {
       kind: "retain",

@@ -2372,15 +2372,23 @@ export const showcaseLaunchWriteUpImage = pgTable(
  * moves on a different cadence from the row it counts, and a launch row is append-mostly after
  * moderation. Keeping them apart means a view never contends with an edit.
  *
- * ⚠️ THESE COUNTERS HAVE NO SOURCE OF TRUTH YET, and that is the one way this differs from
- * `video_stats`. There is no vote table, no like table and no comment table, because the frontend
- * offers none of those controls — its vote box is deliberately a `<span>` rather than a `<button>`.
- * So every counter here reads 0 through `coalesce`, and 0 is TRUE rather than a placeholder. When
- * the write routes land they bring their own source tables and reconcile into this one.
+ * ⚠️ THE SOURCE TABLES HAVE LANDED, AND THE ROW IS STILL NOT WRITTEN ON PUBLISH.
+ *
+ * This paragraph used to say the counters had no source of truth and that "when the write routes
+ * land they bring their own source tables and reconcile into this one". They did:
+ * `showcase_launch_view_session`, `showcase_launch_like`, `showcase_launch_upvote` and
+ * `showcase_launch_comment` are declared below this table. What has NOT changed, and must not, is
+ * when the row appears.
  *
  * NO ROWS ARE WRITTEN ON PUBLISH. Every read left-joins and coalesces, exactly as the video reads
  * do, so a launch with no row and a launch with a row of zeroes are the same answer. That also
  * keeps `publishUnderFreeSlug` — a savepoint-retry transaction that is correct today — out of this.
+ *
+ * ⚠️ WHICH IS WHY EVERY COUNTER WRITE IS AN UPSERT, NEVER A BARE `UPDATE`. A plain
+ * `UPDATE ... WHERE launch_id = $1` against a launch nobody has touched affects ZERO ROWS and the
+ * count is silently lost. The row is minted by the FIRST ENGAGEMENT.
+ * `db:smoke-showcase-authoring` asserts a freshly published launch still has no row, so the
+ * shortcut fails loudly rather than quietly.
  *
  * NO `save_count`. Saving is on the TEARDOWN arm of the frontend's contract, not the showcase one,
  * and a column nothing renders is the unverified code the field sweep exists to catch.
@@ -2407,6 +2415,264 @@ export const showcaseLaunchStats = pgTable(
       "showcase_launch_stats_nonnegative_ck",
       sql`view_count >= 0 AND like_count >= 0 AND upvote_count >= 0 AND comment_count >= 0`,
     ),
+  ],
+);
+
+/*
+ * ---------------------------------------------------------------------------
+ * BLUEPRINT ENGAGEMENT — the source rows the three `*_stats` sidecars were always waiting for.
+ * ---------------------------------------------------------------------------
+ *
+ * ⚠️ PER-ARM TABLES, NOT ONE `blueprint_engagement(kind, target_id)`. Five reasons, all of them
+ * this codebase's own:
+ *
+ *   1. A `(kind, target_id)` key CANNOT CARRY A FOREIGN KEY, and this schema pays real cost to
+ *      keep integrity declarative — `case_study_evidence_company` denormalises a column and pins
+ *      it with a COMPOSITE foreign key solely so a per-row CHECK can read it with no trigger.
+ *   2. `ON DELETE cascade` stops working. Every sidecar here cascades off its parent; a
+ *      polymorphic table needs one delete trigger per arm, and every trigger in this repository
+ *      REFUSES a write rather than performing one.
+ *   3. THE COUNTER SETS ARE ALREADY ASYMMETRIC BY DESIGN. Showcase has `upvote_count` and no
+ *      `save_count`; teardown has `save_count` and no `upvote_count`; case study has neither. A
+ *      shared table would need `(kind = 'showcase' AND action IN (...)) OR ...`, which is exactly
+ *      the multi-arm all-or-none CHECK shape migration 0172 exists to warn about.
+ *   4. The reads are per-arm already — each public-read service left-joins its own stats table.
+ *   5. The video precedent is itself per-entity: six tables for one entity's six actions.
+ *
+ * ⚠️ NO NEW pgEnum IN THIS BLOCK, DELIBERATELY. `ALTER TYPE ... ADD VALUE` cannot be referenced by
+ * a later statement in the same transaction, and `db:migrate` applies a batch in one. Zero enums
+ * means zero exposure to that hazard, which is why the states and kinds here are all structural.
+ *
+ * ⚠️ WHAT DOES NOT EXIST HERE, AND WHY IT MUST NOT BE ADDED. There is no `watched_seconds`, no
+ * `max_position_seconds`, no `completion_basis_points` and no `is_counted_view`. Every one of
+ * those exists on `video_view_session` because a VIDEO HAS A DURATION AND A POSITION and a
+ * client's report of both is hostile — which is the entire reason `view-beacon-clamp.ts` exists.
+ * A blueprint page has neither. Each of those columns here would store a claim about a
+ * measurement that does not exist. The unique index on `(target, fingerprint, day)` IS the whole
+ * anti-replay mechanism: the clamp bounds what one session can claim, and here a session can
+ * claim exactly one thing — that the page was opened.
+ */
+
+/**
+ * One launch's page, opened once by one viewer on one UTC day.
+ *
+ * THE UNIQUE INDEX IS THE ANTI-REPLAY BOUNDARY and the only reason `view_count` means anything:
+ * the insert is `ON CONFLICT DO NOTHING`, and the counter moves ONLY when a row was actually
+ * inserted. Incrementing on a swallowed conflict is exactly how a reload inflates a count.
+ */
+export const showcaseLaunchViewSession = pgTable(
+  "showcase_launch_view_session",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    launchId: text("launch_id")
+      .notNull()
+      .references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    /**
+     * `set null`, never `delete_rows` — the disposition `video_view_session.viewer_id` carries and
+     * for its reason: `view_count` was already incremented and cannot be walked back, so deleting
+     * the row would REOPEN the replay window. Remove the row, revisit the same day, increment again.
+     */
+    viewerUserId: text("viewer_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** sha256 hex from `src/lib/viewer-fingerprint.ts`. The raw IP never reaches this table. */
+    viewerFingerprint: text("viewer_fingerprint").notNull(),
+    /**
+     * ⚠️ STORED, NEVER GENERATED, and it must be the SAME STRING that went into the hash. A
+     * generated twin derived at write time disagrees with the hashed one for any request that
+     * crosses midnight between the two derivations — and then the unique index below guards a pair
+     * that never recurs, which is an anti-replay boundary that silently stops holding.
+     */
+    viewDayBucket: date("view_day_bucket", { mode: "string" }).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("showcase_launch_view_session_unq").on(
+      table.launchId,
+      table.viewerFingerprint,
+      table.viewDayBucket,
+    ),
+    /** The reconcile script's count, and the cascade's lookup. */
+    index("showcase_launch_view_session_target_idx").on(table.launchId, table.firstSeenAt),
+    /** Partial, so the manifest's `null_out` is not a sequential scan of the whole table. */
+    index("showcase_launch_view_session_viewer_idx")
+      .on(table.viewerUserId)
+      .where(sql`viewer_user_id IS NOT NULL`),
+    /** Server-computed, so a malformed one means something upstream stopped hashing. */
+    check(
+      "showcase_launch_view_session_fingerprint_ck",
+      sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+/**
+ * A like on one published launch. Feeds `showcase_launch_stats.like_count`.
+ *
+ * THE COMPOSITE PRIMARY KEY IS THE IDEMPOTENCE MECHANISM, which is why the route is `PUT`/`DELETE`
+ * rather than `POST`/`DELETE` and carries no idempotency key: a double-tap on a slow connection is
+ * a no-op rather than a second row.
+ */
+export const showcaseLaunchLike = pgTable(
+  "showcase_launch_like",
+  {
+    launchId: text("launch_id")
+      .notNull()
+      .references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.launchId, table.userId] }),
+    /**
+     * THE REVERSE INDEX IS THE POINT. "Which of these have I liked?" is one join over this index;
+     * without it, it is one round trip per card. It is also what makes the batched viewer-state
+     * read cheap enough to exist at all.
+     */
+    index("showcase_launch_like_userId_idx").on(table.userId, table.launchId),
+  ],
+);
+
+/**
+ * An upvote on one published launch.
+ *
+ * ⚠️ ITS OWN TABLE, NOT A `kind` COLUMN ON THE LIKE. `showcase_launch_stats_top_idx` ranks the
+ * feed's `top` page on `upvote_count`, and the two counters mean different things — one endorses,
+ * one ranks. A shared table would need a partial unique index per kind and would turn each
+ * reconcile count into a filtered one. One table per counter makes the asymmetry structural.
+ *
+ * THE COMPOSITE PRIMARY KEY IS THE IDEMPOTENCE MECHANISM, which is why the route is `PUT`/`DELETE`
+ * rather than `POST`/`DELETE` and carries no idempotency key: a double-tap on a slow connection is
+ * a no-op rather than a second row.
+ */
+export const showcaseLaunchUpvote = pgTable(
+  "showcase_launch_upvote",
+  {
+    launchId: text("launch_id")
+      .notNull()
+      .references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.launchId, table.userId] }),
+    /**
+     * THE REVERSE INDEX IS THE POINT. "Which of these have I liked?" is one join over this index;
+     * without it, it is one round trip per card. It is also what makes the batched viewer-state
+     * read cheap enough to exist at all.
+     */
+    index("showcase_launch_upvote_userId_idx").on(table.userId, table.launchId),
+  ],
+);
+
+/**
+ * One level of threading only, discriminated by `depth` — the same single-table shape as
+ * `video_comment` and `research_program_post`, for the same reason: a self-join to depth 1 is one
+ * index scan, and an unbounded tree is a recursive CTE nobody paginates correctly.
+ *
+ * DELETE IS A TOMBSTONE, NOT A ROW DELETE. Deleting a parent outright would cascade its replies
+ * away, so removing one comment would silently remove the conversation under it. The cascade on
+ * `parent_comment_id` is safe ONLY because of that, and because the depth cap bounds it to one
+ * level anyway.
+ *
+ * ⚠️ NO `is_hidden` / `hidden_by` / `hidden_reason`. `video_comment` omits the trio
+ * `research_program_post` carries, deliberately, because that surface ships no comment-reporting
+ * flow; copying the omission is copying the decision. When a comment report lands here it brings
+ * its own audit labels in an enum-only migration.
+ */
+export const showcaseLaunchComment = pgTable(
+  "showcase_launch_comment",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    launchId: text("launch_id")
+      .notNull()
+      .references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    parentCommentId: text("parent_comment_id").references(
+      (): AnyPgColumn => showcaseLaunchComment.id,
+      {
+        onDelete: "cascade",
+      },
+    ),
+    depth: integer("depth").default(0).notNull(),
+    /**
+     * `set null`: closing an account must not erase a thread other people replied to. A NULL author
+     * renders as "deleted user", which is a true statement. The TEXT is handled separately, by a
+     * tombstone step that runs BEFORE this column is severed — see `anonymize-account.service.ts`.
+     */
+    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
+    bodyText: text("body_text").notNull(),
+    likeCount: integer("like_count").default(0).notNull(),
+    replyCount: integer("reply_count").default(0).notNull(),
+    isDeleted: boolean("is_deleted").default(false).notNull(),
+    deletedAt: timestamp("deleted_at"),
+    /**
+     * `precision: 3` — LOAD-BEARING. The thread is keyset-paginated on `(created_at, id)` with a
+     * millisecond cursor (`src/lib/instant-cursor.ts`), and a microsecond column under a
+     * millisecond cursor makes rows unreachable at every page boundary.
+     */
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /** The thread: top-level rows only. Partial, because replies are the bulk of the rows. */
+    index("showcase_launch_comment_thread_idx")
+      .on(table.launchId, table.createdAt, table.id)
+      .where(sql`parent_comment_id IS NULL`),
+    /** One comment's replies, oldest first. */
+    index("showcase_launch_comment_parent_idx").on(
+      table.parentCommentId,
+      table.createdAt,
+      table.id,
+    ),
+    /** ⚠️ FOR THE TOMBSTONE STEP, which finds this person's comments BEFORE the manifest severs the link. */
+    index("showcase_launch_comment_author_idx").on(table.authorUserId, table.id),
+    /** Depth and parenthood are one fact stated twice, and they must agree. */
+    check(
+      "showcase_launch_comment_depth_ck",
+      sql`depth BETWEEN 0 AND 1 AND (depth = 0) = (parent_comment_id IS NULL)`,
+    ),
+    /** A reply has no replies of its own — the cap, restated where it is cheap to check. */
+    check("showcase_launch_comment_leaf_ck", sql`depth = 0 OR reply_count = 0`),
+    check("showcase_launch_comment_counts_ck", sql`like_count >= 0 AND reply_count >= 0`),
+    check("showcase_launch_comment_deleted_ck", sql`is_deleted = (deleted_at IS NOT NULL)`),
+    /**
+     * ⚠️ THE TOMBSTONE ERASES THE TEXT, AND THIS CONSTRAINT IS WHAT MAKES THAT TRUE. Without the
+     * second arm, "deleted" is a rendering convention the next reader can forget to honour — and
+     * the body sits in the table forever. It is also what the privacy scrub stands on: the erasure
+     * writes `body_text = ''`, and this refuses the row if it did not.
+     */
+    check(
+      "showcase_launch_comment_body_ck",
+      sql`(is_deleted = false AND char_length(body_text) BETWEEN 1 AND 2000)
+          OR (is_deleted = true AND body_text = '')`,
+    ),
+  ],
+);
+
+/** A like on one launch comment. Same composite-key idempotence as the arm's own like. */
+export const showcaseLaunchCommentLike = pgTable(
+  "showcase_launch_comment_like",
+  {
+    commentId: text("comment_id")
+      .notNull()
+      .references(() => showcaseLaunchComment.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.commentId, table.userId] }),
+    index("showcase_launch_comment_like_userId_idx").on(table.userId, table.commentId),
   ],
 );
 
@@ -3162,9 +3428,14 @@ export const teardown = pgTable(
  * teardowns carry real figures a publisher reported, so the seed DOES write a row per teardown and
  * the `coalesce` on the read is defence rather than the mechanism.
  *
- * Still no source-of-truth tables behind these: there is no view beacon, no like route and no
- * comment table for a teardown, because the frontend renders all four as inert spans. When those
- * routes land they bring their own tables and reconcile into this one.
+ * ⚠️ THE SOURCE TABLES HAVE LANDED — `teardown_view_session`, `teardown_like`, `teardown_save` and
+ * `teardown_comment` are declared below. This paragraph used to say there were none.
+ *
+ * ⚠️ AND THE SEEDED POPULATION IS WHY `db:reconcile-blueprint-stats` IS SCOPED. The twelve seeded
+ * teardowns carry invented figures and a NULL `author_user_id`; an unscoped `--fix` would
+ * "repair" a seeded teardown's 812 likes down to 0, because no like rows back them. The reconcile
+ * script therefore only touches rows where `author_user_id IS NOT NULL` — the same discriminator
+ * `anonymization-manifest.ts` already uses to tell the two populations apart.
  */
 export const teardownStats = pgTable(
   "teardown_stats",
@@ -3183,6 +3454,217 @@ export const teardownStats = pgTable(
       "teardown_stats_nonnegative_ck",
       sql`view_count >= 0 AND like_count >= 0 AND comment_count >= 0 AND save_count >= 0`,
     ),
+  ],
+);
+
+/**
+ * One teardown's page, opened once by one viewer on one UTC day.
+ *
+ * THE UNIQUE INDEX IS THE ANTI-REPLAY BOUNDARY and the only reason `view_count` means anything:
+ * the insert is `ON CONFLICT DO NOTHING`, and the counter moves ONLY when a row was actually
+ * inserted. Incrementing on a swallowed conflict is exactly how a reload inflates a count.
+ */
+export const teardownViewSession = pgTable(
+  "teardown_view_session",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    /**
+     * `set null`, never `delete_rows` — the disposition `video_view_session.viewer_id` carries and
+     * for its reason: `view_count` was already incremented and cannot be walked back, so deleting
+     * the row would REOPEN the replay window. Remove the row, revisit the same day, increment again.
+     */
+    viewerUserId: text("viewer_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** sha256 hex from `src/lib/viewer-fingerprint.ts`. The raw IP never reaches this table. */
+    viewerFingerprint: text("viewer_fingerprint").notNull(),
+    /**
+     * ⚠️ STORED, NEVER GENERATED, and it must be the SAME STRING that went into the hash. A
+     * generated twin derived at write time disagrees with the hashed one for any request that
+     * crosses midnight between the two derivations — and then the unique index below guards a pair
+     * that never recurs, which is an anti-replay boundary that silently stops holding.
+     */
+    viewDayBucket: date("view_day_bucket", { mode: "string" }).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("teardown_view_session_unq").on(
+      table.teardownId,
+      table.viewerFingerprint,
+      table.viewDayBucket,
+    ),
+    /** The reconcile script's count, and the cascade's lookup. */
+    index("teardown_view_session_target_idx").on(table.teardownId, table.firstSeenAt),
+    /** Partial, so the manifest's `null_out` is not a sequential scan of the whole table. */
+    index("teardown_view_session_viewer_idx")
+      .on(table.viewerUserId)
+      .where(sql`viewer_user_id IS NOT NULL`),
+    /** Server-computed, so a malformed one means something upstream stopped hashing. */
+    check("teardown_view_session_fingerprint_ck", sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+/**
+ * A like on one published teardown. Feeds `teardown_stats.like_count`.
+ *
+ * THE COMPOSITE PRIMARY KEY IS THE IDEMPOTENCE MECHANISM, which is why the route is `PUT`/`DELETE`
+ * rather than `POST`/`DELETE` and carries no idempotency key: a double-tap on a slow connection is
+ * a no-op rather than a second row.
+ */
+export const teardownLike = pgTable(
+  "teardown_like",
+  {
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.teardownId, table.userId] }),
+    /**
+     * THE REVERSE INDEX IS THE POINT. "Which of these have I liked?" is one join over this index;
+     * without it, it is one round trip per card. It is also what makes the batched viewer-state
+     * read cheap enough to exist at all.
+     */
+    index("teardown_like_userId_idx").on(table.userId, table.teardownId),
+  ],
+);
+
+/**
+ * A saved teardown — read-it-later.
+ *
+ * ⚠️ SAVE IS A TEARDOWN-ARM CONCEPT AND NOTHING ELSE. `showcase_launch_stats` has no `save_count`
+ * and says so in as many words; a column nothing renders is the unverified code the field sweeps
+ * exist to catch.
+ *
+ * THE COMPOSITE PRIMARY KEY IS THE IDEMPOTENCE MECHANISM, which is why the route is `PUT`/`DELETE`
+ * rather than `POST`/`DELETE` and carries no idempotency key: a double-tap on a slow connection is
+ * a no-op rather than a second row.
+ */
+export const teardownSave = pgTable(
+  "teardown_save",
+  {
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.teardownId, table.userId] }),
+    /**
+     * Leads with `created_at`, unlike a like's reverse index, because a saved list is RENDERED —
+     * newest first — where a like set is only ever probed for membership.
+     */
+    index("teardown_save_userId_idx").on(table.userId, table.createdAt, table.teardownId),
+  ],
+);
+
+/**
+ * One level of threading only, discriminated by `depth` — the same single-table shape as
+ * `video_comment` and `research_program_post`, for the same reason: a self-join to depth 1 is one
+ * index scan, and an unbounded tree is a recursive CTE nobody paginates correctly.
+ *
+ * DELETE IS A TOMBSTONE, NOT A ROW DELETE. Deleting a parent outright would cascade its replies
+ * away, so removing one comment would silently remove the conversation under it. The cascade on
+ * `parent_comment_id` is safe ONLY because of that, and because the depth cap bounds it to one
+ * level anyway.
+ *
+ * ⚠️ NO `is_hidden` / `hidden_by` / `hidden_reason`. `video_comment` omits the trio
+ * `research_program_post` carries, deliberately, because that surface ships no comment-reporting
+ * flow; copying the omission is copying the decision. When a comment report lands here it brings
+ * its own audit labels in an enum-only migration.
+ */
+export const teardownComment = pgTable(
+  "teardown_comment",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    parentCommentId: text("parent_comment_id").references((): AnyPgColumn => teardownComment.id, {
+      onDelete: "cascade",
+    }),
+    depth: integer("depth").default(0).notNull(),
+    /**
+     * `set null`: closing an account must not erase a thread other people replied to. A NULL author
+     * renders as "deleted user", which is a true statement. The TEXT is handled separately, by a
+     * tombstone step that runs BEFORE this column is severed — see `anonymize-account.service.ts`.
+     */
+    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
+    bodyText: text("body_text").notNull(),
+    likeCount: integer("like_count").default(0).notNull(),
+    replyCount: integer("reply_count").default(0).notNull(),
+    isDeleted: boolean("is_deleted").default(false).notNull(),
+    deletedAt: timestamp("deleted_at"),
+    /**
+     * `precision: 3` — LOAD-BEARING. The thread is keyset-paginated on `(created_at, id)` with a
+     * millisecond cursor (`src/lib/instant-cursor.ts`), and a microsecond column under a
+     * millisecond cursor makes rows unreachable at every page boundary.
+     */
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /** The thread: top-level rows only. Partial, because replies are the bulk of the rows. */
+    index("teardown_comment_thread_idx")
+      .on(table.teardownId, table.createdAt, table.id)
+      .where(sql`parent_comment_id IS NULL`),
+    /** One comment's replies, oldest first. */
+    index("teardown_comment_parent_idx").on(table.parentCommentId, table.createdAt, table.id),
+    /** ⚠️ FOR THE TOMBSTONE STEP, which finds this person's comments BEFORE the manifest severs the link. */
+    index("teardown_comment_author_idx").on(table.authorUserId, table.id),
+    /** Depth and parenthood are one fact stated twice, and they must agree. */
+    check(
+      "teardown_comment_depth_ck",
+      sql`depth BETWEEN 0 AND 1 AND (depth = 0) = (parent_comment_id IS NULL)`,
+    ),
+    /** A reply has no replies of its own — the cap, restated where it is cheap to check. */
+    check("teardown_comment_leaf_ck", sql`depth = 0 OR reply_count = 0`),
+    check("teardown_comment_counts_ck", sql`like_count >= 0 AND reply_count >= 0`),
+    check("teardown_comment_deleted_ck", sql`is_deleted = (deleted_at IS NOT NULL)`),
+    /**
+     * ⚠️ THE TOMBSTONE ERASES THE TEXT, AND THIS CONSTRAINT IS WHAT MAKES THAT TRUE. Without the
+     * second arm, "deleted" is a rendering convention the next reader can forget to honour — and
+     * the body sits in the table forever. It is also what the privacy scrub stands on: the erasure
+     * writes `body_text = ''`, and this refuses the row if it did not.
+     */
+    check(
+      "teardown_comment_body_ck",
+      sql`(is_deleted = false AND char_length(body_text) BETWEEN 1 AND 2000)
+          OR (is_deleted = true AND body_text = '')`,
+    ),
+  ],
+);
+
+/** A like on one teardown comment. Same composite-key idempotence as the arm's own like. */
+export const teardownCommentLike = pgTable(
+  "teardown_comment_like",
+  {
+    commentId: text("comment_id")
+      .notNull()
+      .references(() => teardownComment.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.commentId, table.userId] }),
+    index("teardown_comment_like_userId_idx").on(table.userId, table.commentId),
   ],
 );
 
@@ -4293,6 +4775,12 @@ export const caseStudy = pgTable(
  *
  * A ROW PER CASE STUDY, like the teardown sidecar and unlike the showcase one — the ten seeded rows
  * carry real figures the fixture states, so the read's `coalesce` is defence rather than mechanism.
+ *
+ * ⚠️ `view_count` AND `like_count` NOW HAVE SOURCES — `case_study_view_session` and
+ * `case_study_like`, declared below. `comment_count` and `upvote_count` still do not exist, and
+ * adding either means adding a column here first, which is the decision the second paragraph
+ * describes. The reconcile script is scoped to `author_user_id IS NOT NULL` for the same reason
+ * the teardown sidecar's comment gives.
  */
 export const caseStudyStats = pgTable(
   "case_study_stats",
@@ -4305,6 +4793,89 @@ export const caseStudyStats = pgTable(
     updatedAt: timestamp("updated_at", { precision: 3 }).defaultNow().notNull(),
   },
   () => [check("case_study_stats_nonnegative_ck", sql`view_count >= 0 AND like_count >= 0`)],
+);
+
+/**
+ * One case study's page, opened once by one viewer on one UTC day.
+ *
+ * THE UNIQUE INDEX IS THE ANTI-REPLAY BOUNDARY and the only reason `view_count` means anything:
+ * the insert is `ON CONFLICT DO NOTHING`, and the counter moves ONLY when a row was actually
+ * inserted. Incrementing on a swallowed conflict is exactly how a reload inflates a count.
+ */
+export const caseStudyViewSession = pgTable(
+  "case_study_view_session",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    caseStudyId: text("case_study_id")
+      .notNull()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    /**
+     * `set null`, never `delete_rows` — the disposition `video_view_session.viewer_id` carries and
+     * for its reason: `view_count` was already incremented and cannot be walked back, so deleting
+     * the row would REOPEN the replay window. Remove the row, revisit the same day, increment again.
+     */
+    viewerUserId: text("viewer_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** sha256 hex from `src/lib/viewer-fingerprint.ts`. The raw IP never reaches this table. */
+    viewerFingerprint: text("viewer_fingerprint").notNull(),
+    /**
+     * ⚠️ STORED, NEVER GENERATED, and it must be the SAME STRING that went into the hash. A
+     * generated twin derived at write time disagrees with the hashed one for any request that
+     * crosses midnight between the two derivations — and then the unique index below guards a pair
+     * that never recurs, which is an anti-replay boundary that silently stops holding.
+     */
+    viewDayBucket: date("view_day_bucket", { mode: "string" }).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("case_study_view_session_unq").on(
+      table.caseStudyId,
+      table.viewerFingerprint,
+      table.viewDayBucket,
+    ),
+    /** The reconcile script's count, and the cascade's lookup. */
+    index("case_study_view_session_target_idx").on(table.caseStudyId, table.firstSeenAt),
+    /** Partial, so the manifest's `null_out` is not a sequential scan of the whole table. */
+    index("case_study_view_session_viewer_idx")
+      .on(table.viewerUserId)
+      .where(sql`viewer_user_id IS NOT NULL`),
+    /** Server-computed, so a malformed one means something upstream stopped hashing. */
+    check("case_study_view_session_fingerprint_ck", sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+/**
+ * A like on one published case study.
+ *
+ * ⚠️ THE ONLY ENGAGEMENT THIS ARM TAKES. `case_study_stats` has exactly two counters, and the arm
+ * is a numbered lesson with no discussion surface — so there is no comment table here, no upvote
+ * and no save. The asymmetry is the contract, not an omission.
+ *
+ * THE COMPOSITE PRIMARY KEY IS THE IDEMPOTENCE MECHANISM, which is why the route is `PUT`/`DELETE`
+ * rather than `POST`/`DELETE` and carries no idempotency key: a double-tap on a slow connection is
+ * a no-op rather than a second row.
+ */
+export const caseStudyLike = pgTable(
+  "case_study_like",
+  {
+    caseStudyId: text("case_study_id")
+      .notNull()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.caseStudyId, table.userId] }),
+    /**
+     * THE REVERSE INDEX IS THE POINT. "Which of these have I liked?" is one join over this index;
+     * without it, it is one round trip per card. It is also what makes the batched viewer-state
+     * read cheap enough to exist at all.
+     */
+    index("case_study_like_userId_idx").on(table.userId, table.caseStudyId),
+  ],
 );
 
 /**
