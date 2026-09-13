@@ -1,5 +1,4 @@
 import { and, countDistinct, desc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
-import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { db } from "#src/db/index.js";
 import {
@@ -15,6 +14,7 @@ import {
   videoViewSession,
 } from "#src/db/schema.js";
 import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
+import { decrement, increment } from "#src/modules/home/counter-sql.js";
 import {
   applyViewBeacon,
   pinReportedDurationSeconds,
@@ -38,16 +38,6 @@ export type VideoEngagementError =
   // whose payloads match, so `EngagementDomainError` still has ONE `CURSOR_MALFORMED` and the
   // existing 422 in `engagement-error-response.ts` already answers it.
   | { readonly type: "CURSOR_MALFORMED" };
-
-/** `+ n`, as SQL, so two concurrent writers cannot read-modify-write over each other. */
-function increment(column: AnyPgColumn, amount = 1): ReturnType<typeof sql> {
-  return sql`${column} + ${amount}`;
-}
-
-/** Floors at zero, so a repeated delete cannot drive a counter negative. */
-function decrement(column: AnyPgColumn): ReturnType<typeof sql> {
-  return sql`GREATEST(${column} - 1, 0)`;
-}
 
 // ---------------------------------------------------------------------------
 // The beacon

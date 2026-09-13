@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { user, video, videoComment, videoCommentLike, videoStats } from "#src/db/schema.js";
 import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
+import { decrement, increment } from "#src/modules/home/counter-sql.js";
 import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
@@ -53,14 +54,6 @@ export interface CommentView {
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly viewerState: { readonly hasLiked: boolean };
-}
-
-function increment(column: typeof videoStats.commentCount): ReturnType<typeof sql> {
-  return sql`${column} + 1`;
-}
-
-function decrement(column: typeof videoStats.commentCount): ReturnType<typeof sql> {
-  return sql`GREATEST(${column} - 1, 0)`;
 }
 
 // ---------------------------------------------------------------------------
