@@ -105,6 +105,21 @@ export function computeCommerceViewerFingerprint(input: ViewerFingerprintInput):
 }
 
 /**
+ * The blueprints surface's per-day viewer key — the `*_view_session.viewer_fingerprint` on all
+ * three arms.
+ *
+ * ONE DOMAIN FOR ALL THREE ARMS, and a THIRD domain overall. The per-arm question and the
+ * per-surface question have different answers: the three blueprint tables are keyed on
+ * `(target_id, fingerprint, day)`, so a shared fingerprint across arms cannot collide — the target
+ * id already separates them. Sharing with `videoview` or `commerceview` WOULD matter, for the
+ * reason the comment above gives: anyone who learned a fingerprint from one surface could address
+ * another surface's row for that viewer.
+ */
+export function computeBlueprintViewerFingerprint(input: ViewerFingerprintInput): string {
+  return computeFingerprintForDomain("blueprintview", input);
+}
+
+/**
  * The UTC day, as the string that goes into both the hash above and the row's
  * day-bucket column.
  *
