@@ -50,7 +50,10 @@ import {
   CreateMarketInsightSchema,
   UpdateMarketInsightSchema,
 } from "#src/modules/rnd/discovery/market-insights.schemas.js";
-import { CreatePlatformFeedbackSchema } from "#src/modules/platform/feedback/feedback.schemas.js";
+import {
+  CreatePlatformFeedbackSchema,
+  DecidePlatformFeedbackSchema,
+} from "#src/modules/platform/feedback/feedback.schemas.js";
 import {
   AddSupportCaseMessageSchema,
   DecideSupportCaseSchema,
@@ -721,6 +724,13 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   // Site feedback. `pagePath` is in the body and the user agent deliberately is not — the
   // header is read server-side, so no client can claim one.
   "post /feedback": { schema: CreatePlatformFeedbackSchema, required: true },
+  // Triage, and the enum is narrower than the column: `new` is where every row is born, so
+  // nothing needs to set it and allowing it would let triage run backwards. There is no note
+  // field because `platform_feedback` has no column to put one in.
+  "post /admin/feedback/{feedbackId}/decisions": {
+    schema: DecidePlatformFeedbackSchema,
+    required: true,
+  },
   // Support cases. Both message routes read the SAME schema — a reply is a reply whichever
   // side writes it, and the author is proved by the session rather than declared in the body.
   "post /support/cases": { schema: OpenSupportCaseSchema, required: true },

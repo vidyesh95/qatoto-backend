@@ -12,8 +12,21 @@ import * as feedbackController from "#src/modules/platform/feedback/feedback.con
  * ## ROOT-MOUNTED, LIKE THE AUDIT LOG AND THE ROLE GRANTS BESIDE IT
  *
  * Feedback is about the product, not about a project, a video or a store. Filing it under
- * one of those would imply the others are not covered. Two routes, different verbs, no path
- * parameters — nothing here can shadow anything, so there is no `*.routes.order.test.ts`.
+ * one of those would imply the others are not covered.
+ *
+ * ## STILL NO `*.routes.order.test.ts`, BUT THE OLD REASON EXPIRED
+ *
+ * This said "two routes, different verbs, no path parameters — nothing here can shadow
+ * anything". There are four routes now and one of them HAS a parameter, so that sentence is
+ * retired rather than quietly left to rot. The conclusion survives on a narrower argument:
+ * `GET /feedback/mine` cannot be shadowed because the only other `/feedback` route is a POST,
+ * and `POST /admin/feedback/:feedbackId/decisions` cannot be shadowed because the only other
+ * `/admin/feedback` route is a GET. No two routes here share a method AND a prefix, so
+ * declaration order cannot decide which one answers.
+ *
+ * ⚠️ A FIFTH ROUTE COULD BREAK THAT. `GET /feedback/:feedbackId` would shadow
+ * `GET /feedback/mine` if declared first, and that is the day this module needs the order test
+ * every module with a real parameter collision already has.
  *
  * ## THE LIMITER AND `requireIdentifiedUser` ARE A PAIR
  *
@@ -46,11 +59,39 @@ router.post(
   feedbackController.createPlatformFeedback,
 );
 
+/**
+ * The submitter's own notes.
+ *
+ * `requireAuth` AND NOTHING ELSE, which is the shape every caller's-own read in this codebase
+ * takes — `GET /support/cases` and `GET /notifications` carry no limiter and no
+ * `requireIdentifiedUser` either. The guard prices minting an identity, and that is a cost
+ * worth charging for a WRITE into a staff queue; reading back rows you already created reaches
+ * nothing you did not already put there. Declared BEFORE the admin routes only for readability
+ * — see the ordering note above for why nothing here depends on it.
+ */
+router.get("/feedback/mine", requireAuth, feedbackController.listOwnPlatformFeedback);
+
 router.get(
   "/admin/feedback",
   requireAuth,
   contentReviewLimiter,
   feedbackController.listPlatformFeedback,
+);
+
+/**
+ * Triage: mark a note read, or close it.
+ *
+ * `contentReviewLimiter` rather than a new one — its own doc already names `/feedback` among
+ * the surfaces it covers, and it is what the queue GET beside it carries. NO `idempotency()`:
+ * this appends nothing to the audit chain, so a replayed decision sets the same flag to the
+ * same value. See `feedback.service.ts` for why there is no chain entry to protect.
+ */
+router.post(
+  "/admin/feedback/:feedbackId/decisions",
+  requireAuth,
+  contentReviewLimiter,
+  compactBody,
+  feedbackController.decidePlatformFeedback,
 );
 
 export default router;

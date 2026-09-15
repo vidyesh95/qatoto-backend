@@ -620,6 +620,30 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
         ORDER BY m.case_id, m.sequence`,
   );
 
+  /**
+   * FEEDBACK THE SUBJECT SENT ABOUT THE PRODUCT.
+   *
+   * ⚠️ **THE THIRD TABLE TO SHIP WITH THE SCRUB AND WITHOUT THE EXPORT.** `yourChannelLinks`
+   * and `yourVideoDocuments` above both record being "nearly missed" the same way, and this
+   * one was missed outright: `platform_feedback.user_id` has been in the anonymization
+   * manifest since the table shipped — the Art. 17 half — with nothing here to answer Art. 15.
+   * A note somebody wrote in their own words about their own experience is squarely their
+   * personal data and squarely portable.
+   *
+   * `user_agent` IS DELIBERATELY NOT SELECTED. The server read it off a request header, so
+   * handing it back describes the browser they were already using rather than telling them
+   * anything they did not know, and it is the one column here they did not author.
+   *
+   * `status` IS selected. It is a staff triage flag, but it is also the only thing on the row
+   * that changes after they send it, and the app already shows it to them.
+   */
+  const feedbackYouSent = await collect(
+    "feedbackYouSent",
+    sql`SELECT id, category, message, page_path, status, created_at
+        FROM platform_feedback WHERE user_id = ${userId}
+        ORDER BY created_at DESC`,
+  );
+
   const workYouHaveDone = {
     projectsFounded: await collect(
       "projectsFounded",
@@ -684,6 +708,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     howMuchYouWatch,
     productPagesYouLookedAt,
     supportYouAskedFor: { cases: supportCasesYouOpened, messages: supportCaseMessages },
+    feedbackYouSent,
     workYouHaveDone,
     /**
      * PRESENT AND EMPTY, ON PURPOSE. The panel lists "Settings on this device" as one of

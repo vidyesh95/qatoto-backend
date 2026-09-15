@@ -2,8 +2,11 @@ import type { Request, Response } from "express";
 
 import {
   CreatePlatformFeedbackSchema,
+  DecidePlatformFeedbackSchema,
   EmptyPlatformFeedbackQuerySchema,
+  ListOwnPlatformFeedbackQuerySchema,
   ListPlatformFeedbackQuerySchema,
+  PlatformFeedbackIdParamsSchema,
 } from "#src/modules/platform/feedback/feedback.schemas.js";
 import * as feedbackService from "#src/modules/platform/feedback/feedback.service.js";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
@@ -31,6 +34,15 @@ function mapPlatformFeedbackError(
         status: "error",
         statusCode: 422,
         message: "Invalid cursor.",
+      } satisfies ApiResponse);
+      return;
+    case "PLATFORM_FEEDBACK_NOT_FOUND":
+      // The capability was already proved, so this genuinely means "no such row" rather than
+      // "not yours" — there is nothing to leak by saying so plainly.
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "Feedback not found.",
       } satisfies ApiResponse);
       return;
     case "PLATFORM_CAPABILITY_REQUIRED":
@@ -135,4 +147,88 @@ export async function listPlatformFeedback(req: Request, res: Response): Promise
     data: result.value.items,
     nextCursor: result.value.nextCursor,
   });
+}
+
+/**
+ * The caller's own notes.
+ *
+ * NO `hasCleanQuery` HERE, and that is not an omission: this route's own query schema is
+ * `.strict()`, so it already refuses a stray key. The helper exists for the WRITES, whose
+ * query is supposed to be empty and has no schema of its own to do the refusing.
+ */
+export async function listOwnPlatformFeedback(req: Request, res: Response): Promise<void> {
+  const authorUserId = requireSignedInUserId(req, res);
+  if (!authorUserId) return;
+
+  const query = ListOwnPlatformFeedbackQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    respondValidationFailed(res, query.error);
+    return;
+  }
+
+  const result = await feedbackService.listOwnPlatformFeedback(authorUserId, {
+    ...(query.data.status === undefined ? {} : { status: query.data.status }),
+    limit: query.data.limit ?? DEFAULT_FEEDBACK_PAGE_SIZE,
+    ...(query.data.cursor === undefined ? {} : { cursor: query.data.cursor }),
+  });
+  if (!result.success) {
+    mapPlatformFeedbackError(res, result.error);
+    return;
+  }
+
+  // `nextCursor` as a SIBLING of `data`, the shape the staff queue above already answers with.
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Feedback retrieved.",
+    data: result.value.items,
+    nextCursor: result.value.nextCursor,
+  });
+}
+
+/**
+ * Moves one note's triage flag.
+ *
+ * 200, NOT 202. The flag is set by the time this answers — there is no queue behind it and
+ * nothing is still being decided, so a 202 would invent a pending state the row does not have.
+ *
+ * IT ANSWERS THE UPDATED ROW IN THE SUBMITTER'S PROJECTION, not the staff one. The queue row
+ * carries the author, and re-reading it here would mean a second query for a name the caller
+ * already has on screen. The client writes the returned `status` back into its row.
+ */
+export async function decidePlatformFeedback(req: Request, res: Response): Promise<void> {
+  const staffUserId = requireSignedInUserId(req, res);
+  if (!staffUserId) return;
+  if (!hasCleanQuery(req, res)) return;
+
+  const params = PlatformFeedbackIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    respondValidationFailed(res, params.error);
+    return;
+  }
+  const body = DecidePlatformFeedbackSchema.safeParse(req.body);
+  if (!body.success) {
+    respondValidationFailed(res, body.error);
+    return;
+  }
+
+  const result = await feedbackService.decidePlatformFeedback(
+    staffUserId,
+    params.data.feedbackId,
+    body.data,
+  );
+  if (!result.success) {
+    mapPlatformFeedbackError(res, result.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message:
+      body.data.decision === "reviewed"
+        ? "Marked as read. It stays in the queue under Reviewed."
+        : "Closed. It leaves the open queue.",
+    data: result.value,
+  } satisfies ApiResponse);
 }

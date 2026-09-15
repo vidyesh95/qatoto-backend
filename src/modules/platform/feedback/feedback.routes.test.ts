@@ -33,9 +33,16 @@ vi.mock("#src/middleware/require-identified-user.js", () => ({
 
 const createPlatformFeedback = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listPlatformFeedback = vi.fn<(...args: readonly unknown[]) => unknown>();
+const listOwnPlatformFeedback = vi.fn<(...args: readonly unknown[]) => unknown>();
+const decidePlatformFeedback = vi.fn<(...args: readonly unknown[]) => unknown>();
+// EVERY NAMED EXPORT THE CONTROLLER REACHES FOR MUST BE LISTED. A factory mock replaces the
+// whole module, so a service function added without a line here is `undefined` at call time
+// rather than a missing-export error the compiler could catch.
 vi.mock("#src/modules/platform/feedback/feedback.service.js", () => ({
   createPlatformFeedback: (...args: readonly unknown[]) => createPlatformFeedback(...args),
   listPlatformFeedback: (...args: readonly unknown[]) => listPlatformFeedback(...args),
+  listOwnPlatformFeedback: (...args: readonly unknown[]) => listOwnPlatformFeedback(...args),
+  decidePlatformFeedback: (...args: readonly unknown[]) => decidePlatformFeedback(...args),
 }));
 
 describe("platform feedback routes", () => {
