@@ -1373,6 +1373,20 @@
       "when": 1789308372483,
       "tag": "0195_skinny_living_tribunal",
       "breakpoints": true
+    },
+    {
+      "idx": 196,
+      "version": "7",
+      "when": 1789468309598,
+      "tag": "0196_broken_madame_hydra",
+      "breakpoints": true
+    },
+    {
+      "idx": 197,
+      "version": "7",
+      "when": 1789468310598,
+      "tag": "0197_purge_seeded_anime_hero_slides",
+      "breakpoints": true
     }
   ]
 }

@@ -122,7 +122,10 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // The public supplier directory — `suppliers`.
   "supplier_created",
   "supplier_updated",
-  // Content moderation — `content-review`.
+  // ⚠️ TWO MORE LEGACY LABELS, KEPT FOR THE SAME REASON AS THE FIVE HERO ONES BELOW.
+  // These were written by the staff video review queue, which was removed with the anime
+  // vertical (it could only ever hold anime episodes). Six rows in the chain carry them and
+  // cannot be rewritten, so the labels stay and nothing writes them again.
   "content_review_approved",
   "content_review_rejected",
   // Who made this person a moderator, and when. Granted out of band by
@@ -159,13 +162,32 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // The home-page Spotlight rail — up to three admin-picked catalogue videos. One event
   // because the only write is a whole-set replace (never a per-slot create/update).
   "spotlight_slots_replaced",
-  // The /blueprints hero carousel. Same shape and same reasoning as the promotional carousel
-  // above: every one of these five puts an image in front of every visitor to /blueprints, or
-  // takes one away, so all five are named rather than only the destructive ones.
+  // ⚠️ FIVE LEGACY LABELS THAT MUST NEVER BE REMOVED, AND ARE NEVER WRITTEN AGAIN.
   //
-  // ⚠️ THE CLOUDINARY FOLDER IS STILL `qatoto/anime-hero-slides` AND THESE LABELS ARE NOT.
-  // A public id is the ADDRESS of an uploaded image, so renaming the folder orphans every
-  // slide ever uploaded; an enum label is renamed by one ALTER TYPE. See `cloudinary.ts`.
+  // The hero table was `anime_hero_slide` until the anime vertical was removed, and the audit
+  // chain recorded every slide created, reordered, replaced and deleted under that name — 79
+  // rows at the time of the rename. THOSE ROWS CANNOT BE REWRITTEN: `platform_audit_entry` is
+  // hash-linked and carries a BEFORE UPDATE OR DELETE trigger whose whole purpose is stated in
+  // migration 0025 — "an entry that can be edited makes every hash after it a statement about
+  // bytes that no longer exist."
+  //
+  // So the rename could move the TABLE and the future labels, and could not move the past. An
+  // enum label is cheap to add and impossible to retire once an append-only row references it.
+  // Dropping these five is not a tidy-up; it is a migration that fails on the cast, which is
+  // exactly how this was discovered.
+  "anime_hero_slide_created",
+  "anime_hero_slide_updated",
+  "anime_hero_slide_reordered",
+  "anime_hero_slide_image_replaced",
+  "anime_hero_slide_deleted",
+  // The /blueprints hero carousel — what every NEW hero event is written as. Same shape and
+  // same reasoning as the promotional carousel above: every one of these five puts an image in
+  // front of every visitor to /blueprints, or takes one away, so all five are named rather than
+  // only the destructive ones.
+  //
+  // ⚠️ THE CLOUDINARY FOLDER IS STILL `qatoto/anime-hero-slides` TOO, for a different reason:
+  // a public id is the ADDRESS of an uploaded image, so renaming the folder orphans every slide
+  // ever uploaded. See `cloudinary.ts`.
   "blueprint_hero_slide_created",
   "blueprint_hero_slide_updated",
   "blueprint_hero_slide_reordered",

@@ -291,11 +291,6 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(b) and (e)",
       note: "A financial ledger row. Removing the actor makes the entry unattributable and breaks the tax/accounting record it exists to be.",
     },
-    "content_review_action.reviewer_id": {
-      kind: "retain",
-      lawfulBasis: "Art. 17(3)(e)",
-      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
-    },
     // A mute is a PREFERENCE, and the FK says so on both sides: `cascade` for the muter and for
     // the creator alike. Both directions delete, and the second is the less obvious one — a mute of
     // an account that is being erased is a preference about somebody who will not be recommended
