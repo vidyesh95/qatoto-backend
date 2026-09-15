@@ -2,6 +2,11 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
 import { pool } from "#src/db/index.js";
+import {
+  PG_CHECK_VIOLATION,
+  PG_FOREIGN_KEY_VIOLATION,
+  readSqlStateCode,
+} from "#src/lib/pg-errors.js";
 import { BLUEPRINT_DRAFT_DOCUMENT_MAXIMUM_CHARACTERS } from "#src/modules/home/blueprints/blueprint-draft.schemas.js";
 
 /**
@@ -20,9 +25,6 @@ import { BLUEPRINT_DRAFT_DOCUMENT_MAXIMUM_CHARACTERS } from "#src/modules/home/b
  * disposition that provably does. If that cascade were ever `set null`, an erasure would leave the
  * document behind with nobody to attribute it to, and nothing else would notice.
  */
-
-const PG_CHECK_VIOLATION = "23514";
-const PG_FOREIGN_KEY_VIOLATION = "23503";
 
 let failureCount = 0;
 
@@ -47,7 +49,7 @@ async function main(): Promise<void> {
       check(label, false, "the write SUCCEEDED — the constraint is missing");
     } catch (error: unknown) {
       await client.query("ROLLBACK TO SAVEPOINT probe");
-      const code = (error as { code?: string }).code;
+      const code = readSqlStateCode(error);
       check(
         label,
         code === expectedSqlState,
@@ -70,7 +72,7 @@ async function main(): Promise<void> {
       check(label, true, "accepted");
     } catch (error: unknown) {
       await client.query("ROLLBACK TO SAVEPOINT probe");
-      check(label, false, `refused with ${String((error as { code?: string }).code)} — too strict`);
+      check(label, false, `refused with ${String(readSqlStateCode(error))} — too strict`);
     }
   }
 

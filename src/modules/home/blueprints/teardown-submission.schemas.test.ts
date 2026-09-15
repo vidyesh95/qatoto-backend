@@ -76,6 +76,23 @@ function buildMaterial(): Record<string, unknown> {
   };
 }
 
+function buildMaximalPart(index: number): Record<string, unknown> {
+  const longest = "x".repeat(120);
+  return {
+    id: `${longest.slice(0, 110)}-${String(index).padStart(4, "0")}`,
+    label: longest,
+    parentPartId: null,
+    material: longest,
+    manufacturingMethod: "cnc_milled",
+    explosionDirection: [1.123456789, 2.123456789, 3.123456789],
+    explosionDistanceMm: 123.456789,
+    layerIndex: 9999,
+    stressRating: 0.987654321,
+    calloutText: "y".repeat(400),
+    nodeName: longest,
+  };
+}
+
 describe("TeardownSubmissionSchema", () => {
   it("accepts the shape the wizard sends", () => {
     expect(TeardownSubmissionSchema.safeParse(buildValidSubmission()).success).toBe(true);
@@ -470,23 +487,6 @@ describe("TeardownModerationDecisionSchema", () => {
  */
 describe("the submission document's worst-case size", () => {
   const LONG_FORM_BODY_BYTES = 128 * 1024;
-
-  function buildMaximalPart(index: number): Record<string, unknown> {
-    const longest = "x".repeat(120);
-    return {
-      id: `${longest.slice(0, 110)}-${String(index).padStart(4, "0")}`,
-      label: longest,
-      parentPartId: null,
-      material: longest,
-      manufacturingMethod: "cnc_milled",
-      explosionDirection: [1.123456789, 2.123456789, 3.123456789],
-      explosionDistanceMm: 123.456789,
-      layerIndex: 9999,
-      stressRating: 0.987654321,
-      calloutText: "y".repeat(400),
-      nodeName: longest,
-    };
-  }
 
   it("fits inside longFormBody with a full assembly, its steps and its fasteners", () => {
     const maximal = {

@@ -626,7 +626,7 @@ async function main(): Promise<void> {
         .limit(1);
       check(
         "the dismissal's audit entry NAMES the showcase launch — not a null target",
-        dismissalEntry?.payloadJson.includes(submittedLaunchId) === true,
+        (dismissalEntry?.payloadJson ?? "").includes(submittedLaunchId),
         dismissalEntry?.payloadJson ?? "(no audit entry)",
       );
     }
