@@ -1,6 +1,3 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-
 import "dotenv/config";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -21,6 +18,8 @@ import {
   CaseStudySubmissionSchema,
   type CaseStudySubmission,
 } from "#src/modules/home/blueprints/case-study-submission.schemas.js";
+
+import { BLUEPRINT_SEED_CORPUS } from "./fixtures/blueprint-seed-corpus.js";
 
 /**
  * Seeds the ten case studies the frontend has been serving from fixtures.
@@ -54,11 +53,6 @@ import {
  * carries a withheld company name. That is acceptable for an operator-run script against fixtures
  * whose every name is invented, and it is written down so nobody points it at real data.
  */
-
-const DEFAULT_FIXTURE_PATH = path.resolve(
-  import.meta.dirname,
-  "../../../frontend/qatoto-frontend/src/mocks/blueprints-mocks.ts",
-);
 
 /**
  * ⚠️ THE ONE VALUE IN THIS SEED THAT IS NOT IN THE FIXTURE FILE.
@@ -152,32 +146,21 @@ interface SeedableCaseStudy {
   readonly submission: CaseStudySubmission;
 }
 
-async function loadCaseStudyFixtures(): Promise<readonly SeedableCaseStudy[]> {
-  // The two repositories are siblings by convention, not by guarantee — so the path is overridable.
-  const fixturePath =
-    process.argv[2] ?? process.env.QATOTO_FRONTEND_MOCKS_PATH ?? DEFAULT_FIXTURE_PATH;
-  /*
-   * ⚠️ A RUNTIME IMPORT, NOT A STATIC ONE. `tsconfig.scripts.json` includes `scripts/**`, and
-   * TypeScript resolves even type-only imports, so a static import of the sibling repo's fixtures
-   * makes `@/lib/blueprints/schemas` a TS2307 in THIS repo's typecheck. A `file://` specifier is
-   * invisible to the compiler and lands the payload as `unknown`, where CLAUDE.md §3.1 wants it.
-   */
-  const fixtureModule: unknown = await import(pathToFileURL(fixturePath).href);
-
-  if (
-    typeof fixtureModule !== "object" ||
-    fixtureModule === null ||
-    !("MOCK_BLUEPRINTS" in fixtureModule)
-  ) {
-    throw new Error(`No MOCK_BLUEPRINTS export in ${fixturePath}`);
-  }
-  const blueprints: unknown = fixtureModule.MOCK_BLUEPRINTS;
-  if (!Array.isArray(blueprints)) throw new Error("MOCK_BLUEPRINTS is not an array.");
-
+/*
+ * ⚠️ A STATIC IMPORT NOW, AND THE OBJECTION THAT FORBADE ONE IS GONE. This was a runtime
+ * `import()` of a `file://` URL because `tsconfig.scripts.json` includes `scripts/**` and
+ * TypeScript resolves even type-only imports, so a static import of the sibling repo's fixtures
+ * made `@/lib/blueprints/schemas` a TS2307 in THIS repo's typecheck. The corpus moved to
+ * `scripts/fixtures/` without those imports, so there is nothing left to resolve elsewhere. The
+ * payload still arrives as `unknown` — the corpus is typed `readonly unknown[]` — which is where
+ * CLAUDE.md §3.1 wants it, and the two overrides (`process.argv[2]` and
+ * `QATOTO_FRONTEND_MOCKS_PATH`) went with the cross-repo path they existed to work around.
+ */
+function loadCaseStudyFixtures(): readonly SeedableCaseStudy[] {
   const seedable: SeedableCaseStudy[] = [];
   const failures: string[] = [];
 
-  for (const blueprint of blueprints) {
+  for (const blueprint of BLUEPRINT_SEED_CORPUS) {
     if (
       typeof blueprint !== "object" ||
       blueprint === null ||
@@ -322,7 +305,7 @@ async function writeCaseStudy(
 }
 
 async function main(): Promise<void> {
-  const seedables = await loadCaseStudyFixtures();
+  const seedables = loadCaseStudyFixtures();
   console.log(`Parsed ${String(seedables.length)} case-study fixtures. Writing.`);
 
   // ONE TRANSACTION for all ten: a half-seeded surface is worse than an unseeded one.

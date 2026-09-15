@@ -1,5 +1,4 @@
 import { and, eq, inArray } from "drizzle-orm";
-import type { SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { caseStudy, showcaseLaunch, teardown } from "#src/db/schema.js";
@@ -190,8 +189,3 @@ export const ENGAGEMENT_GATE_STATES = {
   teardownViewable: TEARDOWN_VIEWABLE_MODERATION_STATES,
   listed: LISTED_MODERATION_STATES,
 } as const;
-
-/** Unused today; exported so a future read can share the predicate rather than restate it. */
-export function engageableShowcaseCondition(): SQL {
-  return inArray(showcaseLaunch.moderationState, [...ENGAGEABLE_MODERATION_STATES]);
-}

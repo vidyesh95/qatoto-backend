@@ -1,6 +1,3 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-
 import "dotenv/config";
 import { eq } from "drizzle-orm";
 
@@ -27,21 +24,25 @@ import {
   type TeardownImport,
 } from "#src/modules/home/blueprints/teardown-import.schemas.js";
 
+import { BLUEPRINT_SEED_CORPUS } from "./fixtures/blueprint-seed-corpus.js";
+
 /**
- * Seeds the twelve teardowns the frontend has been serving from fixtures.
+ * Seeds the twelve demo teardowns.
  *
  * WHY A SEED AT ALL, when the showcase round refused one. A launch is written by a maker through a
  * real route, so showcase data existed the moment the reads did. A teardown has no authoring path
  * yet — so without this, building the read surface would take a page that shows twelve teardowns
  * down to an empty state, which is a worse answer than the fixtures were.
  *
- * ⚠️ THE FIXTURE MODULE IS LOADED AT RUNTIME, NOT IMPORTED. A static import would pull a file from
- * the sibling repository into this one's TypeScript program, and TypeScript resolves even type-only
- * imports at compile time — so `@/lib/blueprints/schemas` inside it becomes TS2307 and
- * `tsc --noEmit -p tsconfig.scripts.json` goes red. Adding an `@/*` paths entry here would make the
- * backend's typecheck depend on the frontend being checked out next door. A dynamic import of a
- * `file://` URL is invisible to the compiler, and it lands the payload as `unknown`, which is where
- * CLAUDE.md §3.1 wants it anyway.
+ * ⚠️ THE CORPUS IS A STATIC IMPORT NOW, AND THE REASON IT COULD NOT BE IS GONE. It used to be a
+ * dynamic `import()` of a `file://` URL because a static import would have pulled a file from the
+ * sibling repository into this one's TypeScript program, and TypeScript resolves even type-only
+ * imports at compile time — so `@/lib/blueprints/schemas` inside it became TS2307 and
+ * `tsc --noEmit -p tsconfig.scripts.json` went red. The corpus now lives in `scripts/fixtures/`
+ * with those four frontend type imports dropped, so there is nothing left to resolve across a
+ * repository boundary, and this repository's typecheck no longer depends on the frontend being
+ * checked out next door. The payload still lands as `unknown`, which is where CLAUDE.md §3.1 wants
+ * it — the corpus is typed `readonly unknown[]` rather than the compiler being asked to trust it.
  *
  * ⚠️ EVERY ROW IS PARSED BEFORE ANY ROW IS WRITTEN. `TeardownImportSchema` is this surface's only
  * write gate — there is no controller to defer to — and it carries the five rules no CHECK can
@@ -59,36 +60,29 @@ import {
  * uniqueness constraint and a URL behind it.
  */
 
-const DEFAULT_FIXTURE_PATH = path.resolve(
-  import.meta.dirname,
-  "../../../frontend/qatoto-frontend/src/mocks/blueprints-mocks.ts",
-);
-
 /** A fixture instant is an ISO string; the columns are `timestamp(3)`. */
 function toInstant(isoInstant: string): Date {
   return new Date(isoInstant);
 }
 
-async function loadTeardownFixtures(): Promise<readonly TeardownImport[]> {
-  // The two repositories are siblings by convention, not by guarantee — so the path is overridable.
-  const fixturePath =
-    process.argv[2] ?? process.env.QATOTO_FRONTEND_MOCKS_PATH ?? DEFAULT_FIXTURE_PATH;
-  const fixtureModule: unknown = await import(pathToFileURL(fixturePath).href);
-
-  if (
-    typeof fixtureModule !== "object" ||
-    fixtureModule === null ||
-    !("MOCK_BLUEPRINTS" in fixtureModule)
-  ) {
-    throw new Error(`No MOCK_BLUEPRINTS export in ${fixturePath}`);
-  }
-  const blueprints: unknown = fixtureModule.MOCK_BLUEPRINTS;
-  if (!Array.isArray(blueprints)) throw new Error("MOCK_BLUEPRINTS is not an array.");
-
+/**
+ * THE CORPUS IS AN ORDINARY IMPORT NOW, not a path resolved across a repository boundary.
+ *
+ * It used to live at `qatoto-frontend/src/mocks/blueprints-mocks.ts` and was loaded by a dynamic
+ * `import()` of a resolved filesystem path, with two overrides — `process.argv[2]` and
+ * `QATOTO_FRONTEND_MOCKS_PATH` — because "the two repositories are siblings by convention, not by
+ * guarantee". Both overrides are gone with the reason for them: the corpus is in this repository,
+ * so a missing file is now a build failure rather than a runtime one.
+ *
+ * ⚠️ IT STAYS `readonly unknown[]` ON PURPOSE. Every element is parsed by `TeardownImportSchema`
+ * below, which is the only thing that may decide a fixture is a teardown. Typing the corpus as
+ * something narrower would move that decision to a place with no runtime force.
+ */
+function loadTeardownFixtures(): readonly TeardownImport[] {
   const teardownFixtures: TeardownImport[] = [];
   const failures: string[] = [];
 
-  for (const blueprint of blueprints) {
+  for (const blueprint of BLUEPRINT_SEED_CORPUS) {
     if (
       typeof blueprint !== "object" ||
       blueprint === null ||
@@ -356,7 +350,7 @@ async function writeTeardown(
 }
 
 async function main(): Promise<void> {
-  const fixtures = await loadTeardownFixtures();
+  const fixtures = loadTeardownFixtures();
   console.log(`Parsed ${String(fixtures.length)} teardown fixtures. Writing.`);
 
   // ONE TRANSACTION for all twelve: a half-seeded surface is worse than an unseeded one.
