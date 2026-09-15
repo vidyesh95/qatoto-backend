@@ -1032,6 +1032,8 @@ export async function deleteBlueprintHeroSlideImage(
  * TWO ADDRESS SHAPES IN ONE FOLDER, and the difference is when the owning row exists:
  *   * `qatoto/showcase-images/<launchId>/heading` — the launch id is minted before the upload,
  *     so the heading image lives under its launch;
+ *   * `qatoto/showcase-images/heading/<imageId>` — a heading image STAGED from a draft, before
+ *     any launch exists, so it is addressed by its own row id;
  *   * `qatoto/showcase-images/write-up/<imageId>` — a write-up image is uploaded while the maker
  *     is still writing, before any launch exists, so it is addressed by its own row id.
  *
@@ -1051,6 +1053,18 @@ export function showcaseLaunchHeadingImagePublicId(launchId: string): string {
 
 export function showcaseWriteUpImagePublicId(imageId: string): string {
   return `${SHOWCASE_IMAGE_FOLDER}/write-up/${imageId}`;
+}
+
+/**
+ * A heading image STAGED before its launch exists, addressed by its own row id.
+ *
+ * ⚠️ A THIRD ADDRESS SHAPE, and it is the write-up shape rather than the heading one above. That
+ * one keys on `launchId`, which a draft does not have and may never have — so a staged cover is
+ * addressed by the row that owns it, exactly as a write-up image is, and for the same reason.
+ * `showcaseLaunchHeadingImagePublicId` stays in use for the multipart submit path.
+ */
+export function showcaseStagedHeadingImagePublicId(imageId: string): string {
+  return `${SHOWCASE_IMAGE_FOLDER}/heading/${imageId}`;
 }
 
 /**

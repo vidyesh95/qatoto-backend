@@ -221,7 +221,9 @@ describe("blueprints showcase launch routes", () => {
 
       expect(response.status).toBe(201);
       expect(response.body.data.url).toBe("https://cdn.test/write-up/one.avif");
-      expect(uploadShowcaseWriteUpImage).toHaveBeenCalledWith("user_test_caller", expect.any(Buffer));
+      // `undefined` for the draft: this upload carried no `?draftId=`, so the image is unclaimed
+      // and the sweeper reaps it in a day unless a launch takes it.
+      expect(uploadShowcaseWriteUpImage).toHaveBeenCalledWith("user_test_caller", expect.any(Buffer), undefined);
     });
 
     it("answers 422 for a file that is not an image", async () => {
@@ -424,7 +426,9 @@ describe("blueprints showcase launch routes", () => {
       expect(submitShowcaseLaunch).toHaveBeenCalledWith({
         authorUserId: "user_test_caller",
         draft: expect.objectContaining({ title: "Solar cold storage unit" }),
-        rawHeadingImageBytes: expect.any(Buffer),
+        // An attached file is the `upload` arm; a draft-composed launch sends `headingImageId`
+        // instead and reaches the service as `{ kind: "staged" }`.
+        headingImage: { kind: "upload", rawBytes: expect.any(Buffer) },
         receivedAt: expect.any(Date),
       });
     });

@@ -2270,6 +2270,74 @@ export const showcaseLaunchWriteUpImage = pgTable(
 );
 
 /**
+ * A heading image a maker uploaded before their launch existed.
+ *
+ * ⚠️ **THE HEADING IMAGE USED TO HAVE NO STAGING AND THAT IS WHY THIS TABLE EXISTS.** It travelled
+ * as a multipart part on `POST /blueprints/showcases`, so the launch id was minted first and the
+ * asset lived at `showcase-images/<launchId>/heading`. That works for a submit and cannot work for
+ * a DRAFT, which has no launch and never will until it is posted — so a saved launch draft lost its
+ * cover on every resume, because a `File` cannot be written into a JSON document.
+ *
+ * ⚠️ **THE MULTIPART PATH STILL WORKS AND MUST KEEP WORKING.** A caller on a cached bundle posts the
+ * old shape, so submit accepts either an uploaded row id or the file itself. Rows written by the
+ * multipart path never reach this table; it holds staged uploads only.
+ *
+ * THE TWO NULLABLE OWNERS ARE THE SAME PAIR `showcase_launch_write_up_image` CARRIES, and they mean
+ * the same thing: `launch_id` once a launch claims it, `draft_id` while a draft references it, and
+ * BOTH NULL is an upload nothing points at, which `sweep-orphan-showcase-images` reaps after a day.
+ */
+export const showcaseLaunchHeadingImage = pgTable(
+  "showcase_launch_heading_image",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    launchId: text("launch_id").references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    /** `set null` rather than cascade: deleting a draft frees the asset for the sweeper to reap. */
+    draftId: text("draft_id").references(() => blueprintDraft.id, { onDelete: "set null" }),
+    uploadedByUserId: text("uploaded_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Stored so a delete never has to rebuild it. */
+    publicId: text("public_id").notNull().unique(),
+    url: text("url").notNull().unique(),
+    /** Square within the service's tolerance, and measured on the RE-ENCODED file. */
+    widthPx: integer("width_px").notNull(),
+    heightPx: integer("height_px").notNull(),
+    blurDataUrl: text("blur_data_url").notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("showcase_launch_heading_image_launch_idx").on(table.launchId),
+    /* The sweeper and the staging cap both ask which of this maker's uploads nothing points at. */
+    index("showcase_launch_heading_image_unclaimed_idx")
+      .on(table.uploadedByUserId, table.createdAt)
+      .where(sql`launch_id IS NULL AND draft_id IS NULL`),
+    check(
+      "showcase_launch_heading_image_dimensions_ck",
+      sql`width_px BETWEEN 1 AND 8192 AND height_px BETWEEN 1 AND 8192`,
+    ),
+    check(
+      "showcase_launch_heading_image_url_ck",
+      sql`char_length(url) BETWEEN 1 AND 2048
+          AND url LIKE 'https://%'
+          AND url !~ '[[:space:][:cntrl:]]'`,
+    ),
+    /**
+     * ⚠️ NO LITERAL SEMICOLON IN THIS EXPRESSION, and `chr(59)` is why it reads oddly — drizzle-kit
+     * cuts a CHECK body at its first `;` when it writes the migration, which produced a truncated,
+     * unterminated statement the first time the write-up table tried the natural spelling.
+     */
+    check(
+      "showcase_launch_heading_image_blur_ck",
+      sql`char_length(blur_data_url) <= 2048
+          AND left(blur_data_url, 23) = ('data:image/webp' || chr(59) || 'base64,')
+          AND substr(blur_data_url, 24) ~ '^[A-Za-z0-9+/]+={0,2}$'`,
+    ),
+  ],
+);
+
+/**
  * Denormalised counters for one published launch — a read cache, never a source of truth.
  *
  * WHY A SIDECAR RATHER THAN COLUMNS ON `showcase_launch`. Same reason as `video_stats`: a counter

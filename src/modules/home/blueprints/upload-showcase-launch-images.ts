@@ -42,3 +42,21 @@ export const uploadShowcaseWriteUpImageFile = createSingleFileUpload({
   textFieldLimit: 0,
   fieldErrorKey: "image",
 });
+
+/**
+ * POST /blueprints/showcases/heading-images — one `image` file and nothing else.
+ *
+ * `fieldName: "image"` MATCHES THE WRITE-UP UPLOAD, not the submit's `headingImage`. Both staging
+ * routes take one file and the field names what the request IS rather than where the image ends up;
+ * `fieldErrorKey` is what decides which control shows a refusal, and that is `headingImage` here.
+ */
+export const uploadShowcaseHeadingImageFile = createSingleFileUpload({
+  fieldName: "image",
+  maximumBytes: MAX_SHOWCASE_IMAGE_UPLOAD_BYTES,
+  acceptsMediaType: acceptsAnyImage,
+  tooLargeMessage: "The cover image is over the 5 MB limit.",
+  unsupportedMediaTypeMessage: `The cover image must be an image. ${ACCEPTED_IMAGE_FORMATS_SENTENCE}`,
+  invalidUploadMessage: "That image could not be read. Send one image file.",
+  textFieldLimit: 0,
+  fieldErrorKey: "headingImage",
+});

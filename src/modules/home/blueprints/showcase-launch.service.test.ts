@@ -229,7 +229,10 @@ function submitInput(draftOverrides: Record<string, unknown> = {}, receivedAt = 
     authorUserId: "user_maker",
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion
     draft: buildDraft(draftOverrides) as never,
-    rawHeadingImageBytes: RAW_IMAGE_BYTES,
+    // THE MULTIPART ARM. The cover can now also arrive as a staged row id, and these cases
+    // deliberately exercise the upload path — the one that still does the decode, the square check
+    // and the storage write.
+    headingImage: { kind: "upload" as const, rawBytes: RAW_IMAGE_BYTES },
     receivedAt,
   };
 }

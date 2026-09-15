@@ -193,6 +193,18 @@ export const ShowcaseLaunchDraftSchema = z
           ),
         "Both statements have to be ticked before this can be posted.",
       ),
+    /**
+     * A cover staged earlier, when the maker was composing from a draft.
+     *
+     * ⚠️ **OPTIONAL WITH A `null` DEFAULT, BECAUSE THE OLD SHAPE MUST KEEP WORKING.** The schema is
+     * `.strict()`, so a client that has never heard of this field simply omits it and gets `null` —
+     * and the controller then requires the multipart `headingImage` exactly as before. A required
+     * field here would 422 every client running a cached bundle.
+     *
+     * NOT TRUSTED AS A URL OR AN ADDRESS. It is a row id, and the submit proves the row is the
+     * caller's and unclaimed before it is used for anything.
+     */
+    headingImageId: z.string().trim().min(1).max(200).nullable().default(null),
   })
   .strict();
 export type ShowcaseLaunchDraft = z.infer<typeof ShowcaseLaunchDraftSchema>;
@@ -297,4 +309,18 @@ export const ShowcaseReviewQueueQuerySchema = z
     limit: z.coerce.number().int().min(1).max(50).default(20),
     cursor: z.string().min(1).max(200).optional(),
   })
+  .strip();
+
+/**
+ * `POST /blueprints/showcases/write-up-images?draftId=…`
+ *
+ * ⚠️ A QUERY PARAM RATHER THAN A TEXT PART, and that is the parser's doing rather than a
+ * preference. `uploadShowcaseWriteUpImageFile` is declared `textFieldLimit: 0` — "one `image` file
+ * and nothing else" — so carrying the draft id in the body would mean widening a parser whose
+ * narrowness is the thing protecting it.
+ *
+ * `.strip()` like every other query schema here: a stray `utm_source` is ignored, not a 422.
+ */
+export const ShowcaseWriteUpImageQuerySchema = z
+  .object({ draftId: z.string().trim().min(1).max(200).optional() })
   .strip();

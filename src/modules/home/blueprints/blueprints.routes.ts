@@ -39,6 +39,7 @@ import * as showcaseLaunchController from "#src/modules/home/blueprints/showcase
 import * as teardownController from "#src/modules/home/blueprints/teardown.controller.js";
 import { uploadBlueprintHeroSlideImageFile } from "#src/modules/home/blueprints/upload-blueprint-hero-image.js";
 import {
+  uploadShowcaseHeadingImageFile,
   uploadShowcaseLaunchSubmissionFiles,
   uploadShowcaseWriteUpImageFile,
 } from "#src/modules/home/blueprints/upload-showcase-launch-images.js";
@@ -155,6 +156,22 @@ router.post(
   requireIdentifiedUser,
   uploadShowcaseWriteUpImageFile,
   showcaseLaunchController.uploadWriteUpImage,
+);
+
+/**
+ * POST /blueprints/showcases/heading-images — a cover staged before its launch exists.
+ *
+ * ⚠️ A LITERAL UNDER `/showcases/`, so it belongs ABOVE `/showcases/:launchSlug` with the others.
+ * `blueprints.routes.order.test.ts` derives the literal list rather than naming it, so this is
+ * guarded without anyone remembering to add it — but the declaration order still has to be right.
+ */
+router.post(
+  "/showcases/heading-images",
+  requireAuth,
+  showcaseWriteUpImageUploadLimiter,
+  requireIdentifiedUser,
+  uploadShowcaseHeadingImageFile,
+  showcaseLaunchController.uploadHeadingImage,
 );
 
 /** POST /blueprints/showcases — multipart: `draft` JSON text part, then `headingImage`. */

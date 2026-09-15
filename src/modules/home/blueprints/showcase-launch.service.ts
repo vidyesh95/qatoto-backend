@@ -5,19 +5,26 @@ import sharp from "sharp";
 
 import { db } from "#src/db/index.js";
 import {
+  blueprintDraft,
   showcaseLaunch,
   showcaseLaunchTeamMember,
+  showcaseLaunchHeadingImage,
   showcaseLaunchWriteUpImage,
 } from "#src/db/schema.js";
 import {
   deleteShowcaseImages,
   showcaseLaunchHeadingImagePublicId,
+  showcaseStagedHeadingImagePublicId,
   showcaseWriteUpImagePublicId,
   uploadShowcaseImage,
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { parseHttpsUrl, type ExternalUrlError } from "#src/lib/external-url.js";
-import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
+import {
+  validateAndNormalizeImage,
+  type ImageValidationError,
+  type NormalizedImage,
+} from "#src/lib/image.js";
 import { logger } from "#src/lib/logger.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { extractWriteUpImageAddresses } from "#src/modules/home/blueprints/showcase-launch-markdown.js";
@@ -57,16 +64,17 @@ const BLUR_PLACEHOLDER_DIMENSION_PX = 16;
 export type ShowcaseWriteUpImageError =
   | ImageValidationError
   | CloudinaryError
-  | { readonly type: "SHOWCASE_WRITE_UP_IMAGE_STAGING_LIMIT_REACHED"; readonly limit: number };
+  | { readonly type: "SHOWCASE_WRITE_UP_IMAGE_STAGING_LIMIT_REACHED"; readonly limit: number }
+  | { readonly type: "SHOWCASE_WRITE_UP_IMAGE_DRAFT_NOT_FOUND" };
 
-export type ShowcaseLaunchSubmitError =
+/**
+ * Why a cover was refused, by either route in.
+ *
+ * ONE UNION SHARED BY THE SUBMIT AND THE STAGED UPLOAD, so a rule added to one is a compile error
+ * in the other until it is handled — which is the point of extracting the check itself.
+ */
+export type ShowcaseHeadingImageRefusal =
   | ImageValidationError
-  | CloudinaryError
-  | { readonly type: "SHOWCASE_LAUNCH_TITLE_TAKEN" }
-  | { readonly type: "SHOWCASE_LAUNCH_LINK_INVALID"; readonly reason: ExternalUrlError }
-  | { readonly type: "SHOWCASE_LAUNCH_DATE_IN_FUTURE" }
-  | { readonly type: "SHOWCASE_LAUNCH_WRITE_UP_TOO_MANY_IMAGES"; readonly limit: number }
-  | { readonly type: "SHOWCASE_LAUNCH_WRITE_UP_IMAGE_NOT_AVAILABLE" }
   | {
       readonly type: "SHOWCASE_HEADING_IMAGE_NOT_SQUARE";
       readonly width: number;
@@ -78,6 +86,22 @@ export type ShowcaseLaunchSubmitError =
       readonly height: number;
       readonly minimum: number;
     };
+
+export type ShowcaseHeadingImageUploadError =
+  | ShowcaseHeadingImageRefusal
+  | CloudinaryError
+  | { readonly type: "SHOWCASE_WRITE_UP_IMAGE_DRAFT_NOT_FOUND" }
+  | { readonly type: "SHOWCASE_HEADING_IMAGE_STAGING_LIMIT_REACHED"; readonly limit: number };
+
+export type ShowcaseLaunchSubmitError =
+  | ShowcaseHeadingImageRefusal
+  | CloudinaryError
+  | { readonly type: "SHOWCASE_LAUNCH_TITLE_TAKEN" }
+  | { readonly type: "SHOWCASE_LAUNCH_LINK_INVALID"; readonly reason: ExternalUrlError }
+  | { readonly type: "SHOWCASE_LAUNCH_DATE_IN_FUTURE" }
+  | { readonly type: "SHOWCASE_LAUNCH_WRITE_UP_TOO_MANY_IMAGES"; readonly limit: number }
+  | { readonly type: "SHOWCASE_LAUNCH_WRITE_UP_IMAGE_NOT_AVAILABLE" }
+  | { readonly type: "SHOWCASE_HEADING_IMAGE_NOT_AVAILABLE" };
 
 /** What the form inserts into the write-up and hands to its preview. */
 export interface ShowcaseWriteUpImageView {
@@ -148,7 +172,33 @@ async function buildBlurPlaceholderDataUrl(
 export async function uploadShowcaseWriteUpImage(
   uploaderUserId: string,
   rawImageBytes: Buffer,
+  /**
+   * The draft this image belongs to, when the maker is writing one.
+   *
+   * ⚠️ **WITHOUT IT A RESUMED DRAFT LOSES EVERY IMAGE, SILENTLY** — which is what
+   * `showcase_launch_write_up_image.draft_id` was added to prevent, and what nothing set until
+   * now. The sweeper deletes any row with no launch after 24 hours, and a draft has no launch, so
+   * an unattached image in a week-old draft is a dead link with no error anywhere saying why.
+   */
+  draftId?: string,
 ): Promise<Result<ShowcaseWriteUpImageView, ShowcaseWriteUpImageError>> {
+  if (draftId !== undefined) {
+    /*
+     * ⚠️ OWNERSHIP IS PROVED, NOT TAKEN FROM THE QUERY STRING. Without this check any signed-in
+     * caller could attach images to a stranger's draft: the rows would survive the sweeper on
+     * somebody else's account, and the association is a fact about that person's unpublished work.
+     * A draft that is not the caller's is reported exactly as one that does not exist.
+     */
+    const [ownedDraft] = await db
+      .select({ id: blueprintDraft.id })
+      .from(blueprintDraft)
+      .where(and(eq(blueprintDraft.id, draftId), eq(blueprintDraft.ownerUserId, uploaderUserId)))
+      .limit(1);
+    if (!ownedDraft) {
+      return { success: false, error: { type: "SHOWCASE_WRITE_UP_IMAGE_DRAFT_NOT_FOUND" } };
+    }
+  }
+
   const [stagingRow] = await db
     .select({ unclaimedImageCount: count() })
     .from(showcaseLaunchWriteUpImage)
@@ -194,6 +244,9 @@ export async function uploadShowcaseWriteUpImage(
   await db.insert(showcaseLaunchWriteUpImage).values({
     id: imageId,
     uploadedByUserId: uploaderUserId,
+    // NULL when the maker is composing without a draft, which is still the ordinary case: the
+    // image is then unclaimed and the sweeper reaps it in a day if no launch takes it.
+    draftId: draftId ?? null,
     publicId: imagePublicId,
     url: uploadResult.value.secureUrl,
     // The re-encoded file's size, never a number the client sent.
@@ -205,6 +258,145 @@ export async function uploadShowcaseWriteUpImage(
   return {
     success: true,
     value: {
+      url: uploadResult.value.secureUrl,
+      widthPx: normalizedImage.value.width,
+      heightPx: normalizedImage.value.height,
+      blurDataUrl: blurDataUrl.value,
+    },
+  };
+}
+
+/**
+ * Decodes, re-encodes and measures a heading image, refusing one that is too small or not square.
+ *
+ * ⚠️ **EXTRACTED SO STAGING CANNOT BECOME THE LAX DOOR IN.** These rules used to live inline in the
+ * submit path, which was the only way a cover could arrive. There are two ways now — a multipart
+ * submit and a staged upload from a draft — and a second copy of a rule is a second copy that can
+ * drift. Every cover, by either route, goes through this function.
+ *
+ * MEASURED ON THE STORED FILE, not the upload: the re-encode may shrink an oversized image, and
+ * what every reader sees is the output.
+ */
+async function normalizeHeadingImageOrRefuse(
+  rawHeadingImageBytes: Buffer,
+): Promise<Result<NormalizedImage, ShowcaseHeadingImageRefusal>> {
+  const normalizedHeadingImage = await validateAndNormalizeImage(rawHeadingImageBytes, {
+    outputMaxDimensionPx: HEADING_IMAGE_OUTPUT_MAX_DIMENSION_PX,
+    outputFormat: "avif",
+  });
+  if (!normalizedHeadingImage.success) {
+    return { success: false, error: normalizedHeadingImage.error };
+  }
+
+  const { width, height } = normalizedHeadingImage.value;
+  if (Math.min(width, height) < HEADING_IMAGE_MINIMUM_DIMENSION_PX) {
+    return {
+      success: false,
+      error: {
+        type: "SHOWCASE_HEADING_IMAGE_TOO_SMALL",
+        width,
+        height,
+        minimum: HEADING_IMAGE_MINIMUM_DIMENSION_PX,
+      },
+    };
+  }
+  if (Math.abs(width - height) / Math.max(width, height) > HEADING_IMAGE_SQUARE_TOLERANCE) {
+    return { success: false, error: { type: "SHOWCASE_HEADING_IMAGE_NOT_SQUARE", width, height } };
+  }
+
+  return { success: true, value: normalizedHeadingImage.value };
+}
+
+/** The same ceiling the write-up images carry, for the same reason and counted separately. */
+const MAX_UNCLAIMED_SHOWCASE_HEADING_IMAGES_PER_MAKER = 10;
+
+/** What the composer holds in its draft, and shows as the cover preview. */
+export interface ShowcaseHeadingImageView {
+  readonly headingImageId: string;
+  readonly url: string;
+  readonly widthPx: number;
+  readonly heightPx: number;
+  readonly blurDataUrl: string;
+}
+
+/**
+ * Uploads a cover image BEFORE the launch exists, so a draft can hold one.
+ *
+ * ⚠️ **THIS IS WHAT MAKES A SHOWCASE DRAFT POSSIBLE AT ALL.** A cover used to travel as a `File`
+ * attached to the submit, and a `File` cannot be written into a JSON draft document — so a saved
+ * draft came back without its cover and there was nothing the frontend could do about it. What goes
+ * into the draft now is the id this returns.
+ *
+ * SAME CHECKS AS THE SUBMIT PATH, through the same function, so staging is not a way around the
+ * square-and-minimum-size rules.
+ */
+export async function uploadShowcaseHeadingImage(
+  uploaderUserId: string,
+  rawImageBytes: Buffer,
+  draftId?: string,
+): Promise<Result<ShowcaseHeadingImageView, ShowcaseHeadingImageUploadError>> {
+  if (draftId !== undefined) {
+    // Ownership proved, never taken from the query string — see `uploadShowcaseWriteUpImage`.
+    const [ownedDraft] = await db
+      .select({ id: blueprintDraft.id })
+      .from(blueprintDraft)
+      .where(and(eq(blueprintDraft.id, draftId), eq(blueprintDraft.ownerUserId, uploaderUserId)))
+      .limit(1);
+    if (!ownedDraft) {
+      return { success: false, error: { type: "SHOWCASE_WRITE_UP_IMAGE_DRAFT_NOT_FOUND" } };
+    }
+  }
+
+  const [stagingRow] = await db
+    .select({ unclaimedImageCount: count() })
+    .from(showcaseLaunchHeadingImage)
+    .where(
+      and(
+        eq(showcaseLaunchHeadingImage.uploadedByUserId, uploaderUserId),
+        // A draft's cover is claimed by paperwork, so it does not spend this budget — the same
+        // conjunct the sweeper and the partial index carry.
+        isNull(showcaseLaunchHeadingImage.launchId),
+        isNull(showcaseLaunchHeadingImage.draftId),
+      ),
+    );
+  if ((stagingRow?.unclaimedImageCount ?? 0) >= MAX_UNCLAIMED_SHOWCASE_HEADING_IMAGES_PER_MAKER) {
+    return {
+      success: false,
+      error: {
+        type: "SHOWCASE_HEADING_IMAGE_STAGING_LIMIT_REACHED",
+        limit: MAX_UNCLAIMED_SHOWCASE_HEADING_IMAGES_PER_MAKER,
+      },
+    };
+  }
+
+  const normalizedImage = await normalizeHeadingImageOrRefuse(rawImageBytes);
+  if (!normalizedImage.success) return { success: false, error: normalizedImage.error };
+
+  const blurDataUrl = await buildBlurPlaceholderDataUrl(rawImageBytes);
+  if (!blurDataUrl.success) return { success: false, error: blurDataUrl.error };
+
+  const imageId = randomUUID();
+  const imagePublicId = showcaseStagedHeadingImagePublicId(imageId);
+  const uploadResult = await uploadShowcaseImage(imagePublicId, normalizedImage.value.buffer);
+  if (!uploadResult.success) return { success: false, error: uploadResult.error };
+
+  // If this insert throws, the asset above has no row naming it — reaped by the orphan sweep, the
+  // same posture the write-up upload takes.
+  await db.insert(showcaseLaunchHeadingImage).values({
+    id: imageId,
+    uploadedByUserId: uploaderUserId,
+    draftId: draftId ?? null,
+    publicId: imagePublicId,
+    url: uploadResult.value.secureUrl,
+    widthPx: normalizedImage.value.width,
+    heightPx: normalizedImage.value.height,
+    blurDataUrl: blurDataUrl.value,
+  });
+
+  return {
+    success: true,
+    value: {
+      headingImageId: imageId,
       url: uploadResult.value.secureUrl,
       widthPx: normalizedImage.value.width,
       heightPx: normalizedImage.value.height,
@@ -232,7 +424,8 @@ async function discardUnusedHeadingImage(headingImagePublicId: string): Promise<
 
 type SubmitTransactionOutcome =
   | { readonly kind: "inserted"; readonly createdAt: Date }
-  | { readonly kind: "write_up_image_unavailable" };
+  | { readonly kind: "write_up_image_unavailable" }
+  | { readonly kind: "heading_image_unavailable" };
 
 /**
  * Posts a launch. Lands `pending_review`.
@@ -247,10 +440,16 @@ type SubmitTransactionOutcome =
  * locks decide the images; a race lost at step 4 is translated into the same refusal the
  * pre-check would have given, and the uploaded heading image is deleted.
  */
+export type ShowcaseHeadingImageSource =
+  /** The original path: the file travelled as a multipart part on this very request. */
+  | { readonly kind: "upload"; readonly rawBytes: Buffer }
+  /** The draft path: the cover was staged earlier and the draft carries only its id. */
+  | { readonly kind: "staged"; readonly headingImageId: string };
+
 export async function submitShowcaseLaunch(input: {
   readonly authorUserId: string;
   readonly draft: ShowcaseLaunchDraft;
-  readonly rawHeadingImageBytes: Buffer;
+  readonly headingImage: ShowcaseHeadingImageSource;
   readonly receivedAt: Date;
 }): Promise<Result<ShowcaseLaunchReceipt, ShowcaseLaunchSubmitError>> {
   const { authorUserId, draft } = input;
@@ -323,38 +522,64 @@ export async function submitShowcaseLaunch(input: {
     return { success: false, error: { type: "SHOWCASE_LAUNCH_TITLE_TAKEN" } };
   }
 
-  const normalizedHeadingImage = await validateAndNormalizeImage(input.rawHeadingImageBytes, {
-    outputMaxDimensionPx: HEADING_IMAGE_OUTPUT_MAX_DIMENSION_PX,
-    outputFormat: "avif",
-  });
-  if (!normalizedHeadingImage.success) {
-    return { success: false, error: normalizedHeadingImage.error };
-  }
-
-  // Measured on the STORED file, which is what every reader sees.
-  const { width, height } = normalizedHeadingImage.value;
-  if (Math.min(width, height) < HEADING_IMAGE_MINIMUM_DIMENSION_PX) {
-    return {
-      success: false,
-      error: {
-        type: "SHOWCASE_HEADING_IMAGE_TOO_SMALL",
-        width,
-        height,
-        minimum: HEADING_IMAGE_MINIMUM_DIMENSION_PX,
-      },
-    };
-  }
-  if (Math.abs(width - height) / Math.max(width, height) > HEADING_IMAGE_SQUARE_TOLERANCE) {
-    return { success: false, error: { type: "SHOWCASE_HEADING_IMAGE_NOT_SQUARE", width, height } };
-  }
-
   const launchId = randomUUID();
-  const headingImagePublicId = showcaseLaunchHeadingImagePublicId(launchId);
-  const uploadResult = await uploadShowcaseImage(
-    headingImagePublicId,
-    normalizedHeadingImage.value.buffer,
-  );
-  if (!uploadResult.success) return { success: false, error: uploadResult.error };
+
+  /*
+   * THE COVER ARRIVES ONE OF TWO WAYS, AND ONLY ONE OF THEM UPLOADS ANYTHING HERE.
+   *
+   * `upload` is the original multipart path: the bytes are on this request, so they are checked and
+   * stored now, addressed under the launch id minted above.
+   *
+   * `staged` is the draft path: the file was checked and stored when the maker picked it, so this
+   * only has to prove the row is theirs and unclaimed. Re-checking is impossible — the bytes are
+   * not here — and re-uploading would orphan the asset the draft already points at.
+   *
+   * ⚠️ `stagedHeadingImageId` DECIDES WHAT HAPPENS ON FAILURE. An uploaded cover is deleted when
+   * the launch is not written, because nothing else references it. A STAGED one is left alone: the
+   * draft still points at it, and deleting it would take the maker's cover out of the draft they
+   * are about to retry from.
+   */
+  let headingImagePublicId: string;
+  let headingImageUrl: string;
+  let stagedHeadingImageId: string | null = null;
+
+  if (input.headingImage.kind === "upload") {
+    const normalizedHeadingImage = await normalizeHeadingImageOrRefuse(input.headingImage.rawBytes);
+    if (!normalizedHeadingImage.success) {
+      return { success: false, error: normalizedHeadingImage.error };
+    }
+    headingImagePublicId = showcaseLaunchHeadingImagePublicId(launchId);
+    const uploadResult = await uploadShowcaseImage(
+      headingImagePublicId,
+      normalizedHeadingImage.value.buffer,
+    );
+    if (!uploadResult.success) return { success: false, error: uploadResult.error };
+    headingImageUrl = uploadResult.value.secureUrl;
+  } else {
+    const [stagedRow] = await db
+      .select({
+        id: showcaseLaunchHeadingImage.id,
+        publicId: showcaseLaunchHeadingImage.publicId,
+        url: showcaseLaunchHeadingImage.url,
+      })
+      .from(showcaseLaunchHeadingImage)
+      .where(
+        and(
+          eq(showcaseLaunchHeadingImage.id, input.headingImage.headingImageId),
+          // Theirs, and not already spent on another launch. A stranger's id and a claimed one are
+          // the same answer, so the route cannot be used to find out which ids exist.
+          eq(showcaseLaunchHeadingImage.uploadedByUserId, authorUserId),
+          isNull(showcaseLaunchHeadingImage.launchId),
+        ),
+      )
+      .limit(1);
+    if (!stagedRow) {
+      return { success: false, error: { type: "SHOWCASE_HEADING_IMAGE_NOT_AVAILABLE" } };
+    }
+    headingImagePublicId = stagedRow.publicId;
+    headingImageUrl = stagedRow.url;
+    stagedHeadingImageId = stagedRow.id;
+  }
 
   let transactionOutcome: SubmitTransactionOutcome;
   try {
@@ -372,6 +597,32 @@ export async function submitShowcaseLaunch(input: {
           return { kind: "write_up_image_unavailable" };
         }
         claimedImageIds = lockedImageRows.map((imageRow) => imageRow.imageId);
+      }
+
+      /*
+       * CLAIM THE STAGED COVER UNDER A ROW LOCK, inside the same transaction as everything else.
+       *
+       * The pre-check above read it without a lock, so two launches submitted at the same instant
+       * could both have seen it free. The lock decides, and the `launch_id IS NULL` conjunct in the
+       * UPDATE is what makes the second one lose — it matches no row, and the launch is refused
+       * rather than two launches sharing one cover asset.
+       */
+      if (stagedHeadingImageId !== null) {
+        const claimedHeadingRows = await tx
+          .update(showcaseLaunchHeadingImage)
+          .set({ launchId, draftId: null })
+          .where(
+            and(
+              eq(showcaseLaunchHeadingImage.id, stagedHeadingImageId),
+              eq(showcaseLaunchHeadingImage.uploadedByUserId, authorUserId),
+              isNull(showcaseLaunchHeadingImage.launchId),
+            ),
+          )
+          .returning({ id: showcaseLaunchHeadingImage.id });
+        if (claimedHeadingRows.length === 0) {
+          // Nothing written yet, so returning commits an empty transaction.
+          return { kind: "heading_image_unavailable" };
+        }
       }
 
       const [insertedLaunch] = await tx
@@ -393,7 +644,7 @@ export async function submitShowcaseLaunch(input: {
           callToActionLabel: draft.callToAction?.label ?? null,
           callToActionUrl,
           acceptedLaunchStatementIds: [...draft.acceptedLaunchStatementIds],
-          headingImageUrl: uploadResult.value.secureUrl,
+          headingImageUrl,
           headingImagePublicId,
           // Explicit rather than the column default, so this call answers "what state does a
           // new launch start in" without opening the schema.
@@ -428,14 +679,17 @@ export async function submitShowcaseLaunch(input: {
     // Anything else is a fault. Its uploaded image is left for the orphan sweep rather than
     // cleaned up here, because a fault is not a place to make more network calls.
     if (!isUniqueViolation(transactionError)) throw transactionError;
-    await discardUnusedHeadingImage(headingImagePublicId);
+    if (stagedHeadingImageId === null) await discardUnusedHeadingImage(headingImagePublicId);
     return { success: false, error: { type: "SHOWCASE_LAUNCH_TITLE_TAKEN" } };
   }
 
   switch (transactionOutcome.kind) {
     case "write_up_image_unavailable":
-      await discardUnusedHeadingImage(headingImagePublicId);
+      if (stagedHeadingImageId === null) await discardUnusedHeadingImage(headingImagePublicId);
       return { success: false, error: { type: "SHOWCASE_LAUNCH_WRITE_UP_IMAGE_NOT_AVAILABLE" } };
+    case "heading_image_unavailable":
+      // Never uploaded here, so there is nothing of ours to delete.
+      return { success: false, error: { type: "SHOWCASE_HEADING_IMAGE_NOT_AVAILABLE" } };
     case "inserted":
       return {
         success: true,

@@ -57,6 +57,14 @@ const EVERY_SHOWCASE_LAUNCH_ERROR: Readonly<Record<ShowcaseLaunchError["type"], 
   SHOWCASE_LAUNCH_SELF_MODERATION_FORBIDDEN: { type: "SHOWCASE_LAUNCH_SELF_MODERATION_FORBIDDEN" },
   SHOWCASE_LAUNCH_NOT_FOUND: { type: "SHOWCASE_LAUNCH_NOT_FOUND" },
   SHOWCASE_LAUNCH_TITLE_TAKEN: { type: "SHOWCASE_LAUNCH_TITLE_TAKEN" },
+  // The three the staged-cover path added: a draft that is not the caller's, too many staged
+  // uploads nothing points at, and a staged row that is gone or already spent on another launch.
+  SHOWCASE_WRITE_UP_IMAGE_DRAFT_NOT_FOUND: { type: "SHOWCASE_WRITE_UP_IMAGE_DRAFT_NOT_FOUND" },
+  SHOWCASE_HEADING_IMAGE_STAGING_LIMIT_REACHED: {
+    type: "SHOWCASE_HEADING_IMAGE_STAGING_LIMIT_REACHED",
+    limit: 10,
+  },
+  SHOWCASE_HEADING_IMAGE_NOT_AVAILABLE: { type: "SHOWCASE_HEADING_IMAGE_NOT_AVAILABLE" },
   SHOWCASE_LAUNCH_ALREADY_DECIDED: {
     type: "SHOWCASE_LAUNCH_ALREADY_DECIDED",
     moderationState: "published",
@@ -325,7 +333,7 @@ describe("mapShowcaseLaunchErrorToResponse", () => {
     it("maps every variant the union declares without throwing", () => {
       const everyError = Object.values(EVERY_SHOWCASE_LAUNCH_ERROR);
 
-      expect(everyError, "the variant table must not silently empty out").toHaveLength(19);
+      expect(everyError, "the variant table must not silently empty out").toHaveLength(22);
       for (const error of everyError) {
         const mapped = mapShowcaseLaunchErrorToResponse(error, "headingImage");
 

@@ -4,6 +4,7 @@ import type { ExternalUrlError } from "#src/lib/external-url.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import type { ShowcaseLaunchModerationError } from "#src/modules/home/blueprints/showcase-launch-moderation.service.js";
 import type {
+  ShowcaseHeadingImageUploadError,
   ShowcaseLaunchSubmitError,
   ShowcaseWriteUpImageError,
 } from "#src/modules/home/blueprints/showcase-launch.service.js";
@@ -33,6 +34,7 @@ import type {
 export type ShowcaseImageFieldKey = "headingImage" | "image";
 
 export type ShowcaseLaunchError =
+  | ShowcaseHeadingImageUploadError
   | ShowcaseLaunchSubmitError
   | ShowcaseWriteUpImageError
   | ShowcaseLaunchModerationError;
@@ -105,6 +107,23 @@ export function mapShowcaseLaunchErrorToResponse(
         statusCode: 409,
         message: `You have ${String(error.limit)} uploaded images no launch uses yet. Post your launch, or wait a day for unused uploads to clear.`,
       };
+    case "SHOWCASE_HEADING_IMAGE_STAGING_LIMIT_REACHED":
+      return {
+        statusCode: 409,
+        message: `You have ${String(error.limit)} uploaded cover images no launch uses yet. Post your launch, or wait a day for unused uploads to clear.`,
+      };
+    case "SHOWCASE_HEADING_IMAGE_NOT_AVAILABLE":
+      // The staged row is gone, taken by another launch, or was never this maker's. One answer for
+      // all three: the maker's fix is the same — choose the image again.
+      return {
+        statusCode: 422,
+        message: "That cover image is no longer available. Choose it again.",
+        errors: { headingImage: ["That cover image is no longer available. Choose it again."] },
+      };
+    case "SHOWCASE_WRITE_UP_IMAGE_DRAFT_NOT_FOUND":
+      // ONE ANSWER FOR "no such draft" AND "not yours", so the route cannot be used to find out
+      // which draft ids exist. The maker's own client only ever sends a draft it just created.
+      return { statusCode: 404, message: "That draft could not be found." };
 
     // --- 422, each keyed to its field.
     case "SHOWCASE_LAUNCH_LINK_INVALID": {

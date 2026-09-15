@@ -41,6 +41,8 @@ interface ListingPage {
 const sweepState = vi.hoisted(
   (): {
     expiredUploadRows: { publicId: string }[];
+    /** Staged covers the second DELETE reaps. Kept apart so the two are not double-counted. */
+    expiredHeadingImageRows: { publicId: string }[];
     headingImageRows: { publicId: string }[];
     writeUpImageRows: { publicId: string }[];
     listingPages: ListingPage[];
@@ -50,6 +52,7 @@ const sweepState = vi.hoisted(
     callOrder: string[];
   } => ({
     expiredUploadRows: [],
+    expiredHeadingImageRows: [],
     headingImageRows: [],
     writeUpImageRows: [],
     listingPages: [],
@@ -83,12 +86,24 @@ function findBoundDate(condition: unknown): Date | null {
   return null;
 }
 
+/**
+ * TWO DELETES NOW, AND THEY MUST RETURN DIFFERENT ROWS.
+ *
+ * The sweep reaps expired write-up images and expired STAGED COVERS, from two tables, in that
+ * order. A mock that answered both from one array made the second delete return the first's rows —
+ * which reads exactly like the sweep double-deleting, and would have hidden a real bug of that
+ * shape. They are told apart by call order, the way the reference lookups below already are.
+ */
+let deleteCallCount = 0;
 const returningMock = vi.fn<() => Promise<{ publicId: string }[]>>(async () => {
   sweepState.callOrder.push("db.delete.returning");
-  return sweepState.expiredUploadRows;
+  deleteCallCount += 1;
+  return deleteCallCount === 1 ? sweepState.expiredUploadRows : sweepState.expiredHeadingImageRows;
 });
 const deleteWhereMock = vi.fn<(condition: unknown) => { returning: typeof returningMock }>((condition) => {
-  sweepState.deleteCutoff = findBoundDate(condition);
+  // The write-up delete is built first, so its cutoff is the one asserted on. Both bind the same
+  // instant; overwriting would only ever replace it with an identical value.
+  sweepState.deleteCutoff ??= findBoundDate(condition);
   return { returning: returningMock };
 });
 const deleteMock = vi.fn<() => { where: typeof deleteWhereMock }>(() => ({ where: deleteWhereMock }));
@@ -158,6 +173,8 @@ describe("sweepOrphanShowcaseImages", () => {
     sweepState.listingPages = [{ assets: [], nextCursor: null }];
     sweepState.listingFailsAfter = Number.POSITIVE_INFINITY;
     sweepState.deleteCutoff = null;
+    sweepState.expiredHeadingImageRows = [];
+    deleteCallCount = 0;
     sweepState.referenceLookupCount = 0;
     sweepState.callOrder = [];
     deleteShowcaseImages.mockResolvedValue({ success: true, value: { requestedCount: 0 } });

@@ -102,6 +102,8 @@ async function makeTestImage(
 function buildDraft(title: string, writeUp: string | null): ShowcaseLaunchDraft {
   return {
     title,
+    // NULL: this smoke exercises the multipart path, where the cover is on the request itself.
+    headingImageId: null,
     tagline: "A bench supply that survives a short",
     summary:
       "A four-channel bench supply with per-channel current limiting, built to prove the constraints and the submit transaction together.",
@@ -190,7 +192,8 @@ async function main(): Promise<void> {
     const submitResult = await submitShowcaseLaunch({
       authorUserId: authorRow.id,
       draft: buildDraft(title, writeUp),
-      rawHeadingImageBytes: headingImageBytes,
+      // The multipart arm; the staged arm carries a row id instead.
+      headingImage: { kind: "upload", rawBytes: headingImageBytes },
       receivedAt: new Date(),
     });
     check(
@@ -250,7 +253,7 @@ async function main(): Promise<void> {
       authorUserId: authorRow.id,
       // Same name, differing only by case and inner spacing — the normalisation is what catches it.
       draft: buildDraft(`  ${title.toUpperCase()}  `, null),
-      rawHeadingImageBytes: duplicateHeadingBytes,
+      headingImage: { kind: "upload", rawBytes: duplicateHeadingBytes },
       receivedAt: new Date(),
     });
     check(

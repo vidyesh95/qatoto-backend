@@ -1,7 +1,11 @@
 import { and, inArray, isNull, lt } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { showcaseLaunch, showcaseLaunchWriteUpImage } from "#src/db/schema.js";
+import {
+  showcaseLaunch,
+  showcaseLaunchHeadingImage,
+  showcaseLaunchWriteUpImage,
+} from "#src/db/schema.js";
 import { deleteShowcaseImages, listShowcaseImageAssets } from "#src/lib/cloudinary.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
@@ -11,8 +15,9 @@ import { logger } from "#src/lib/logger.js";
  *
  * TWO KINDS OF LEFTOVER, each with a different cause:
  *
- *   1. AN UNCLAIMED WRITE-UP IMAGE — a maker uploaded it and never posted the launch. Its row
- *      and its asset are both deleted once it is a day old.
+ *   1. AN UNCLAIMED UPLOAD — a write-up image or a staged cover a maker uploaded and never posted.
+ *      Its row and its asset are both deleted once it is a day old. An upload a DRAFT references is
+ *      not unclaimed and is left alone.
  *   2. AN ASSET WITH NO ROW — a heading image whose launch lost a race and whose best-effort
  *      delete failed, an upload whose row insert threw, or an image whose row an erasure deleted
  *      while Cloudinary was down. Listed from Cloudinary and matched against both tables.
@@ -58,14 +63,34 @@ export async function sweepOrphanShowcaseImages(asOf: Date): Promise<ShowcaseIma
     )
     .returning({ publicId: showcaseLaunchWriteUpImage.publicId });
 
-  const expiredAssetDelete = await deleteShowcaseImages(
-    expiredUploadRows.map((expiredRow) => expiredRow.publicId),
+  /*
+   * THE SAME RULE FOR A STAGED COVER, and the same trap inside it.
+   *
+   * A cover staged from a draft has a NULL `launch_id` for as long as the draft goes unposted, so
+   * the `draft_id` conjunct is what stops this deleting the cover out of a draft somebody is still
+   * writing. One rule, now in four places: here, the write-up delete above, and each table's
+   * partial index.
+   */
+  const expiredHeadingImageRows = await db
+    .delete(showcaseLaunchHeadingImage)
+    .where(
+      and(
+        isNull(showcaseLaunchHeadingImage.launchId),
+        isNull(showcaseLaunchHeadingImage.draftId),
+        lt(showcaseLaunchHeadingImage.createdAt, cutoff),
+      ),
+    )
+    .returning({ publicId: showcaseLaunchHeadingImage.publicId });
+
+  const expiredPublicIds = [...expiredUploadRows, ...expiredHeadingImageRows].map(
+    (expiredRow) => expiredRow.publicId,
   );
+  const expiredAssetDelete = await deleteShowcaseImages(expiredPublicIds);
   if (!expiredAssetDelete.success) {
     logger.warn(
       "sweep-orphan-showcase-images: expired upload assets not deleted; next run retries",
       {
-        assetCount: expiredUploadRows.length,
+        assetCount: expiredPublicIds.length,
         errorType: expiredAssetDelete.error.type,
       },
     );
@@ -92,7 +117,14 @@ export async function sweepOrphanShowcaseImages(asOf: Date): Promise<ShowcaseIma
       .map((asset) => asset.publicId);
 
     if (staleAssetPublicIds.length > 0) {
-      const [headingImageRows, writeUpImageRows] = await Promise.all([
+      /*
+       * ⚠️ ALL THREE TABLES, AND THE THIRD ONE IS NOT OPTIONAL. This step deletes any stale asset
+       * no row names, so a table it does not consult is a table whose assets it destroys. A cover
+       * staged against a draft lives only in `showcase_launch_heading_image` and has no launch row
+       * pointing at it — omit that query and every showcase draft loses its cover after a day,
+       * which is the precise bug this whole feature exists to prevent.
+       */
+      const [headingImageRows, writeUpImageRows, stagedHeadingImageRows] = await Promise.all([
         db
           .select({ publicId: showcaseLaunch.headingImagePublicId })
           .from(showcaseLaunch)
@@ -101,9 +133,15 @@ export async function sweepOrphanShowcaseImages(asOf: Date): Promise<ShowcaseIma
           .select({ publicId: showcaseLaunchWriteUpImage.publicId })
           .from(showcaseLaunchWriteUpImage)
           .where(inArray(showcaseLaunchWriteUpImage.publicId, staleAssetPublicIds)),
+        db
+          .select({ publicId: showcaseLaunchHeadingImage.publicId })
+          .from(showcaseLaunchHeadingImage)
+          .where(inArray(showcaseLaunchHeadingImage.publicId, staleAssetPublicIds)),
       ]);
       const referencedPublicIds = new Set(
-        [...headingImageRows, ...writeUpImageRows].map((referenceRow) => referenceRow.publicId),
+        [...headingImageRows, ...writeUpImageRows, ...stagedHeadingImageRows].map(
+          (referenceRow) => referenceRow.publicId,
+        ),
       );
       const orphanAssetPublicIds = staleAssetPublicIds.filter(
         (publicId) => !referencedPublicIds.has(publicId),
@@ -124,7 +162,7 @@ export async function sweepOrphanShowcaseImages(asOf: Date): Promise<ShowcaseIma
   } while (nextCursor !== null && listingPagesRead < MAX_LISTING_PAGES_PER_RUN);
 
   return {
-    expiredUploadRowsDeleted: expiredUploadRows.length,
+    expiredUploadRowsDeleted: expiredPublicIds.length,
     orphanAssetsDeleted,
     listingPagesRead,
   };

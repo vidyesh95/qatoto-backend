@@ -18,6 +18,7 @@ import {
   PublicShowcaseSlugSchema,
   ShowcaseLaunchDraftSchema,
   ShowcaseReviewQueueQuerySchema,
+  ShowcaseWriteUpImageQuerySchema,
   SubmitShowcaseLaunchMultipartSchema,
 } from "#src/modules/home/blueprints/showcase-launch.schemas.js";
 import * as showcaseLaunchService from "#src/modules/home/blueprints/showcase-launch.service.js";
@@ -104,9 +105,16 @@ export async function uploadWriteUpImage(req: Request, res: Response): Promise<v
     return;
   }
 
+  // A MALFORMED `draftId` IS IGNORED, NOT A 422. The parameter is an optimisation — it keeps the
+  // image alive past the sweeper while a draft is being written — and refusing the whole upload
+  // over it would lose the maker's image to protect an association they can re-make by saving.
+  const query = ShowcaseWriteUpImageQuerySchema.safeParse(req.query);
+  const draftId = query.success ? query.data.draftId : undefined;
+
   const uploadResult = await showcaseLaunchService.uploadShowcaseWriteUpImage(
     req.user.id,
     req.file.buffer,
+    draftId,
   );
   if (!uploadResult.success) {
     respondShowcaseLaunchError(res, uploadResult.error, "image");
@@ -114,6 +122,42 @@ export async function uploadWriteUpImage(req: Request, res: Response): Promise<v
   }
 
   respondCreated(res, "Write-up image uploaded", uploadResult.value);
+}
+
+/**
+ * `POST /blueprints/showcases/heading-images?draftId=…` (multipart, field `image`) — a cover,
+ * staged before any launch exists.
+ *
+ * WHAT MAKES A SHOWCASE DRAFT POSSIBLE. A cover used to reach the server only as part of a submit,
+ * so a draft could not hold one: a `File` does not serialize into a JSON document. This answers with
+ * an id and a URL the draft can carry.
+ */
+export async function uploadHeadingImage(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  if (!req.file) {
+    respondFieldRefusal(res, "headingImage", "Choose a cover image to upload.");
+    return;
+  }
+
+  // A malformed `draftId` is ignored rather than refused — see `uploadWriteUpImage`.
+  const query = ShowcaseWriteUpImageQuerySchema.safeParse(req.query);
+  const draftId = query.success ? query.data.draftId : undefined;
+
+  const uploadResult = await showcaseLaunchService.uploadShowcaseHeadingImage(
+    req.user.id,
+    req.file.buffer,
+    draftId,
+  );
+  if (!uploadResult.success) {
+    respondShowcaseLaunchError(res, uploadResult.error, "headingImage");
+    return;
+  }
+
+  respondCreated(res, "Cover image uploaded", uploadResult.value);
 }
 
 /**
@@ -156,7 +200,24 @@ export async function submitLaunch(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  if (!req.file) {
+  /*
+   * EITHER SHAPE IS ACCEPTED, AND THE FILE WINS WHEN BOTH ARRIVE.
+   *
+   * A maker composing from a DRAFT has no file to send — their cover was staged when they picked
+   * it, and the draft carries `headingImageId`. A maker on a cached bundle, or one composing
+   * without a draft, still attaches the file. Refusing the old shape would break every client that
+   * has not reloaded, which is the reason the teardown arm accepts two file vocabularies too.
+   */
+  const stagedHeadingImageId = draftParse.data.headingImageId;
+  // NARROWED INTO THE UNION HERE rather than asserted at the call: the compiler proves a `staged`
+  // source always carries an id, which an `as string` would only have promised.
+  const headingImageSource: showcaseLaunchService.ShowcaseHeadingImageSource | null = req.file
+    ? { kind: "upload", rawBytes: req.file.buffer }
+    : stagedHeadingImageId === null
+      ? null
+      : { kind: "staged", headingImageId: stagedHeadingImageId };
+
+  if (headingImageSource === null) {
     respondFieldRefusal(res, "headingImage", MISSING_HEADING_IMAGE_MESSAGE);
     return;
   }
@@ -164,7 +225,7 @@ export async function submitLaunch(req: Request, res: Response): Promise<void> {
   const submitResult = await showcaseLaunchService.submitShowcaseLaunch({
     authorUserId: req.user.id,
     draft: draftParse.data,
-    rawHeadingImageBytes: req.file.buffer,
+    headingImage: headingImageSource,
     receivedAt: new Date(),
   });
   if (!submitResult.success) {
