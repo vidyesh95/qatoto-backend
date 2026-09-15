@@ -388,7 +388,7 @@ export const supportCaseMessageLimiter = createLimiter({
 /**
  * `/support/admin/*` — the staff queue, including its GETs.
  *
- * ON THE READS TOO, the `contentReviewLimiter` posture: staff throughput is legitimately
+ * ON THE READS TOO, the staff-queue posture: staff throughput is legitimately
  * fast, so this is generous. It exists to bound a COMPROMISED staff session reading a queue
  * of other people's payment problems, not to pace an honest one.
  */
@@ -479,26 +479,14 @@ export const videoThumbnailUploadLimiter = createLimiter({
 });
 
 /**
- * POST and DELETE /series/:seriesId/poster — the same 5 MB buffer, sharp re-encode and
- * Cloudinary round-trip as the thumbnail limiter above, so the same budget.
+ * The staff moderation queues — `/users/:id/reports`, `/feedback` and
+ * `/videos/:videoId/reports` and their admin halves.
  *
- * ITS OWN NAMESPACE rather than reusing `videoThumbnailUpload`, which is the convention every
- * upload limiter in this file follows: a shared namespace means a creator replacing a poster
- * spends the budget that stops them replacing a thumbnail, and the two are unrelated acts.
- *
- * THE DELETE IS COVERED TOO. It is not an upload, but it is a Cloudinary round-trip on a route
- * a script can hammer just as easily, and the pair is cheaper to reason about with one budget.
- */
-export const seriesPosterUploadLimiter = createLimiter({
-  namespace: "seriesPosterUpload",
-  windowMs: ONE_MINUTE_MS,
-  limit: 20,
-});
-
-/**
- * /videos/admin/review* — staff throughput, mirroring discoveryModerationLimiter. A
- * moderator legitimately works through a queue quickly, so this is generous; it exists
- * to bound a COMPROMISED staff session, not to pace an honest one.
+ * ⚠️ IT OUTLIVED THE QUEUE IT WAS NAMED FOR. This was written for `/videos/admin/review`, the
+ * anime episode queue, which no longer exists; three other moderation surfaces had already
+ * adopted it by name. The posture is what they share and the reason it is generous: a moderator
+ * legitimately works through a queue quickly, so this exists to bound a COMPROMISED staff
+ * session, not to pace an honest one.
  */
 export const contentReviewLimiter = createLimiter({
   namespace: "contentReview",

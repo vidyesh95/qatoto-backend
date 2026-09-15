@@ -100,7 +100,6 @@ describe("deriveStudioVideoStatus", () => {
     publishStatus: "draft",
     reviewStatus: "not_required",
     scheduledPublishAt: null,
-    episodeReleasedAt: null,
   } as const;
   const NOW = Date.UTC(2026, 6, 21);
 
@@ -117,25 +116,9 @@ describe("deriveStudioVideoStatus", () => {
     expect(deriveStudioVideoStatus({ ...base, uploadStatus: "processing" }, NOW)).toBe("processing");
   });
 
-  it("reports the review state ahead of the publish state", () => {
-    expect(deriveStudioVideoStatus({ ...base, reviewStatus: "pending" }, NOW)).toBe("pending-review");
-    expect(deriveStudioVideoStatus({ ...base, reviewStatus: "rejected" }, NOW)).toBe("rejected");
-  });
-
-  it("reports approved only until the episode actually airs", () => {
-    expect(deriveStudioVideoStatus({ ...base, reviewStatus: "approved" }, NOW)).toBe("approved");
-    expect(
-      deriveStudioVideoStatus(
-        {
-          ...base,
-          reviewStatus: "approved",
-          publishStatus: "published",
-          episodeReleasedAt: new Date(NOW),
-        },
-        NOW,
-      ),
-    ).toBe("published");
-  });
+  // The three review-derived statuses went with the staff review queue: nothing writes
+  // `review_status` anything but `not_required` any more, so there is no review state for
+  // this function to report ahead of the publish state.
 
   it("reports draft and published from the publish column", () => {
     expect(deriveStudioVideoStatus(base, NOW)).toBe("draft");

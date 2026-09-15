@@ -75,23 +75,23 @@ export function mapBlueprintHeroSlideErrorToResponse(error: BlueprintHeroSlideEr
       };
 
     // --- 404: reached only after the capability check has already passed.
-    case "ANIME_HERO_SLIDE_NOT_FOUND":
+    case "BLUEPRINT_HERO_SLIDE_NOT_FOUND":
       return { statusCode: 404, message: "Blueprint hero slide not found." };
 
     // --- 422: the request itself is wrong and the same payload will keep failing.
-    case "ANIME_HERO_DESTINATION_INVALID":
+    case "BLUEPRINT_HERO_DESTINATION_INVALID":
       return {
         statusCode: 422,
         message: "That link cannot be used.",
         errors: { destinationPath: [DESTINATION_REJECTION_MESSAGES[error.reason.type]] },
       };
-    case "ANIME_HERO_SLIDE_WINDOW_INVALID":
+    case "BLUEPRINT_HERO_SLIDE_WINDOW_INVALID":
       return {
         statusCode: 422,
         message: "That schedule window is empty.",
         errors: { endsAt: ["The end must be after the start."] },
       };
-    case "ANIME_HERO_SLIDE_ORDER_MISMATCH":
+    case "BLUEPRINT_HERO_SLIDE_ORDER_MISMATCH":
       // NOT merged with the 404 above, though both mean "an id you sent is not one I have":
       // a reorder sends the WHOLE set and the fix is to re-read the list, whereas a 404
       // names one path id. Collapsing them would tell an admin to reload when their reorder
@@ -103,7 +103,7 @@ export function mapBlueprintHeroSlideErrorToResponse(error: BlueprintHeroSlideEr
       };
 
     // --- 409: a conflict with the CURRENT state; the same payload succeeds later.
-    case "ANIME_HERO_SLIDE_LIMIT_REACHED":
+    case "BLUEPRINT_HERO_SLIDE_LIMIT_REACHED":
       return {
         statusCode: 409,
         message: `The Blueprints hero holds at most ${String(error.limit)} slides. Delete one first.`,

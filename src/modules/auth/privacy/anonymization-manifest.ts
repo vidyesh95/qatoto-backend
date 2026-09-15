@@ -76,9 +76,8 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
     },
     // Nullable `set null` attribution on a platform-authored slide; the audit chain is the
     // accountability record. These two were missing, which the coverage script reported.
-    "anime_hero_slide.created_by_user_id": { kind: "null_out" },
-    "anime_hero_slide.updated_by_user_id": { kind: "null_out" },
-    "anime_series.owner_id": { kind: "delete_rows" },
+    "blueprint_hero_slide.created_by_user_id": { kind: "null_out" },
+    "blueprint_hero_slide.updated_by_user_id": { kind: "null_out" },
     "claim_verification_run.triggered_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",

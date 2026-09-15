@@ -4,7 +4,6 @@ import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { longFormBody } from "#src/middleware/json-body.js";
 import {
   collaborationResponseLimiter,
-  contentReviewLimiter,
   videoCreateLimiter,
   videoDocumentDeleteLimiter,
   videoDocumentDownloadLimiter,
@@ -13,7 +12,6 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
-import * as adminReviewController from "#src/modules/studio/admin-review.controller.js";
 import { uploadVideoDocumentFile } from "#src/modules/studio/videos/upload-video-document.js";
 import { uploadVideoThumbnail } from "#src/modules/studio/videos/upload-video-thumbnail.js";
 import * as videosController from "#src/modules/studio/videos/videos.controller.js";
@@ -53,35 +51,6 @@ router.post("/", requireAuth, videoCreateLimiter, longFormBody, videosController
 
 /** GET /videos/mine — the caller's own videos, paginated. Literal before /:videoId. */
 router.get("/mine", requireAuth, videosController.getMyVideos);
-
-/**
- * GET /videos/admin/review — the anime moderation queue. Literal before /:videoId.
- * 403 when the caller lacks the `moderate_content` capability, decided BEFORE any id is
- * read so the route cannot be used as an id oracle.
- */
-router.get(
-  "/admin/review",
-  requireAuth,
-  contentReviewLimiter,
-  adminReviewController.listReviewQueue,
-);
-
-/** POST /videos/admin/review/:videoId/approve — approve and publish into /anime. */
-router.post(
-  "/admin/review/:videoId/approve",
-  requireAuth,
-  contentReviewLimiter,
-  adminReviewController.approveReview,
-);
-
-/** POST /videos/admin/review/:videoId/reject — reject with a reason. */
-router.post(
-  "/admin/review/:videoId/reject",
-  requireAuth,
-  contentReviewLimiter,
-  longFormBody,
-  adminReviewController.rejectReview,
-);
 
 /** GET /videos/:videoId — full video for the edit/detail flow. Owner only. */
 router.get("/:videoId", requireAuth, videosController.getVideoById);
@@ -178,7 +147,7 @@ router.put(
   videosController.replaceVideoPlaylists,
 );
 
-/** POST /videos/:videoId/publish — an anime episode goes to review, not live. */
+/** POST /videos/:videoId/publish */
 router.post("/:videoId/publish", requireAuth, videosController.publishVideo);
 
 /** POST /videos/:videoId/unpublish — back to draft. */

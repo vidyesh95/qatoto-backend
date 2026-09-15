@@ -3,7 +3,7 @@
  *
  *   pnpm db:verify-blueprint-hero-constraints
  *
- * ⚠️ THE TABLE IS STILL CALLED `anime_hero_slide`. The vertical was retired and the router is now
+ * ⚠️ THE TABLE IS STILL CALLED `blueprint_hero_slide`. The vertical was retired and the router is now
  * `/blueprints`, but renaming the table costs a migration and buys a tidier grep. Read every
  * `anime_` name here as historical — `BLUEPRINTS_BACKEND_STRUCTURE.md` §0 says so at length.
  *
@@ -56,14 +56,14 @@ const CHECK_VIOLATION_SQLSTATE = "23514";
 const FOREIGN_KEY_VIOLATION_SQLSTATE = "23503";
 
 const EXPECTED_CONSTRAINTS = [
-  "anime_hero_slide_position_ck",
-  "anime_hero_slide_title_ck",
-  "anime_hero_slide_image_url_ck",
-  "anime_hero_slide_destination_ck",
-  "anime_hero_slide_window_ck",
+  "blueprint_hero_slide_position_ck",
+  "blueprint_hero_slide_title_ck",
+  "blueprint_hero_slide_image_url_ck",
+  "blueprint_hero_slide_destination_ck",
+  "blueprint_hero_slide_window_ck",
 ];
 
-const EXPECTED_INDEXES = ["anime_hero_slide_live_idx", "anime_hero_slide_position_idx"];
+const EXPECTED_INDEXES = ["blueprint_hero_slide_live_idx", "blueprint_hero_slide_position_idx"];
 
 /** A row that satisfies every constraint; each probe below varies exactly one field. */
 const VALID_ROW = {
@@ -87,17 +87,17 @@ async function checkSchemaObjects(): Promise<readonly CheckOutcome[]> {
 
   const tableCount = await countQuery(
     `SELECT count(*) AS n FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = 'anime_hero_slide'`,
+      WHERE table_schema = 'public' AND table_name = 'blueprint_hero_slide'`,
   );
   outcomes.push({
-    label: "the anime_hero_slide table exists (historical name, /blueprints surface)",
+    label: "the blueprint_hero_slide table exists (historical name, /blueprints surface)",
     passed: tableCount === 1,
     detail: `${String(tableCount)}/1`,
   });
 
   const constraintCount = await countQuery(
     `SELECT count(*) AS n FROM pg_constraint
-      WHERE conrelid = 'anime_hero_slide'::regclass AND conname = ANY($1)`,
+      WHERE conrelid = 'blueprint_hero_slide'::regclass AND conname = ANY($1)`,
     [EXPECTED_CONSTRAINTS],
   );
   outcomes.push({
@@ -108,7 +108,7 @@ async function checkSchemaObjects(): Promise<readonly CheckOutcome[]> {
 
   const indexCount = await countQuery(
     `SELECT count(*) AS n FROM pg_indexes
-      WHERE tablename = 'anime_hero_slide' AND indexname = ANY($1)`,
+      WHERE tablename = 'blueprint_hero_slide' AND indexname = ANY($1)`,
     [EXPECTED_INDEXES],
   );
   outcomes.push({
@@ -124,8 +124,8 @@ async function checkSchemaObjects(): Promise<readonly CheckOutcome[]> {
    */
   const partialIndexCount = await countQuery(
     `SELECT count(*) AS n FROM pg_indexes
-      WHERE tablename = 'anime_hero_slide'
-        AND indexname = 'anime_hero_slide_live_idx'
+      WHERE tablename = 'blueprint_hero_slide'
+        AND indexname = 'blueprint_hero_slide_live_idx'
         AND indexdef ILIKE '%WHERE is_active%'`,
   );
   outcomes.push({
@@ -143,7 +143,7 @@ async function checkSchemaObjects(): Promise<readonly CheckOutcome[]> {
    */
   const positionUniqueCount = await countQuery(
     `SELECT count(*) AS n FROM pg_indexes
-      WHERE tablename = 'anime_hero_slide' AND indexdef ILIKE 'CREATE UNIQUE%position%'`,
+      WHERE tablename = 'blueprint_hero_slide' AND indexdef ILIKE 'CREATE UNIQUE%position%'`,
   );
   outcomes.push({
     label: "there is NO unique index on position — reorder rewrites positions one row at a time",
@@ -156,7 +156,7 @@ async function checkSchemaObjects(): Promise<readonly CheckOutcome[]> {
 
   const restrictingForeignKeys = await countQuery(
     `SELECT count(*) AS n FROM pg_constraint
-      WHERE conrelid = 'anime_hero_slide'::regclass AND contype = 'f' AND confdeltype <> 'n'`,
+      WHERE conrelid = 'blueprint_hero_slide'::regclass AND contype = 'f' AND confdeltype <> 'n'`,
   );
   outcomes.push({
     label: "both staff foreign keys are ON DELETE SET NULL, never RESTRICT",
@@ -171,7 +171,7 @@ async function checkSchemaObjects(): Promise<readonly CheckOutcome[]> {
 }
 
 const INSERT_SLIDE = `
-  INSERT INTO anime_hero_slide
+  INSERT INTO blueprint_hero_slide
     (id, image_url, title, destination_path, position, is_active, starts_at, ends_at, created_by_user_id)
   VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8)`;
 

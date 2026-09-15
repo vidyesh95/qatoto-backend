@@ -31,9 +31,7 @@ import type { VideoWatchError } from "#src/modules/home/engagement/video-watch.s
  * ONE PAIR THAT LOOKS MERGEABLE AND IS NOT — do not collapse it:
  *   COMMENT_NOT_FOUND (404) is a commentId in the PATH.
  *   PARENT_COMMENT_NOT_ON_VIDEO (422) is a parentCommentId in the BODY.
- *   One literal cannot render as two statuses, which is why they are two literals —
- *   the same split studio-error-response.ts makes between SERIES_NOT_FOUND and
- *   ANIME_SERIES_NOT_FOUND.
+ *   One literal cannot render as two statuses, which is why they are two literals.
  *
  * TWO VARIANTS DELIBERATELY ABSENT, so nobody adds them by reflex:
  *   SELF_ENGAGEMENT_FORBIDDEN — liking your own video is capped at exactly one by the

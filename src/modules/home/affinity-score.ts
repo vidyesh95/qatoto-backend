@@ -217,8 +217,8 @@ export const SUBSCRIPTION_SIGNAL_WEIGHT = 4;
  * that gap.
  *
  * ONLY EVER SET ON A CREATOR AFFINITY, and this is the load-bearing half of the rule. A mute
- * must never reach the TOPIC penalty: muting one anime channel is not a statement about
- * anime, and a viewer who found their whole subject matter quietly demoted because they
+ * must never reach the TOPIC penalty: muting one robotics channel is not a statement about
+ * robotics, and a viewer who found their whole subject matter quietly demoted because they
  * silenced one loud channel has been handed a control that lied about what it does. On
  * YouTube the 43% is channel-scoped for the same reason, and blocking a supplier here does
  * not hide their product category either. The topic call passes `isCreatorMuted: false`

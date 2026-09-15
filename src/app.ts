@@ -84,7 +84,6 @@ import commerceProductInquiryRouter from "#src/modules/store/trust/commerce-prod
 import commerceProductQaRouter from "#src/modules/store/trust/commerce-product-qa.routes.js";
 import commerceTrustRouter from "#src/modules/store/trust/commerce-trust.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
-import seriesRouter from "#src/modules/studio/series/series.routes.js";
 import videoContentReportsRouter from "#src/modules/studio/video-content-reports.routes.js";
 import videosRouter from "#src/modules/studio/videos/videos.routes.js";
 import indexRouter from "#src/routes/index.js";
@@ -305,9 +304,11 @@ app.use("/spotlight", spotlightRouter);
 // are gated by `manage_promotions` inside the service, the launch review routes by
 // `moderate_content` inside the controller.
 //
-// This was `/anime`. The vertical was retired; its two public series reads went with it and
-// the hero carousel is what remained. The `anime_hero_slide` TABLE keeps its name — renaming
-// it costs a migration, and a table name is private where a URL is not.
+// This was `/anime`. That vertical is gone in full: the URLs went first, and the catalog, the
+// studio `/series` router and the staff review queue followed. The hero carousel is what
+// remained, and it is now `blueprint_hero_slide` — the table finally carries the name of the
+// only surface that ever read it. The Cloudinary FOLDER still says `anime-hero-slides`, because
+// a public id is an address and renaming it orphans every uploaded image; see `cloudinary.ts`.
 app.use("/blueprints", blueprintsRouter);
 // The home feed's public read surface (HOME_BACKEND_STRUCTURE.md §5.1). Grouped with the
 // carousel above because both are front-page data sources, but UNLIKE the /research-projects
@@ -396,7 +397,6 @@ app.use("/", creatorRouter);
 // anyway, and only one of its three routes names a video.
 app.use("/watch-history", watchHistoryRouter);
 app.use("/playlists", playlistsRouter);
-app.use("/series", seriesRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,
 // exactly as the spec mounts the funding router at "/".
 app.use("/", researchCatalogRouter);

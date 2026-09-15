@@ -1,7 +1,7 @@
 /**
  * Drives the blueprints hero carousel's admin surface against a REAL database and Cloudinary.
  *
- * ⚠️ THE TABLE IS STILL CALLED `anime_hero_slide`. The vertical was retired and the router is now
+ * ⚠️ THE TABLE IS STILL CALLED `blueprint_hero_slide`. The vertical was retired and the router is now
  * `/blueprints`; renaming the table costs a migration and buys a tidier grep. Historical name.
  *
  * WHAT THIS PROVES THAT NOTHING ELSE DOES. Every vitest suite mocks `#src/db/index.js` wholesale,
@@ -45,7 +45,7 @@ import { eq, isNotNull } from "drizzle-orm";
 import sharp from "sharp";
 
 import { db, pool } from "#src/db/index.js";
-import { animeHeroSlide, user } from "#src/db/schema.js";
+import { blueprintHeroSlide, user } from "#src/db/schema.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
 import {
   createBlueprintHeroSlide,
@@ -110,9 +110,9 @@ async function main(): Promise<void> {
    * harness that silently rearranges the data it found is worse than no harness.
    */
   const preExistingOrder = await db
-    .select({ id: animeHeroSlide.id })
-    .from(animeHeroSlide)
-    .orderBy(animeHeroSlide.position);
+    .select({ id: blueprintHeroSlide.id })
+    .from(blueprintHeroSlide)
+    .orderBy(blueprintHeroSlide.position);
 
   try {
     // --- 1. Create, with AVIF — the format that used to 422.
@@ -221,21 +221,21 @@ async function main(): Promise<void> {
 
     // --- 5. Reorder. A non-permutation writes NOTHING.
     const positionsBefore = await db
-      .select({ id: animeHeroSlide.id, position: animeHeroSlide.position })
-      .from(animeHeroSlide)
-      .orderBy(animeHeroSlide.position);
+      .select({ id: blueprintHeroSlide.id, position: blueprintHeroSlide.position })
+      .from(blueprintHeroSlide)
+      .orderBy(blueprintHeroSlide.position);
     const everySlideId = positionsBefore.map((row) => row.id);
 
     const badReorder = await reorderBlueprintHeroSlides(adminUserId, everySlideId.slice(1));
     check(
       "a reorder that is not a permutation of every slide is refused",
-      !badReorder.success && badReorder.error.type === "ANIME_HERO_SLIDE_ORDER_MISMATCH",
+      !badReorder.success && badReorder.error.type === "BLUEPRINT_HERO_SLIDE_ORDER_MISMATCH",
       badReorder.success ? "it was ACCEPTED" : badReorder.error.type,
     );
     const positionsAfterBadReorder = await db
-      .select({ id: animeHeroSlide.id, position: animeHeroSlide.position })
-      .from(animeHeroSlide)
-      .orderBy(animeHeroSlide.position);
+      .select({ id: blueprintHeroSlide.id, position: blueprintHeroSlide.position })
+      .from(blueprintHeroSlide)
+      .orderBy(blueprintHeroSlide.position);
     check(
       "and it wrote nothing — a refused reorder leaves every position untouched",
       JSON.stringify(positionsBefore) === JSON.stringify(positionsAfterBadReorder),
@@ -258,9 +258,9 @@ async function main(): Promise<void> {
         : JSON.stringify(goodReorder.error),
     );
     const positionsAfterReorder = await db
-      .select({ id: animeHeroSlide.id, position: animeHeroSlide.position })
-      .from(animeHeroSlide)
-      .orderBy(animeHeroSlide.position);
+      .select({ id: blueprintHeroSlide.id, position: blueprintHeroSlide.position })
+      .from(blueprintHeroSlide)
+      .orderBy(blueprintHeroSlide.position);
     check(
       "and the stored order now matches what was asked for",
       JSON.stringify(positionsAfterReorder.map((row) => row.id)) === JSON.stringify(reversedOrder),
@@ -300,10 +300,10 @@ async function main(): Promise<void> {
      */
     seededProbeSlideId = randomUUID();
     const [maxPositionRow] = await db
-      .select({ position: animeHeroSlide.position })
-      .from(animeHeroSlide)
-      .orderBy(animeHeroSlide.position);
-    await db.insert(animeHeroSlide).values({
+      .select({ position: blueprintHeroSlide.position })
+      .from(blueprintHeroSlide)
+      .orderBy(blueprintHeroSlide.position);
+    await db.insert(blueprintHeroSlide).values({
       id: seededProbeSlideId,
       title: `Smoke seeded slide ${runSuffix}`,
       imageUrl: "/dummy/blueprint-hero-smoke.avif",
@@ -330,9 +330,9 @@ async function main(): Promise<void> {
       createdSlideIds.splice(createdSlideIds.indexOf(expiredSlideId), 1);
     }
     const positionsAfterDelete = await db
-      .select({ position: animeHeroSlide.position })
-      .from(animeHeroSlide)
-      .orderBy(animeHeroSlide.position);
+      .select({ position: blueprintHeroSlide.position })
+      .from(blueprintHeroSlide)
+      .orderBy(blueprintHeroSlide.position);
     check(
       "and the remaining positions are still contiguous from zero",
       positionsAfterDelete.every((row, index) => row.position === index),
@@ -343,7 +343,7 @@ async function main(): Promise<void> {
     const deleteAgain = await deleteBlueprintHeroSlide(adminUserId, expiredSlideId);
     check(
       "deleting an absent slide is a clean not-found, never a crash",
-      !deleteAgain.success && deleteAgain.error.type === "ANIME_HERO_SLIDE_NOT_FOUND",
+      !deleteAgain.success && deleteAgain.error.type === "BLUEPRINT_HERO_SLIDE_NOT_FOUND",
       deleteAgain.success ? "it was ACCEPTED" : deleteAgain.error.type,
     );
   } finally {
@@ -351,13 +351,15 @@ async function main(): Promise<void> {
       await deleteBlueprintHeroSlide(adminUserId, slideId);
     }
     if (seededProbeSlideId !== undefined) {
-      await db.delete(animeHeroSlide).where(eq(animeHeroSlide.id, seededProbeSlideId));
+      await db.delete(blueprintHeroSlide).where(eq(blueprintHeroSlide.id, seededProbeSlideId));
     }
 
     // Put the carousel back in the order this run found it in. Only the rows that still exist
     // are named, so a partially-failed run restores what it can rather than refusing outright.
     const survivingIds = new Set(
-      (await db.select({ id: animeHeroSlide.id }).from(animeHeroSlide)).map((row) => row.id),
+      (await db.select({ id: blueprintHeroSlide.id }).from(blueprintHeroSlide)).map(
+        (row) => row.id,
+      ),
     );
     const restoredOrder = preExistingOrder
       .map((row) => row.id)

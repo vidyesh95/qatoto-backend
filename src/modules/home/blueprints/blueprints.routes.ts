@@ -56,7 +56,8 @@ const router = express.Router();
  *
  * THIS MODULE WAS `/anime`. The hero carousel is all that survived the vertical's retirement:
  * the two public series reads (`/series`, `/series/:seriesSlug`) went with it, and with them
- * the second route-order hazard this comment used to describe.
+ * the second route-order hazard this comment used to describe. The rest of that vertical — the
+ * catalog tables, the studio `/series` router and the staff review queue — has since gone too.
  *
  * ROUTE ORDER IS STILL LOAD-BEARING ONCE: `/admin/hero-slides/reorder` is a literal and must
  * precede `/admin/hero-slides/:slideId`, or "reorder" is captured as a slide id and that

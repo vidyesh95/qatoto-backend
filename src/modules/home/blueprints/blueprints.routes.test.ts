@@ -169,10 +169,10 @@ describe("blueprints routes", () => {
       expect(createBlueprintHeroSlide).not.toHaveBeenCalled();
     });
 
-    it("maps ANIME_HERO_SLIDE_LIMIT_REACHED to 409", async () => {
+    it("maps BLUEPRINT_HERO_SLIDE_LIMIT_REACHED to 409", async () => {
       createBlueprintHeroSlide.mockResolvedValue({
         success: false,
-        error: { type: "ANIME_HERO_SLIDE_LIMIT_REACHED", limit: 8 },
+        error: { type: "BLUEPRINT_HERO_SLIDE_LIMIT_REACHED", limit: 8 },
       });
 
       const response = await request(app)
@@ -219,10 +219,10 @@ describe("blueprints routes", () => {
       expect(reorderBlueprintHeroSlides).not.toHaveBeenCalled();
     });
 
-    it("maps ANIME_HERO_SLIDE_ORDER_MISMATCH to 422", async () => {
+    it("maps BLUEPRINT_HERO_SLIDE_ORDER_MISMATCH to 422", async () => {
       reorderBlueprintHeroSlides.mockResolvedValue({
         success: false,
-        error: { type: "ANIME_HERO_SLIDE_ORDER_MISMATCH" },
+        error: { type: "BLUEPRINT_HERO_SLIDE_ORDER_MISMATCH" },
       });
 
       const response = await request(app)
@@ -288,10 +288,10 @@ describe("blueprints routes", () => {
       expect(updateBlueprintHeroSlide).not.toHaveBeenCalled();
     });
 
-    it("maps ANIME_HERO_SLIDE_NOT_FOUND to 404", async () => {
+    it("maps BLUEPRINT_HERO_SLIDE_NOT_FOUND to 404", async () => {
       updateBlueprintHeroSlide.mockResolvedValue({
         success: false,
-        error: { type: "ANIME_HERO_SLIDE_NOT_FOUND" },
+        error: { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND" },
       });
 
       const response = await request(app).patch(path).send({ title: "Updated title" });
@@ -299,10 +299,10 @@ describe("blueprints routes", () => {
       expect(response.status).toBe(404);
     });
 
-    it("maps ANIME_HERO_SLIDE_WINDOW_INVALID to 422", async () => {
+    it("maps BLUEPRINT_HERO_SLIDE_WINDOW_INVALID to 422", async () => {
       updateBlueprintHeroSlide.mockResolvedValue({
         success: false,
-        error: { type: "ANIME_HERO_SLIDE_WINDOW_INVALID" },
+        error: { type: "BLUEPRINT_HERO_SLIDE_WINDOW_INVALID" },
       });
 
       const response = await request(app)
@@ -379,10 +379,10 @@ describe("blueprints routes", () => {
       expect(deleteBlueprintHeroSlide).toHaveBeenCalledWith("user_test_caller", "slide_1");
     });
 
-    it("maps ANIME_HERO_SLIDE_NOT_FOUND to 404", async () => {
+    it("maps BLUEPRINT_HERO_SLIDE_NOT_FOUND to 404", async () => {
       deleteBlueprintHeroSlide.mockResolvedValue({
         success: false,
-        error: { type: "ANIME_HERO_SLIDE_NOT_FOUND" },
+        error: { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND" },
       });
 
       const response = await request(app).delete(path);

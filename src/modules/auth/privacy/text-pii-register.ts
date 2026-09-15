@@ -628,7 +628,7 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
   },
   "supplier.name": { kind: "not_personal_data", note: "A supplier company." },
   "content_category.image_url": { kind: "not_personal_data", note: PLATFORM_ARTWORK_NOTE },
-  "anime_hero_slide.image_url": { kind: "not_personal_data", note: PLATFORM_ARTWORK_NOTE },
+  "blueprint_hero_slide.image_url": { kind: "not_personal_data", note: PLATFORM_ARTWORK_NOTE },
   "promotional_slide.image_url": { kind: "not_personal_data", note: PLATFORM_ARTWORK_NOTE },
   "store_hero_slide.image_url": { kind: "not_personal_data", note: PLATFORM_ARTWORK_NOTE },
   "store_pathway.card_image_url": { kind: "not_personal_data", note: PLATFORM_ARTWORK_NOTE },

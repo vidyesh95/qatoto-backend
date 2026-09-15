@@ -159,15 +159,18 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // The home-page Spotlight rail — up to three admin-picked catalogue videos. One event
   // because the only write is a whole-set replace (never a per-slot create/update).
   "spotlight_slots_replaced",
-  // The /blueprints hero carousel — `anime-hero-slides` (the Cloudinary folder keeps its old name). Same shape and same reasoning as the
-  // promotional carousel above: every one of these five puts an image in front of every
-  // visitor to /anime, or takes one away, so all five are named rather than only the
-  // destructive ones.
-  "anime_hero_slide_created",
-  "anime_hero_slide_updated",
-  "anime_hero_slide_reordered",
-  "anime_hero_slide_image_replaced",
-  "anime_hero_slide_deleted",
+  // The /blueprints hero carousel. Same shape and same reasoning as the promotional carousel
+  // above: every one of these five puts an image in front of every visitor to /blueprints, or
+  // takes one away, so all five are named rather than only the destructive ones.
+  //
+  // ⚠️ THE CLOUDINARY FOLDER IS STILL `qatoto/anime-hero-slides` AND THESE LABELS ARE NOT.
+  // A public id is the ADDRESS of an uploaded image, so renaming the folder orphans every
+  // slide ever uploaded; an enum label is renamed by one ALTER TYPE. See `cloudinary.ts`.
+  "blueprint_hero_slide_created",
+  "blueprint_hero_slide_updated",
+  "blueprint_hero_slide_reordered",
+  "blueprint_hero_slide_image_replaced",
+  "blueprint_hero_slide_deleted",
   // Blueprints showcase launches — `showcase-launch-moderation`. A published launch puts a
   // maker's claims under a public address; a rejection sends their work back with a reason.
   // Both name an accountable human. Posting a launch is a member action and is not here.

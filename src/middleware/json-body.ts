@@ -17,7 +17,7 @@ import type { ApiResponse } from "#src/types/index.js";
  *
  * That was not merely untidy. `PUT /playlists/:id/videos` accepts 500 ids of 64 characters —
  * about 33 kb of pure ASCII — against a 10 kb cap, so it failed for everyone. Products,
- * series, playlists, suppliers and `PATCH /milestones/:id` failed for anyone writing
+ * playlists, suppliers and `PATCH /milestones/:id` failed for anyone writing
  * Devanagari or CJK, because `limit` counts BYTES while `z.string().max(n)` counts UTF-16
  * code units. That is the same class of bug the prefix mounts were added to fix, still live
  * on every route they did not happen to cover.

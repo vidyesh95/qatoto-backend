@@ -418,15 +418,6 @@ describe("videos routes", () => {
       expect(response.body.message).toBe("Video published successfully");
     });
 
-    it("says 'submitted for review' for an anime episode, never 'published'", async () => {
-      publishVideo.mockResolvedValue({ success: true, value: { id: "video_1", reviewStatus: "pending" } });
-
-      const response = await request(app).post(path);
-
-      expect(response.status).toBe(200);
-      expect(response.body.message).toBe("Episode submitted for review");
-    });
-
     it("maps INCOMPLETE_FOR_PUBLISH to 422", async () => {
       publishVideo.mockResolvedValue({
         success: false,

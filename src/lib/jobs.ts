@@ -104,9 +104,9 @@ export const JOB_NAMES = {
   // --- TIME, NOT BY CODE — see SCHEDULED_JOB_CRONS below. Durations must precede quality
   // --- (completion has no denominator without one), quality must precede popularity, and
   // --- popularity must precede affinities.
-  // The scheduled-publish sweep. A creator (or a moderator approving an embargoed anime
-  // episode) can set a video to `scheduled` with a future `scheduled_publish_at` — and until
-  // this existed, NOTHING ever moved it on. A scheduled video simply never published.
+  // The scheduled-publish sweep. A creator can set a video to `scheduled` with a future
+  // `scheduled_publish_at` — and until this existed, NOTHING ever moved it on. A scheduled
+  // video simply never published.
   publishScheduledVideosTick: "publish-scheduled-videos-tick",
   publishScheduledVideos: "publish-scheduled-videos",
   // The daily-log verification re-sweep. Deferring verification means a row can outlive a failed

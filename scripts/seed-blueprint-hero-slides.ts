@@ -1,7 +1,7 @@
 /**
  * Re-points the four seeded /blueprints hero slides off `public/dummy/` and onto Cloudinary.
  *
- * WHY THIS EXISTS. Migration 0149 seeded four `anime_hero_slide` rows whose `image_url` is a
+ * WHY THIS EXISTS. Migration 0149 seeded four `blueprint_hero_slide` rows whose `image_url` is a
  * SITE-RELATIVE path into the frontend repo's `public/dummy/` — the only honest way to seed,
  * since a migration cannot upload to Cloudinary. Frontend commit 0e6929d then retired /anime
  * and deleted all 31 anime fixtures from that directory, including the four these rows point
@@ -35,7 +35,7 @@ import path from "node:path";
 import { asc, eq, like } from "drizzle-orm";
 
 import { db, pool } from "#src/db/index.js";
-import { animeHeroSlide } from "#src/db/schema.js";
+import { blueprintHeroSlide } from "#src/db/schema.js";
 import { uploadBlueprintHeroSlideImage } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage } from "#src/lib/image.js";
 import { parsePromotionalDestination } from "#src/modules/home/promotions/promotional-destination.js";
@@ -131,15 +131,15 @@ async function main(): Promise<void> {
 
   const seededSlides: SeededSlideRow[] = await db
     .select({
-      id: animeHeroSlide.id,
-      imageUrl: animeHeroSlide.imageUrl,
-      title: animeHeroSlide.title,
-      destinationPath: animeHeroSlide.destinationPath,
-      position: animeHeroSlide.position,
+      id: blueprintHeroSlide.id,
+      imageUrl: blueprintHeroSlide.imageUrl,
+      title: blueprintHeroSlide.title,
+      destinationPath: blueprintHeroSlide.destinationPath,
+      position: blueprintHeroSlide.position,
     })
-    .from(animeHeroSlide)
-    .where(like(animeHeroSlide.imageUrl, "/dummy/%"))
-    .orderBy(asc(animeHeroSlide.position), asc(animeHeroSlide.id));
+    .from(blueprintHeroSlide)
+    .where(like(blueprintHeroSlide.imageUrl, "/dummy/%"))
+    .orderBy(asc(blueprintHeroSlide.position), asc(blueprintHeroSlide.id));
 
   if (seededSlides.length === 0) {
     console.log("0 slides to re-point — every hero slide is already off /dummy/. Nothing to do.");
@@ -204,7 +204,7 @@ async function main(): Promise<void> {
     }
 
     await db
-      .update(animeHeroSlide)
+      .update(blueprintHeroSlide)
       .set({
         imageUrl: uploadResult.value.secureUrl,
         title: replacement.title,
@@ -215,7 +215,7 @@ async function main(): Promise<void> {
         // made when it left created_by_user_id NULL.
         updatedByUserId: null,
       })
-      .where(eq(animeHeroSlide.id, slide.id));
+      .where(eq(blueprintHeroSlide.id, slide.id));
 
     repointedCount += 1;
     console.log(

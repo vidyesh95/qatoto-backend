@@ -14,7 +14,7 @@ const router = express.Router();
  *
  * ## Mounted at `/videos`, not at a root `/admin`
  *
- * `app.ts` states the rule for the anime review queue and it applies unchanged here: "one
+ * `app.ts` states the rule for the staff review queues and it applies unchanged here: "one
  * domain's moderation surface should not claim the global namespace." The three routers
  * mounted at `/` — the audit chain, role grants, platform metrics — earn `/admin` because
  * they are not any one domain's.
@@ -37,7 +37,7 @@ const router = express.Router();
  *
  * `moderate_content` is checked INSIDE the service, before any id is read. A route-level
  * guard makes the capability probeable and an id-first service makes the route an existence
- * oracle; doing it in that order avoids both. Commerce and the anime queue state the same.
+ * oracle; doing it in that order avoids both. Commerce states the same.
  */
 
 /**

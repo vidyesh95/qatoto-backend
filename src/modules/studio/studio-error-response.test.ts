@@ -16,12 +16,6 @@ const CASES: ReadonlyArray<{ readonly error: StudioDomainError; readonly statusC
   // 404 — every ownership and lookup failure.
   { error: { type: "VIDEO_NOT_FOUND", videoId: "v1" }, statusCode: 404 },
   { error: { type: "PLAYLIST_NOT_FOUND", playlistId: "p1" }, statusCode: 404 },
-  { error: { type: "SERIES_NOT_FOUND", seriesId: "s1" }, statusCode: 404 },
-  { error: { type: "SEASON_NOT_FOUND", seasonId: "sn1" }, statusCode: 404 },
-  { error: { type: "EPISODE_NOT_FOUND", episodeId: "e1" }, statusCode: 404 },
-
-  // 403 — the only one.
-  { error: { type: "PLATFORM_CAPABILITY_REQUIRED", capability: "moderate_content" }, statusCode: 403 },
 
   // 422 — the creator's link, or a rule a schema cannot express.
   { error: { type: "INVALID_YOUTUBE_URL" }, statusCode: 422 },
@@ -36,9 +30,6 @@ const CASES: ReadonlyArray<{ readonly error: StudioDomainError; readonly statusC
   // Renamed from `VIDEO_NOT_OWNED` when playlists stopped being owner-only: the refusal is
   // now "that video is not available to add", not "that video is not yours".
   { error: { type: "VIDEO_NOT_FOUND_FOR_PLAYLIST", videoIds: ["a"] }, statusCode: 422 },
-  { error: { type: "ANIME_SERIES_NOT_FOUND", seriesId: "s1" }, statusCode: 422 },
-  { error: { type: "ANIME_SEASON_NOT_FOUND", seasonId: "sn1" }, statusCode: 422 },
-  { error: { type: "NOT_AN_ANIME_EPISODE" }, statusCode: 422 },
   { error: { type: "NOT_AN_IMAGE" }, statusCode: 422 },
   { error: { type: "UNSUPPORTED_FORMAT", detected: { kind: "other", format: "gif" } }, statusCode: 422 },
   { error: { type: "UNSUPPORTED_FORMAT", detected: { kind: "heic" } }, statusCode: 422 },
@@ -51,9 +42,6 @@ const CASES: ReadonlyArray<{ readonly error: StudioDomainError; readonly statusC
 
   // 409 — lifecycle conflicts.
   { error: { type: "NO_TOKEN_REQUIRED" }, statusCode: 409 },
-  { error: { type: "REVIEW_NOT_PENDING", reviewStatus: "approved" }, statusCode: 409 },
-  { error: { type: "EPISODE_NUMBER_TAKEN", episodeNumber: 3 }, statusCode: 409 },
-  { error: { type: "SEASON_LABEL_TAKEN", seasonLabel: "Season 1" }, statusCode: 409 },
 
   // 502 / 503 — the other side failed, or is not configured here.
   { error: { type: "YOUTUBE_VERIFY_FAILED" }, statusCode: 502 },
@@ -78,14 +66,16 @@ describe("mapStudioErrorToResponse", () => {
   });
 
   describe("invariants", () => {
-    it("returns 403 for the capability refusal and NOTHING else", () => {
-      // 403 anywhere else would make a route an id oracle: a stranger could tell a real
-      // id from a garbage one by the status alone.
+    it("maps NOTHING to 403", () => {
+      // 403 on a creator-owned route would make it an id oracle: a stranger could tell a real
+      // id from a garbage one by the status alone. The one variant that legitimately answered
+      // 403 belonged to the staff review queue, which no longer exists, so the correct
+      // expectation is now the empty set rather than that single type.
       const typesMappedTo403 = CASES.filter(({ error }) => mapStudioErrorToResponse(error).statusCode === 403).map(
         ({ error }) => error.type,
       );
 
-      expect(typesMappedTo403).toEqual(["PLATFORM_CAPABILITY_REQUIRED"]);
+      expect(typesMappedTo403).toEqual([]);
     });
 
     it("never leaks an id into a 404 message", () => {
@@ -93,9 +83,6 @@ describe("mapStudioErrorToResponse", () => {
       const notFoundCases: readonly StudioDomainError[] = [
         { type: "VIDEO_NOT_FOUND", videoId: "SECRET_ID" },
         { type: "PLAYLIST_NOT_FOUND", playlistId: "SECRET_ID" },
-        { type: "SERIES_NOT_FOUND", seriesId: "SECRET_ID" },
-        { type: "SEASON_NOT_FOUND", seasonId: "SECRET_ID" },
-        { type: "EPISODE_NOT_FOUND", episodeId: "SECRET_ID" },
       ];
       for (const error of notFoundCases) {
         const mapped = mapStudioErrorToResponse(error);

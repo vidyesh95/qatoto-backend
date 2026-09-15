@@ -54,70 +54,14 @@ export const ChapterSchema = z
   .strict();
 
 /**
- * The anime branch, on CREATE. Exactly one of `seriesId` (pick an existing series) or
- * `newSeriesTitle` (mint one) — enforced by the superRefine below, because "neither" and
- * "both" are each a different kind of ambiguity the service cannot resolve.
- */
-export const CreateAnimeSchema = z
-  .object({
-    seriesId: z.string().min(1).max(64).optional(),
-    newSeriesTitle: z.string().trim().min(1).max(200).optional(),
-    seasonLabel: z.string().trim().min(1).max(60),
-    episodeNumber: z.number().int().min(0),
-    episodeTitle: z.string().trim().min(1).max(200),
-    releaseScheduleDay: z.string().trim().max(20).optional(),
-    releaseScheduleTime: z.string().trim().max(10).optional(),
-    premiereDate: z.coerce.date().optional(),
-    audioMode: z.enum(["subbed", "dubbed"]).optional(),
-    audioLanguage: z.string().trim().max(60).optional(),
-    ageRating: z.string().trim().max(20).optional(),
-    genreTags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
-  })
-  .strict()
-  .superRefine((anime, ctx) => {
-    const hasExistingSeries = anime.seriesId !== undefined;
-    const hasNewSeries = anime.newSeriesTitle !== undefined;
-    if (hasExistingSeries === hasNewSeries) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["seriesId"],
-        message: "Send exactly one of seriesId or newSeriesTitle.",
-      });
-    }
-  });
-
-/**
- * The anime branch, on PATCH — the episode's OWN metadata only.
- *
- * There is deliberately no `seriesId`, `newSeriesTitle` or `seasonLabel` here. Deriving
- * this from CreateAnimeSchema would let a PATCH silently move an episode between series,
- * which is a catalog operation and belongs to the /series router where the ownership
- * chain is visible.
- */
-export const UpdateAnimeSchema = z
-  .object({
-    episodeNumber: z.number().int().min(0),
-    episodeTitle: z.string().trim().min(1).max(200),
-    releaseScheduleDay: z.string().trim().max(20),
-    releaseScheduleTime: z.string().trim().max(10),
-    premiereDate: z.coerce.date(),
-    audioMode: z.enum(["subbed", "dubbed"]),
-    audioLanguage: z.string().trim().max(60),
-    ageRating: z.string().trim().max(20),
-  })
-  .partial()
-  .strict();
-
-/**
  * The video field shapes, declared ONCE and deliberately WITHOUT defaults.
  *
  * WHY THE DEFAULTS LIVE ON THE CREATE SCHEMA AND NOT HERE. `.partial()` does NOT strip
  * `.default()`, so a PATCH schema derived from a defaulted one parses `{ title }` into a
  * payload that ALSO asserts `videoType: "demo"`, `visibility: "private"`, `sectorTags:
  * []` and `isNdaRequired: false`. On this domain that is not merely lossy — it is a
- * moderation bypass: `videoType` reverting to "demo" takes the row out of the anime
- * branch, and the next publish goes live with no review at all. The same mistake was
- * live in products.controller.ts and is fixed there in this change.
+ * moderation bypass on any surface that keys off one of them. The same mistake was live
+ * in products.controller.ts and is fixed there in this change.
  *
  * Never derive a PATCH schema from a schema carrying `.default()`.
  */
@@ -125,7 +69,7 @@ export const videoFieldShapes = {
   youtubeUrl: YoutubeUrlSchema,
   title: z.string().trim().min(1).max(100),
   description: z.string().trim().max(5000),
-  videoType: z.enum(["pitch", "demo", "update", "ama", "anime_episode"]),
+  videoType: z.enum(["pitch", "demo", "update", "ama"]),
   stageBadge: z.enum(["idea", "mvp", "scaling", "shipped"]),
   sectorTags: z.array(z.string().trim().min(1).max(40)).max(20),
   tags: z.array(z.string().trim().min(1).max(40)).max(30),
@@ -209,7 +153,7 @@ export const videoFieldShapes = {
    * THIS video's own `researchProjectSlug` — the service re-verifies it with the same
    * `and(id, projectId)` predicate the R&D apply gate uses, so a role id from another venture
    * is indistinguishable from a nonexistent one. Without it the blurb stays what it has always
-   * been: text that points at nothing, which is correct for anime and unaffiliated videos.
+   * been: text that points at nothing, which is correct for unaffiliated videos.
    *
    * `roleDescription` is accepted here for the first time. The column has existed since the
    * table did and no endpoint ever wrote it.
@@ -228,27 +172,6 @@ export const videoFieldShapes = {
   teamMemberNames: z.array(z.string().trim().min(1).max(120)).max(50),
   collaboratorEmails: z.array(z.email().max(320)).max(50),
 };
-
-/**
- * `videoType: "anime_episode"` and the `anime` block must arrive together: an episode
- * with no catalog entry can never be reviewed, and a catalog entry on a `demo` would be
- * an orphan nothing reads.
- */
-export function requireAnimeBlockForEpisodes(
-  value: { readonly videoType?: string; readonly anime?: unknown },
-  ctx: z.RefinementCtx,
-): void {
-  if (value.videoType === undefined) return;
-  const isAnimeEpisode = value.videoType === "anime_episode";
-  const hasAnimeBlock = value.anime !== undefined;
-  if (isAnimeEpisode !== hasAnimeBlock) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["anime"],
-      message: 'Send the "anime" block if and only if videoType is "anime_episode".',
-    });
-  }
-}
 
 /**
  * CREATE. Defaults are correct here: an omitted key means "use the platform default",
@@ -288,17 +211,14 @@ export const CreateVideoSchema = z
     areCommentsEnabled: videoFieldShapes.areCommentsEnabled.default(true),
     shouldShowLikesCount: videoFieldShapes.shouldShowLikesCount.default(true),
     hasPaidPromotion: videoFieldShapes.hasPaidPromotion.default(false),
-    anime: CreateAnimeSchema.optional(),
   })
-  .strict()
-  .superRefine(requireAnimeBlockForEpisodes);
+  .strict();
 
 /** PATCH. Every field optional, NONE defaulted — see the note on videoFieldShapes. */
 export const UpdateVideoSchema = z
-  .object({ ...videoFieldShapes, anime: UpdateAnimeSchema })
+  .object({ ...videoFieldShapes })
   .partial()
-  .strict()
-  .superRefine(requireAnimeBlockForEpisodes);
+  .strict();
 
 export const ReplaceChaptersSchema = z
   .object({ chapters: z.array(ChapterSchema).max(100) })

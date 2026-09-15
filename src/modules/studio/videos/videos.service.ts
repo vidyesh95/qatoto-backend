@@ -6,9 +6,6 @@ import { fromDrizzle } from "pg-boss";
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import {
-  animeEpisode,
-  animeSeason,
-  animeSeries,
   contentCategory,
   creatorStats,
   playlist,
@@ -43,7 +40,6 @@ import {
   uploadVideoDocument as uploadDocumentObject,
   type ObjectStorageError,
 } from "#src/lib/object-storage.js";
-import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   buildYoutubeEmbedUrl,
   extractYoutubeVideoId,
@@ -67,7 +63,6 @@ import {
   resolveDefaultCategoryId,
 } from "#src/modules/studio/content-categories.service.js";
 import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
-import { mintSeriesSlug } from "#src/modules/studio/series/series.service.js";
 import {
   MAX_VIDEO_DOCUMENTS,
   videoDocumentDownloadPath,
@@ -199,10 +194,6 @@ export type VideoError =
   | { type: "VIDEO_CATEGORY_NOT_AVAILABLE"; categoryIds: readonly string[] }
   | { type: "TOO_MANY_VIDEO_CATEGORIES"; limit: number; received: number }
   | { type: "PLAYLIST_NOT_OWNED"; playlistIds: readonly string[] }
-  | { type: "ANIME_SERIES_NOT_FOUND"; seriesId: string }
-  | { type: "ANIME_SEASON_NOT_FOUND"; seasonId: string }
-  | { type: "NOT_AN_ANIME_EPISODE" }
-  | { type: "EPISODE_NUMBER_TAKEN"; episodeNumber: number }
   | { type: "NO_TOKEN_REQUIRED" }
   // --- Attached documents (§11j) ---------------------------------------------------
   // The same collapse-into-one rule every id-bearing arm above follows: "no such document" and
@@ -329,9 +320,6 @@ export function assertGatingSupported(
 export type StudioVideoStatusKind =
   | "failed"
   | "processing"
-  | "pending-review"
-  | "rejected"
-  | "approved"
   | "scheduled"
   | "published"
   /**
@@ -354,8 +342,6 @@ export interface StudioVideoStatusInput {
   readonly publishStatus: VideoPublishStatus;
   readonly reviewStatus: ContentReviewStatus;
   readonly scheduledPublishAt: Date | null;
-  /** Set on approval, when an anime episode actually goes live in /anime. */
-  readonly episodeReleasedAt: Date | null;
   /**
    * Whether the content-report queue has hidden this video.
    *
@@ -382,10 +368,6 @@ export function deriveStudioVideoStatus(
   // moderation does not unpublish it, it withdraws it from the public gate — so reading publish
   // state first is exactly how this came to report "published" for a video nobody can see.
   if (input.moderationVisibilityState === "hidden_by_moderator") return "hidden-by-moderator";
-
-  if (input.reviewStatus === "pending") return "pending-review";
-  if (input.reviewStatus === "rejected") return "rejected";
-  if (input.reviewStatus === "approved" && input.episodeReleasedAt === null) return "approved";
 
   if (input.publishStatus === "scheduled") {
     // Nothing in this build flips scheduled -> published (the job is a separate phase),
@@ -471,24 +453,6 @@ export interface ContentCategoryRefView {
   readonly id: string;
   readonly slug: string;
   readonly label: string;
-}
-
-export interface AnimeEpisodeView {
-  readonly id: string;
-  readonly seriesId: string;
-  readonly seriesTitle: string;
-  readonly seasonId: string;
-  readonly seasonLabel: string;
-  readonly episodeNumber: number;
-  readonly episodeTitle: string;
-  readonly isPremium: boolean;
-  readonly releaseScheduleDay: string | null;
-  readonly releaseScheduleTime: string | null;
-  readonly premiereDate: Date | null;
-  readonly audioMode: "subbed" | "dubbed" | null;
-  readonly audioLanguage: string | null;
-  readonly ageRating: string | null;
-  readonly releasedAt: Date | null;
 }
 
 /** The full read-back shape. One canonical projection so it cannot drift per endpoint. */
@@ -583,7 +547,6 @@ export interface PublicVideo {
   readonly collaborators: readonly VideoCollaboratorView[];
   readonly documents: readonly VideoDocumentView[];
   readonly playlistIds: readonly string[];
-  readonly animeEpisode: AnimeEpisodeView | null;
 
   /** Derived on read from the three status columns (§8). */
   readonly derivedStatus: StudioVideoStatusKind;
@@ -605,7 +568,7 @@ export interface VideoListRow {
   /**
    * What KIND of video this is.
    *
-   * The studio list needs it to tell an anime episode from a pitch at a glance — they take
+   * The studio list needs it to tell one video kind from another at a glance — they take
    * different routes to publication (one is reviewed, one is not) and looked identical without
    * it. One column on a table already in the FROM clause.
    */
@@ -684,7 +647,6 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     documents,
     playlistRows,
     categories,
-    episodeRows,
     researchProjectRows,
   ] = await Promise.all([
     db
@@ -777,29 +739,6 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
       .innerJoin(contentCategory, eq(contentCategory.id, videoCategory.categoryId))
       .where(eq(videoCategory.videoId, row.id))
       .orderBy(asc(contentCategory.sortOrder), asc(contentCategory.slug)),
-    db
-      .select({
-        id: animeEpisode.id,
-        seasonId: animeEpisode.seasonId,
-        seasonLabel: animeSeason.seasonLabel,
-        seriesId: animeSeries.id,
-        seriesTitle: animeSeries.title,
-        episodeNumber: animeEpisode.episodeNumber,
-        episodeTitle: animeEpisode.episodeTitle,
-        isPremium: animeEpisode.isPremium,
-        releaseScheduleDay: animeEpisode.releaseScheduleDay,
-        releaseScheduleTime: animeEpisode.releaseScheduleTime,
-        premiereDate: animeEpisode.premiereDate,
-        audioMode: animeEpisode.audioMode,
-        audioLanguage: animeEpisode.audioLanguage,
-        ageRating: animeEpisode.ageRating,
-        releasedAt: animeEpisode.releasedAt,
-      })
-      .from(animeEpisode)
-      .innerJoin(animeSeason, eq(animeSeason.id, animeEpisode.seasonId))
-      .innerJoin(animeSeries, eq(animeSeries.id, animeSeason.seriesId))
-      .where(eq(animeEpisode.videoId, row.id))
-      .limit(1),
     // The venture link resolved back to its SLUG. `row` holds the id, and the id is exactly
     // what must not reach a client — every R&D read is slug-addressed. One extra select
     // rather than a join on the parent read, because it is null for the large majority of
@@ -812,8 +751,6 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
           .where(eq(researchProject.id, row.researchProjectId))
           .limit(1),
   ]);
-
-  const episode = episodeRows[0] ?? null;
 
   return {
     id: row.id,
@@ -889,7 +826,6 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
       downloadPath: videoDocumentDownloadPath(row.id, documentRow.id),
     })),
     playlistIds: playlistRows.map((playlistRow) => playlistRow.playlistId),
-    animeEpisode: episode,
 
     derivedStatus: deriveStudioVideoStatus(
       {
@@ -897,7 +833,6 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
         publishStatus: row.publishStatus,
         reviewStatus: row.reviewStatus,
         scheduledPublishAt: row.scheduledPublishAt,
-        episodeReleasedAt: episode?.releasedAt ?? null,
         // WITHOUT THIS THE BRANCH NEVER FIRES. The status union grew a `hidden-by-moderator` arm;
         // it is inert unless the state actually reaches the helper.
         moderationVisibilityState: row.moderationVisibilityState,
@@ -1267,23 +1202,6 @@ export async function createVideo(
   const gatingError = assertGatingSupported("youtube", input.visibility, input.isNdaRequired);
   if (gatingError) return { success: false, error: gatingError };
 
-  // 2. Anime series/season ownership — a local index lookup, still cheaper than a fetch.
-  let resolvedSeriesId: string | null = null;
-  if (input.anime?.seriesId) {
-    const [ownedSeries] = await db
-      .select({ id: animeSeries.id })
-      .from(animeSeries)
-      .where(and(eq(animeSeries.id, input.anime.seriesId), eq(animeSeries.ownerId, creatorId)))
-      .limit(1);
-    if (!ownedSeries) {
-      return {
-        success: false,
-        error: { type: "ANIME_SERIES_NOT_FOUND", seriesId: input.anime.seriesId },
-      };
-    }
-    resolvedSeriesId = ownedSeries.id;
-  }
-
   // 3. Attached products — ownership re-verified before anything is written (§0).
   const attachedProductIds = dedupe(input.attachedProductIds ?? []);
   const unownedProductIds = await findUnownedProductIds(creatorId, attachedProductIds);
@@ -1365,201 +1283,119 @@ export async function createVideo(
   const verifiedFacts = verified.value.facts;
 
   // 5. Now, and only now, write.
-  let createdVideoId: string;
-  try {
-    createdVideoId = await db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(video)
-        .values({
-          creatorId,
-          videoSource: "youtube",
-          youtubeVideoId: verified.value.youtubeVideoId,
-          // The id is stored either way — the charset CHECK still closes SSRF. This flag
-          // records only whether YouTube confirmed the video exists and embeds (§8.3).
-          isSourceVerified: verifiedFacts !== null,
-          uploadStatus: "ready",
-          thumbnailUrl: verifiedFacts?.thumbnailUrl ?? null,
-          title: input.title,
-          description: input.description,
-          videoType: input.videoType,
-          stageBadge: input.stageBadge,
-          sectorTags: [...input.sectorTags],
-          tags: [...input.tags],
-          websiteUrl: input.websiteUrl,
-          ctaLabel: input.ctaLabel,
-          ctaUrl: input.ctaUrl,
-          linkedinUrl: input.linkedinUrl,
-          xProfileUrl: input.xProfileUrl,
-          contactEmail: input.contactEmail,
-          isMadeForKids: input.isMadeForKids,
-          hasAgeRestriction: input.hasAgeRestriction,
-          relatedVideoUrl: input.relatedVideoUrl,
-          hasFundingCallToAction: input.hasFundingCallToAction,
-          // Resolved from the slug and membership-verified in step 3a. Null when the field
-          // was omitted or explicitly null — both mean "unaffiliated", the column's default.
-          researchProjectId: resolvedResearchProjectId,
-          visibility: input.visibility,
-          isNdaRequired: input.isNdaRequired,
-          scheduledPublishAt: input.scheduledPublishAt,
-          license: input.license,
-          videoLanguage: input.videoLanguage,
-          isEmbeddingAllowed: input.isEmbeddingAllowed,
-          areCommentsEnabled: input.areCommentsEnabled,
-          shouldShowLikesCount: input.shouldShowLikesCount,
-          hasPaidPromotion: input.hasPaidPromotion,
-          usesAlteredContent: input.usesAlteredContent,
-          captionCertification: input.captionCertification,
-          commentModeration: input.commentModeration,
-          commentSortOrder: input.commentSortOrder,
-          shortsRemixing: input.shortsRemixing,
-          recordingDate: input.recordingDate,
-          recordingLocation: input.recordingLocation,
-          // `category` is deliberately absent: the column is dead (§2.2) and the schema no
-          // longer has a field to carry it. `videoCategory` rows below are the taxonomy.
-        })
-        .returning({ id: video.id });
+  const createdVideoId = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(video)
+      .values({
+        creatorId,
+        videoSource: "youtube",
+        youtubeVideoId: verified.value.youtubeVideoId,
+        // The id is stored either way — the charset CHECK still closes SSRF. This flag
+        // records only whether YouTube confirmed the video exists and embeds (§8.3).
+        isSourceVerified: verifiedFacts !== null,
+        uploadStatus: "ready",
+        thumbnailUrl: verifiedFacts?.thumbnailUrl ?? null,
+        title: input.title,
+        description: input.description,
+        videoType: input.videoType,
+        stageBadge: input.stageBadge,
+        sectorTags: [...input.sectorTags],
+        tags: [...input.tags],
+        websiteUrl: input.websiteUrl,
+        ctaLabel: input.ctaLabel,
+        ctaUrl: input.ctaUrl,
+        linkedinUrl: input.linkedinUrl,
+        xProfileUrl: input.xProfileUrl,
+        contactEmail: input.contactEmail,
+        isMadeForKids: input.isMadeForKids,
+        hasAgeRestriction: input.hasAgeRestriction,
+        relatedVideoUrl: input.relatedVideoUrl,
+        hasFundingCallToAction: input.hasFundingCallToAction,
+        // Resolved from the slug and membership-verified in step 3a. Null when the field
+        // was omitted or explicitly null — both mean "unaffiliated", the column's default.
+        researchProjectId: resolvedResearchProjectId,
+        visibility: input.visibility,
+        isNdaRequired: input.isNdaRequired,
+        scheduledPublishAt: input.scheduledPublishAt,
+        license: input.license,
+        videoLanguage: input.videoLanguage,
+        isEmbeddingAllowed: input.isEmbeddingAllowed,
+        areCommentsEnabled: input.areCommentsEnabled,
+        shouldShowLikesCount: input.shouldShowLikesCount,
+        hasPaidPromotion: input.hasPaidPromotion,
+        usesAlteredContent: input.usesAlteredContent,
+        captionCertification: input.captionCertification,
+        commentModeration: input.commentModeration,
+        commentSortOrder: input.commentSortOrder,
+        shortsRemixing: input.shortsRemixing,
+        recordingDate: input.recordingDate,
+        recordingLocation: input.recordingLocation,
+        // `category` is deliberately absent: the column is dead (§2.2) and the schema no
+        // longer has a field to carry it. `videoCategory` rows below are the taxonomy.
+      })
+      .returning({ id: video.id });
 
-      if (!created) throw new Error("Insert returned no video row");
-      const videoId = created.id;
+    if (!created) throw new Error("Insert returned no video row");
+    const videoId = created.id;
 
-      if (attachedProductIds.length > 0) {
-        await tx
-          .insert(videoAttachedProduct)
-          .values(
-            attachedProductIds.map((productId, index) => ({ videoId, productId, position: index })),
-          );
-      }
-
-      // `categoryIdsToWrite`, not `categoryIds` — this is the creator's set OR the default
-      // bucket. Still guarded on length: the fallback returns `[]` when the default row is
-      // missing, and an INSERT with no values is an error rather than a no-op.
-      if (categoryIdsToWrite.length > 0) {
-        await tx
-          .insert(videoCategory)
-          .values(categoryIdsToWrite.map((categoryId) => ({ videoId, categoryId })));
-      }
-
-      // The engagement counter caches, minted here rather than lazily (HOME §3.4).
-      // Every engagement write is an UPDATE, and an UPDATE against a missing row does
-      // not error — it affects zero rows and the count is silently lost.
-      await ensureVideoStatsRows(tx, { videoId, creatorId });
-
-      // ENQUEUED INSIDE THE TRANSACTION, on the transaction's own connection (§8.3).
-      // pg-boss's send is an INSERT, so it can join this transaction — and it must. An
-      // enqueue after the commit can be lost with no error surface anywhere, leaving a row
-      // that is permanently unverifiable and therefore permanently unpublishable; an
-      // enqueue before it can announce a row that rolled back. Same contract as
-      // `enqueueNotifications`.
-      //
-      // A failed enqueue THROWS, taking the video row with it. A create the creator can
-      // retry is strictly better than a row nothing will ever verify.
-      if (!verifiedFacts) {
-        const enqueueResult = await sendJob(
-          JOB_NAMES.verifyYoutubeVideo,
-          { videoId },
-          {
-            idempotencyKey: idempotencyKeyFor.verifyYoutubeVideo(
-              videoId,
-              verified.value.youtubeVideoId,
-            ),
-            db: fromDrizzle(tx, sql),
-          },
+    if (attachedProductIds.length > 0) {
+      await tx
+        .insert(videoAttachedProduct)
+        .values(
+          attachedProductIds.map((productId, index) => ({ videoId, productId, position: index })),
         );
-        if (!enqueueResult.success) {
-          throw new Error(
-            `createVideo: could not queue source verification for ${videoId} ` +
-              `(${enqueueResult.error.type})`,
-          );
-        }
-      }
-
-      await replaceSimpleChildSets(tx, videoId, input);
-      if (input.openRoles !== undefined) {
-        await replaceVideoOpenRoles(tx, videoId, input.openRoles);
-      }
-
-      if (input.anime) {
-        // Create the series when the creator did not pick one. Zod's superRefine has
-        // already proven exactly one of seriesId / newSeriesTitle is present.
-        let seriesId = resolvedSeriesId;
-        if (!seriesId) {
-          // The slug is the public URL identity at /anime/series/<slug> and is minted from
-          // the title, never supplied. Minting reads before it writes, so a concurrent
-          // upload of a same-titled series can lose the race on `anime_series_slug_uidx`;
-          // the retry re-mints, which is now guaranteed to see the winner's row.
-          const seriesTitle = input.anime.newSeriesTitle ?? input.title;
-          let createdSeries: { id: string } | undefined;
-          for (let attempt = 0; attempt < 3 && createdSeries === undefined; attempt += 1) {
-            try {
-              [createdSeries] = await tx
-                .insert(animeSeries)
-                .values({
-                  ownerId: creatorId,
-                  title: seriesTitle,
-                  slug: await mintSeriesSlug(tx, seriesTitle),
-                  genreTags: [...input.anime.genreTags],
-                })
-                .returning({ id: animeSeries.id });
-            } catch (insertError) {
-              if (!isUniqueViolation(insertError) || attempt === 2) throw insertError;
-            }
-          }
-          if (!createdSeries) throw new Error("Insert returned no anime series row");
-          seriesId = createdSeries.id;
-        }
-
-        // "Pick or create Season 1" is idempotent thanks to anime_season_label_unq —
-        // insert-on-conflict rather than a read-then-write race between two tabs.
-        const [insertedSeason] = await tx
-          .insert(animeSeason)
-          .values({ seriesId, seasonLabel: input.anime.seasonLabel, position: 0 })
-          .onConflictDoNothing({ target: [animeSeason.seriesId, animeSeason.seasonLabel] })
-          .returning({ id: animeSeason.id });
-
-        const seasonId =
-          insertedSeason?.id ??
-          (
-            await tx
-              .select({ id: animeSeason.id })
-              .from(animeSeason)
-              .where(
-                and(
-                  eq(animeSeason.seriesId, seriesId),
-                  eq(animeSeason.seasonLabel, input.anime.seasonLabel),
-                ),
-              )
-              .limit(1)
-          )[0]?.id;
-
-        if (!seasonId) throw new Error("Could not resolve the anime season");
-
-        await tx.insert(animeEpisode).values({
-          seasonId,
-          videoId,
-          episodeNumber: input.anime.episodeNumber,
-          episodeTitle: input.anime.episodeTitle,
-          releaseScheduleDay: input.anime.releaseScheduleDay,
-          releaseScheduleTime: input.anime.releaseScheduleTime,
-          premiereDate: input.anime.premiereDate,
-          audioMode: input.anime.audioMode,
-          audioLanguage: input.anime.audioLanguage,
-          ageRating: input.anime.ageRating,
-        });
-      }
-
-      return videoId;
-    });
-  } catch (error) {
-    // A duplicate (seasonId, episodeNumber). Because it happens INSIDE the transaction,
-    // the video row rolls back with it — no orphan is left behind.
-    if (isUniqueViolation(error) && input.anime) {
-      return {
-        success: false,
-        error: { type: "EPISODE_NUMBER_TAKEN", episodeNumber: input.anime.episodeNumber },
-      };
     }
-    throw error;
-  }
+
+    // `categoryIdsToWrite`, not `categoryIds` — this is the creator's set OR the default
+    // bucket. Still guarded on length: the fallback returns `[]` when the default row is
+    // missing, and an INSERT with no values is an error rather than a no-op.
+    if (categoryIdsToWrite.length > 0) {
+      await tx
+        .insert(videoCategory)
+        .values(categoryIdsToWrite.map((categoryId) => ({ videoId, categoryId })));
+    }
+
+    // The engagement counter caches, minted here rather than lazily (HOME §3.4).
+    // Every engagement write is an UPDATE, and an UPDATE against a missing row does
+    // not error — it affects zero rows and the count is silently lost.
+    await ensureVideoStatsRows(tx, { videoId, creatorId });
+
+    // ENQUEUED INSIDE THE TRANSACTION, on the transaction's own connection (§8.3).
+    // pg-boss's send is an INSERT, so it can join this transaction — and it must. An
+    // enqueue after the commit can be lost with no error surface anywhere, leaving a row
+    // that is permanently unverifiable and therefore permanently unpublishable; an
+    // enqueue before it can announce a row that rolled back. Same contract as
+    // `enqueueNotifications`.
+    //
+    // A failed enqueue THROWS, taking the video row with it. A create the creator can
+    // retry is strictly better than a row nothing will ever verify.
+    if (!verifiedFacts) {
+      const enqueueResult = await sendJob(
+        JOB_NAMES.verifyYoutubeVideo,
+        { videoId },
+        {
+          idempotencyKey: idempotencyKeyFor.verifyYoutubeVideo(
+            videoId,
+            verified.value.youtubeVideoId,
+          ),
+          db: fromDrizzle(tx, sql),
+        },
+      );
+      if (!enqueueResult.success) {
+        throw new Error(
+          `createVideo: could not queue source verification for ${videoId} ` +
+            `(${enqueueResult.error.type})`,
+        );
+      }
+    }
+
+    await replaceSimpleChildSets(tx, videoId, input);
+    if (input.openRoles !== undefined) {
+      await replaceVideoOpenRoles(tx, videoId, input.openRoles);
+    }
+
+    return videoId;
+  });
 
   const createdRow = await loadOwnedVideoRow(creatorId, createdVideoId);
   if (!createdRow)
@@ -1613,10 +1449,8 @@ export async function listMyVideos(
         scheduledPublishAt: video.scheduledPublishAt,
         createdAt: video.createdAt,
         updatedAt: video.updatedAt,
-        episodeReleasedAt: animeEpisode.releasedAt,
       })
       .from(video)
-      .leftJoin(animeEpisode, eq(animeEpisode.videoId, video.id))
       .where(predicate)
       .orderBy(desc(video.updatedAt))
       .limit(filters.limit)
@@ -1626,9 +1460,9 @@ export async function listMyVideos(
 
   const nowEpochMs = Date.now();
   return {
-    rows: rows.map(({ episodeReleasedAt, ...row }) => ({
+    rows: rows.map((row) => ({
       ...row,
-      derivedStatus: deriveStudioVideoStatus({ ...row, episodeReleasedAt }, nowEpochMs),
+      derivedStatus: deriveStudioVideoStatus(row, nowEpochMs),
     })),
     total: totals[0]?.value ?? 0,
   };
@@ -1650,12 +1484,7 @@ export async function getVideo(
  * A CHANGED `youtubeUrl` IS RE-PARSED AND RE-VERIFIED, an unchanged one is not. Verifying
  * a URL that did not change spends an outbound request and lets a transient YouTube blip
  * turn an unrelated title edit into a 502.
- *
- * THE ANIME RE-EDIT RESET (§10) lives here. Editing content on an already-decided episode
- * sends it back for review — and takes it OFF the air at the same time. The spec names
- * only `reviewStatus`; resetting that alone would leave an edited episode live in /anime
- * while its review is pending, which is the exact state the rule exists to prevent.
- */
+ * */
 export async function updateVideo(
   creatorId: string,
   videoId: string,
@@ -1781,20 +1610,6 @@ export async function updateVideo(
   const categoryIdsToWrite =
     categoryIds === undefined ? undefined : await withDefaultCategoryFallback(categoryIds);
 
-  // Content-bearing, in the sense §10 means: a change a moderator would want to see
-  // again. A visibility toggle or a comment preference is deliberately NOT in this list,
-  // because un-publishing an approved episode over a settings change is its own bug.
-  const touchesReviewableContent =
-    patch.title !== undefined ||
-    patch.description !== undefined ||
-    verifiedYoutube !== null ||
-    patch.anime !== undefined;
-
-  const shouldResetReview =
-    existing.videoType === "anime_episode" &&
-    (existing.reviewStatus === "approved" || existing.reviewStatus === "rejected") &&
-    touchesReviewableContent;
-
   await db.transaction(async (tx) => {
     const scalarUpdates: Partial<typeof video.$inferInsert> = {};
     // Only keys the client actually sent land here — UpdateVideoSchema carries no
@@ -1869,33 +1684,8 @@ export async function updateVideo(
       if (!existing.hasCustomThumbnail) scalarUpdates.thumbnailUrl = verifiedYoutube.thumbnailUrl;
     }
 
-    // THE FOURTH DOOR OUT OF PUBLISHED, and it had no counter write at all — `updateVideo`
-    // contained none. An approved anime episode is `published`; editing its title sends it back to
-    // `draft`/`pending` here, and the count stayed where it was. An anime creator hits this on
-    // every edit after approval, so it drifted upward faster than any other path.
-    // From the LOCKED row, not the pre-transaction read — same race as publish/unpublish/delete.
-    const lockedStatus = await lockOwnedVideoPublishState(tx, creatorId, videoId);
-    const leavesPublishedByReviewReset = shouldResetReview && lockedStatus === "published";
-
-    if (shouldResetReview) {
-      scalarUpdates.reviewStatus = "pending";
-      scalarUpdates.rejectionReason = null;
-      scalarUpdates.publishStatus = "draft";
-      scalarUpdates.publishedAt = null;
-      scalarUpdates.scheduledPublishAt = null;
-    }
-
     if (Object.keys(scalarUpdates).length > 0) {
       await tx.update(video).set(scalarUpdates).where(ownedVideoPredicate(creatorId, videoId));
-    }
-
-    if (leavesPublishedByReviewReset) {
-      await tx
-        .update(creatorStats)
-        .set({
-          publishedVideoCount: sql`GREATEST(${creatorStats.publishedVideoCount} - 1, 0)`,
-        })
-        .where(eq(creatorStats.userId, creatorId));
     }
 
     if (attachedProductIds !== undefined) {
@@ -1941,43 +1731,6 @@ export async function updateVideo(
         .update(videoOpenRole)
         .set({ openRoleId: null })
         .where(eq(videoOpenRole.videoId, videoId));
-    }
-
-    // The episode's OWN metadata is patchable; re-linking it to another series or season
-    // is deliberately not (that is the /series router's job), so UpdateVideoAnimeSchema
-    // has no seriesId field for a client to send.
-    if (patch.anime) {
-      const episodeUpdates: Partial<typeof animeEpisode.$inferInsert> = {};
-      if (patch.anime.episodeNumber !== undefined) {
-        episodeUpdates.episodeNumber = patch.anime.episodeNumber;
-      }
-      if (patch.anime.episodeTitle !== undefined) {
-        episodeUpdates.episodeTitle = patch.anime.episodeTitle;
-      }
-      if (patch.anime.releaseScheduleDay !== undefined) {
-        episodeUpdates.releaseScheduleDay = patch.anime.releaseScheduleDay;
-      }
-      if (patch.anime.releaseScheduleTime !== undefined) {
-        episodeUpdates.releaseScheduleTime = patch.anime.releaseScheduleTime;
-      }
-      if (patch.anime.premiereDate !== undefined) {
-        episodeUpdates.premiereDate = patch.anime.premiereDate;
-      }
-      if (patch.anime.audioMode !== undefined) episodeUpdates.audioMode = patch.anime.audioMode;
-      if (patch.anime.audioLanguage !== undefined) {
-        episodeUpdates.audioLanguage = patch.anime.audioLanguage;
-      }
-      if (patch.anime.ageRating !== undefined) episodeUpdates.ageRating = patch.anime.ageRating;
-      if (shouldResetReview) episodeUpdates.releasedAt = null;
-
-      if (Object.keys(episodeUpdates).length > 0) {
-        await tx.update(animeEpisode).set(episodeUpdates).where(eq(animeEpisode.videoId, videoId));
-      }
-    } else if (shouldResetReview) {
-      await tx
-        .update(animeEpisode)
-        .set({ releasedAt: null })
-        .where(eq(animeEpisode.videoId, videoId));
     }
   });
 
@@ -2150,7 +1903,7 @@ export async function setVideoPlaylists(
 }
 
 /**
- * Publishes a video, or routes an anime episode into the review queue.
+ * Publishes a video.
  *
  * "Save draft" vs "Publish" is UX; THIS decides whether a video is complete enough to go
  * live. Note what is deliberately NOT in the completeness list: `title` is NOT NULL with
@@ -2158,8 +1911,6 @@ export async function setVideoPlaylists(
  * theatre. `isMadeForKids` is the one that genuinely can be unanswered at publish time,
  * and for a COPPA-shaped attestation "unanswered" is the failure that matters.
  *
- * AN ANIME EPISODE NEVER SELF-PUBLISHES (§10). It moves to reviewStatus "pending" and
- * publishStatus STAYS "draft" — approval is what publishes it.
  */
 export async function publishVideo(
   creatorId: string,
@@ -2196,16 +1947,6 @@ export async function publishVideo(
   if (existing.videoSource === "youtube" && !existing.youtubeVideoId) missing.push("youtubeUrl");
   if (existing.isMadeForKids === null) missing.push("isMadeForKids");
 
-  const isAnimeEpisode = existing.videoType === "anime_episode";
-  if (isAnimeEpisode) {
-    const [linkedEpisode] = await db
-      .select({ id: animeEpisode.id })
-      .from(animeEpisode)
-      .where(eq(animeEpisode.videoId, videoId))
-      .limit(1);
-    if (!linkedEpisode) missing.push("anime");
-  }
-
   if (missing.length > 0) {
     return { success: false, error: { type: "INCOMPLETE_FOR_PUBLISH", missing } };
   }
@@ -2215,8 +1956,8 @@ export async function publishVideo(
     existing.scheduledPublishAt !== null && existing.scheduledPublishAt.getTime() > now.getTime();
 
   // The counter moves in the SAME transaction as the status change (HOME §3.4). It
-  // moves ONLY on a real transition to `published`: an anime episode goes to `pending`
-  // review and a future-dated one goes to `scheduled`, and neither is a published video.
+  // moves ONLY on a real transition to `published`: a future-dated video goes to
+  // `scheduled`, which is not a published video.
   // BOTH DIRECTIONS ARE DECIDED INSIDE THE TRANSACTION, from the locked row — see below. The
   // second of them had no branch at all until now: re-publishing an already-published video with a
   // future `scheduledPublishAt` sends it BACK to `scheduled`, the video goes dark, and the counter
@@ -2229,17 +1970,15 @@ export async function publishVideo(
     // transaction and both incremented. The second now waits, sees `published`, and does not.
     const lockedStatus = await lockOwnedVideoPublishState(tx, creatorId, videoId);
     if (lockedStatus === null) return;
-    const becomesPublished = !isAnimeEpisode && !shouldSchedule && lockedStatus !== "published";
-    const leavesPublished = !isAnimeEpisode && shouldSchedule && lockedStatus === "published";
+    const becomesPublished = !shouldSchedule && lockedStatus !== "published";
+    const leavesPublished = shouldSchedule && lockedStatus === "published";
 
     await tx
       .update(video)
       .set(
-        isAnimeEpisode
-          ? { reviewStatus: "pending", rejectionReason: null }
-          : shouldSchedule
-            ? { publishStatus: "scheduled" }
-            : { publishStatus: "published", publishedAt: now },
+        shouldSchedule
+          ? { publishStatus: "scheduled" }
+          : { publishStatus: "published", publishedAt: now },
       )
       .where(ownedVideoPredicate(creatorId, videoId));
 

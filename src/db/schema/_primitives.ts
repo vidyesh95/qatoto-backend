@@ -160,18 +160,3 @@ export const userProfileModerationStateEnum = pgEnum("user_profile_moderation_st
   "visible",
   "hidden_by_moderator",
 ]);
-
-export const animeAudioModeEnum = pgEnum("anime_audio_mode", ["subbed", "dubbed"]);
-
-export const animeSeriesStatusEnum = pgEnum("anime_series_status", [
-  "ongoing",
-  "completed",
-  "hiatus",
-]);
-
-// The audit log is the record of record for every moderation decision, so a
-// free-text verb in it is one typo away from an unqueryable log.
-export const contentReviewActionKindEnum = pgEnum("content_review_action_kind", [
-  "approve",
-  "reject",
-]);

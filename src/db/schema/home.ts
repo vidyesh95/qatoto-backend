@@ -22,11 +22,8 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { user } from "#src/db/schema/_core.js";
 import {
-  animeAudioModeEnum,
-  animeSeriesStatusEnum,
   blueprintContentReportReasonEnum,
   blueprintContentReportStatusEnum,
-  contentReviewActionKindEnum,
   playlistVideoOrderEnum,
   playlistVisibilityEnum,
 } from "#src/db/schema/_primitives.js";
@@ -1048,145 +1045,6 @@ export const playlistItem = pgTable(
   ],
 );
 
-export const animeSeries = pgTable(
-  "anime_series",
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => randomUUID()),
-    ownerId: text("owner_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    title: text("title").notNull(),
-    /**
-     * The public URL identity — `/anime/series/<slug>`.
-     *
-     * SERVER-MINTED FROM THE TITLE ON CREATE, AND NEVER REWRITTEN. A slug is linked
-     * the moment it exists, so letting an edit change it silently breaks every link
-     * anyone has already shared. The title is free to change; this is not.
-     *
-     * kebab-case, per the wire-casing rule for URL identities.
-     */
-    slug: text("slug").notNull(),
-    description: text("description"),
-    posterUrl: text("poster_url"),
-    genreTags: text("genre_tags").array().notNull().default([]),
-    status: animeSeriesStatusEnum("status").default("ongoing").notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
-      .defaultNow()
-      .$onUpdate(() => /* @__PURE__ */ new Date())
-      .notNull(),
-  },
-  (table) => [
-    index("anime_series_ownerId_idx").on(table.ownerId),
-    // The public detail read is keyed by slug, and uniqueness is what makes the slug
-    // an identity rather than a label.
-    uniqueIndex("anime_series_slug_uidx").on(table.slug),
-    check("anime_series_genre_tags_ck", sql`cardinality(genre_tags) <= 20`),
-    check(
-      "anime_series_slug_ck",
-      sql`char_length(slug) BETWEEN 1 AND 120 AND slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
-    ),
-  ],
-);
-
-export const animeSeason = pgTable(
-  "anime_season",
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => randomUUID()),
-    seriesId: text("series_id")
-      .notNull()
-      .references(() => animeSeries.id, { onDelete: "cascade" }),
-    seasonLabel: text("season_label").notNull(),
-    position: integer("position").notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    index("anime_season_seriesId_idx").on(table.seriesId),
-    // ADDITION TO SPEC §4. Two "Season 1" rows under one series make the upload
-    // modal's season picker ambiguous and render the episode-number unique index
-    // below useless. It is also what lets "pick or create Season 1" be an idempotent
-    // insert-on-conflict rather than a read-then-write race.
-    uniqueIndex("anime_season_label_unq").on(table.seriesId, table.seasonLabel),
-  ],
-);
-
-export const animeEpisode = pgTable(
-  "anime_episode",
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => randomUUID()),
-    seasonId: text("season_id")
-      .notNull()
-      .references(() => animeSeason.id, { onDelete: "cascade" }),
-    // `set null` so deleting the video leaves the catalog entry standing.
-    videoId: text("video_id").references(() => video.id, { onDelete: "set null" }),
-    episodeNumber: integer("episode_number").notNull(),
-    episodeTitle: text("episode_title").notNull(),
-    isPremium: boolean("is_premium").default(false).notNull(),
-    releaseScheduleDay: text("release_schedule_day"),
-    releaseScheduleTime: text("release_schedule_time"),
-    premiereDate: timestamp("premiere_date"),
-    audioMode: animeAudioModeEnum("audio_mode"),
-    audioLanguage: text("audio_language"),
-    ageRating: text("age_rating"),
-    // Set when the episode goes live in /anime, which is on APPROVAL, not on publish.
-    releasedAt: timestamp("released_at"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
-      .defaultNow()
-      .$onUpdate(() => /* @__PURE__ */ new Date())
-      .notNull(),
-  },
-  (table) => [
-    index("anime_episode_seasonId_idx").on(table.seasonId),
-    uniqueIndex("anime_episode_unq").on(table.seasonId, table.episodeNumber),
-    // ADDITION TO SPEC §4, which asserts "one video is at most one episode" in a
-    // comment and then does not enforce it. Partial because videoId is nullable.
-    uniqueIndex("anime_episode_videoId_unq")
-      .on(table.videoId)
-      .where(sql`video_id is not null`),
-    check("anime_episode_number_ck", sql`episode_number >= 0`),
-  ],
-);
-
-// Every approve/reject, logged. This is the record of record for moderation.
-export const contentReviewAction = pgTable(
-  "content_review_action",
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => randomUUID()),
-    // Cascade, deliberately, and the asymmetry with reviewerId below is the point:
-    // once the video is gone there is no longer a subject to have been reviewed, so
-    // the row describes nothing. The REVIEWER, by contrast, must stay accountable.
-    videoId: text("video_id")
-      .notNull()
-      .references(() => video.id, { onDelete: "cascade" }),
-    // `restrict`, per the R&D cascade rule R2: this row bears AUDIT weight, so a
-    // moderator cannot be hard-deleted out from under the decisions they made.
-    // Account deletion is an anonymization flow, not a DELETE.
-    reviewerId: text("reviewer_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "restrict" }),
-    action: contentReviewActionKindEnum("action").notNull(),
-    reason: text("reason"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    index("content_review_action_videoId_idx").on(table.videoId),
-    // The admin audit-log view is chronological across every video.
-    index("content_review_action_createdAt_idx").on(table.createdAt),
-    // A rejection with no reason is unactionable for the creator and unauditable for
-    // the next moderator.
-    check("content_review_action_reason_ck", sql`(action <> 'reject') OR (reason IS NOT NULL)`),
-  ],
-);
-
 /*
  * VIDEO CONTENT REPORTING — the fourth report fork, and the fourth is not an accident.
  *
@@ -1201,7 +1059,7 @@ export const contentReviewAction = pgTable(
  * looks obvious — it is already the video moderation log. Two columns forbid it, and
  * `commerce_content_report`'s own docblock predicted both:
  *
- *   `reviewerId` is NOT NULL. Fine for the anime queue, where a human always decides.
+ *   `reviewerId` is NOT NULL. Fine for a staff queue, where a human always decides.
  *   `videoId` is NOT NULL with a CASCADE, so a decision vanishes when its subject does —
  *     the opposite of what an audit needs, and the reason the action table below uses
  *     `set null` instead.
@@ -1397,7 +1255,6 @@ export const videoRelations = relations(video, ({ one, many }) => ({
   teamMembers: many(videoTeamMember),
   collaborators: many(videoCollaborator),
   playlistItems: many(playlistItem),
-  reviewActions: many(contentReviewAction),
   categories: many(videoCategory),
   stats: one(videoStats, { fields: [video.id], references: [videoStats.videoId] }),
   viewSessions: many(videoViewSession),
@@ -1594,30 +1451,10 @@ export const playlistItemRelations = relations(playlistItem, ({ one }) => ({
   video: one(video, { fields: [playlistItem.videoId], references: [video.id] }),
 }));
 
-export const animeSeriesRelations = relations(animeSeries, ({ one, many }) => ({
-  owner: one(user, { fields: [animeSeries.ownerId], references: [user.id] }),
-  seasons: many(animeSeason),
-}));
-
-export const animeSeasonRelations = relations(animeSeason, ({ one, many }) => ({
-  series: one(animeSeries, { fields: [animeSeason.seriesId], references: [animeSeries.id] }),
-  episodes: many(animeEpisode),
-}));
-
-export const animeEpisodeRelations = relations(animeEpisode, ({ one }) => ({
-  season: one(animeSeason, { fields: [animeEpisode.seasonId], references: [animeSeason.id] }),
-  video: one(video, { fields: [animeEpisode.videoId], references: [video.id] }),
-}));
-
-export const contentReviewActionRelations = relations(contentReviewAction, ({ one }) => ({
-  video: one(video, { fields: [contentReviewAction.videoId], references: [video.id] }),
-  reviewer: one(user, { fields: [contentReviewAction.reviewerId], references: [user.id] }),
-}));
-
 // ---------------------------------------------------------------------------
 // Promotions — the home-page promotional carousel.
 //
-// ONE TABLE, NO OWNER. Unlike `product` or `animeSeries`, a slide has no member
+// ONE TABLE, NO OWNER. Unlike `product` or `showcaseLaunch`, a slide has no member
 // owner: it is platform-authored merchandising, written only by a holder of the
 // `manage_promotions` capability. So there is no `ownerId`, and the 404-as-ownership
 // rule does not apply — the capability check, decided BEFORE any id is read, is the
@@ -1744,7 +1581,7 @@ export const promotionalSlide = pgTable(
      * different host" exactly as it reads the doubled form. `parsePromotionalDestination` refuses
      * both, which is why this was a hole in the backstop rather than a live redirect; but a
      * backstop exists for the path that skips the service, so a hole in it is the one defect it
-     * may not have. `anime_hero_slide_destination_ck` carried the identical gap and was fixed in
+     * may not have. `blueprint_hero_slide_destination_ck` carried the identical gap and was fixed in
      * the same change.
      *
      * `chr(92)` IS A BACKSLASH, written as a call rather than a literal for the reason
@@ -1830,7 +1667,7 @@ export const feedSpotlightSlotRelations = relations(feedSpotlightSlot, ({ one })
 }));
 
 // ---------------------------------------------------------------------------
-// The /anime hero carousel — `anime_hero_slide`.
+// The /blueprints hero carousel — `blueprint_hero_slide`.
 //
 // PLATFORM-AUTHORED, like `promotional_slide` and `feed_spotlight_slot`. No member
 // owner; the gate is `manage_promotions`, the same grant the other two front-page
@@ -1855,8 +1692,8 @@ export const feedSpotlightSlotRelations = relations(feedSpotlightSlot, ({ one })
 // two meanings for the same columns behind a single discriminator.
 // ---------------------------------------------------------------------------
 
-export const animeHeroSlide = pgTable(
-  "anime_hero_slide",
+export const blueprintHeroSlide = pgTable(
+  "blueprint_hero_slide",
   {
     id: text("id")
       .primaryKey()
@@ -1890,8 +1727,8 @@ export const animeHeroSlide = pgTable(
      *
      * NULLABLE ON PURPOSE. `store_hero_slide` already models a slide with no link, and
      * `HeroCarousel.slideHref()` already returns null for one. It is also what lets the
-     * seeded rows exist before any anime series does — the alternative would be seeding
-     * them with a link to a page that 404s.
+     * a slide exist before the page it should point at does — the alternative would be
+     * seeding one with a link to a page that 404s.
      */
     destinationPath: text("destination_path"),
     /**
@@ -1926,14 +1763,14 @@ export const animeHeroSlide = pgTable(
   (table) => [
     // The public read — live slides in order. Partial, because that is what almost
     // every read wants.
-    index("anime_hero_slide_live_idx")
+    index("blueprint_hero_slide_live_idx")
       .on(table.position, table.id)
       .where(sql`is_active`),
     // The admin read, which includes retired and out-of-window rows.
-    index("anime_hero_slide_position_idx").on(table.position, table.id),
+    index("blueprint_hero_slide_position_idx").on(table.position, table.id),
 
-    check("anime_hero_slide_position_ck", sql`position >= 0`),
-    check("anime_hero_slide_title_ck", sql`char_length(title) BETWEEN 1 AND 160`),
+    check("blueprint_hero_slide_position_ck", sql`position >= 0`),
+    check("blueprint_hero_slide_title_ck", sql`char_length(title) BETWEEN 1 AND 160`),
     /**
      * `https://` for an uploaded asset, or a site-relative path for a seeded one. ⚠️ THE
      * SITE-RELATIVE ARM LOOKS LIKE A LOOPHOLE AND IS NOT: migration 0149 seeded four such rows, so
@@ -1947,7 +1784,7 @@ export const animeHeroSlide = pgTable(
      * as "same scheme, different host". This value becomes a `next/image` src on a public page.
      * `assetUrlCheck` refuses both spellings and says so in its own docblock.
      */
-    check("anime_hero_slide_image_url_ck", assetUrlCheck("image_url")),
+    check("blueprint_hero_slide_image_url_ck", assetUrlCheck("image_url")),
     /**
      * Same rule, minus the https arm — this surface never links off-site.
      *
@@ -1963,7 +1800,7 @@ export const animeHeroSlide = pgTable(
      * `\` inside a generated migration is not worth the risk.
      */
     check(
-      "anime_hero_slide_destination_ck",
+      "blueprint_hero_slide_destination_ck",
       sql`destination_path IS NULL
           OR (char_length(destination_path) BETWEEN 1 AND 512
               AND left(destination_path, 1) = '/'
@@ -1972,22 +1809,23 @@ export const animeHeroSlide = pgTable(
               AND destination_path !~ '[[:space:][:cntrl:]]')`,
     ),
     check(
-      "anime_hero_slide_window_ck",
+      "blueprint_hero_slide_window_ck",
       sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
     ),
   ],
 );
 
-export const animeHeroSlideRelations = relations(animeHeroSlide, ({ one }) => ({
-  createdBy: one(user, { fields: [animeHeroSlide.createdByUserId], references: [user.id] }),
-  updatedBy: one(user, { fields: [animeHeroSlide.updatedByUserId], references: [user.id] }),
+export const blueprintHeroSlideRelations = relations(blueprintHeroSlide, ({ one }) => ({
+  createdBy: one(user, { fields: [blueprintHeroSlide.createdByUserId], references: [user.id] }),
+  updatedBy: one(user, { fields: [blueprintHeroSlide.updatedByUserId], references: [user.id] }),
 }));
 
 // ---------------------------------------------------------------------------
 // BLUEPRINTS — showcase launches (`/blueprints/showcase`), frontend todo.md "Posting a launch" 2b.
 //
-// THE FIRST BLUEPRINTS CONTENT TABLE. Until this, `anime_hero_slide` was the whole server-side
-// surface; teardowns, launches and case studies were all frontend fixtures.
+// THE FIRST BLUEPRINTS CONTENT TABLE. Until this, the hero carousel table (then still named
+// `anime_hero_slide`) was the whole server-side surface; teardowns, launches and case studies
+// were all frontend fixtures.
 //
 // ⚠️ TWO ENUMS SHARED BY EVERY BLUEPRINT KIND, NOT ONE PER TABLE. `blueprint_moderation_state`
 // carries all seven labels the frontend's `BLUEPRINT_MODERATION_STATES` byte-matches, although a

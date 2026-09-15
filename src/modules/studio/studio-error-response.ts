@@ -2,9 +2,7 @@ import type { Response } from "express";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import type { PdfValidationError } from "#src/modules/rnd/pdf.js";
-import type { ContentReviewError } from "#src/modules/studio/content-review.service.js";
 import type { PlaylistError } from "#src/modules/studio/playlists/playlists.service.js";
-import type { AnimeSeriesError } from "#src/modules/studio/series/series.service.js";
 import type { VideoError } from "#src/modules/studio/videos/videos.service.js";
 
 /**
@@ -33,14 +31,10 @@ import type { VideoError } from "#src/modules/studio/videos/videos.service.js";
  *   502 — YouTube did not answer. NOT the creator's fault, and retrying may work.
  *   503 — Cloudinary is not configured on this deployment.
  *
- * TWO PAIRS THAT LOOK MERGEABLE AND ARE NOT — do not collapse them:
+ * ONE PAIR THAT LOOKS MERGEABLE AND IS NOT — do not collapse it:
  *   YOUTUBE_VIDEO_UNAVAILABLE (422) vs YOUTUBE_VERIFY_FAILED (502). The first means the
  *     creator gave us a bad link and must fix it; the second means YouTube was
  *     unreachable. Collapsing them tells a creator to fix a link that was fine.
- *   ANIME_SERIES_NOT_FOUND (422) vs SERIES_NOT_FOUND (404). The first is a series id in a
- *     request BODY, the second a series id in the PATH. One literal cannot map to two
- *     statuses, which is why they are two literals — the same split the project mapper
- *     makes between NOT_FOUND and CATEGORY_NOT_FOUND.
  */
 
 export {
@@ -54,13 +48,11 @@ export {
 /**
  * Every domain error the studio controllers can surface.
  *
- * The unions overlap on purpose: `VIDEO_NOT_FOUND` and `NOT_AN_ANIME_EPISODE` are
- * declared once in videos.service.ts and imported by the others, so TypeScript collapses
- * them into a single arm here. Two arms only merge when their payloads are identical —
- * which is exactly why any variant that must render as a DIFFERENT status gets a
- * different literal rather than a different payload.
+ * Two arms only merge when their payloads are identical — which is exactly why any variant
+ * that must render as a DIFFERENT status gets a different literal rather than a different
+ * payload.
  */
-export type StudioDomainError = VideoError | ContentReviewError | PlaylistError | AnimeSeriesError;
+export type StudioDomainError = VideoError | PlaylistError;
 
 const CHAPTER_RULE_MESSAGES: Readonly<
   Record<Extract<VideoError, { type: "INVALID_CHAPTERS" }>["reason"], string>
@@ -88,20 +80,6 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
       return { statusCode: 404, message: "Video not found." };
     case "PLAYLIST_NOT_FOUND":
       return { statusCode: 404, message: "Playlist not found." };
-    // A series id in the PATH. Its body-field twin, ANIME_SERIES_NOT_FOUND, is a 422 —
-    // see the header note on why those are two literals and not one.
-    case "SERIES_NOT_FOUND":
-      return { statusCode: 404, message: "Series not found." };
-    case "SEASON_NOT_FOUND":
-      return { statusCode: 404, message: "Season not found." };
-    case "EPISODE_NOT_FOUND":
-      return { statusCode: 404, message: "Episode not found." };
-
-    // --- 403: the ONLY variant, and only on /videos/admin/*. Names no resource and no
-    // id, so it cannot be used to test whether an id exists — and it is decided before
-    // any id is read, so the answer is identical for a real id and a garbage one.
-    case "PLATFORM_CAPABILITY_REQUIRED":
-      return { statusCode: 403, message: "This action requires a platform staff role." };
 
     // --- 422: the creator's link is the problem and they must change it.
     case "INVALID_YOUTUBE_URL":
@@ -240,37 +218,7 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
         message: "That video is not available to add.",
         errors: { videoIds: [...error.videoIds] },
       };
-    case "ANIME_SERIES_NOT_FOUND":
-      return {
-        statusCode: 422,
-        message: "That series does not exist.",
-        errors: { "anime.seriesId": ["Unknown series."] },
-      };
-    case "ANIME_SEASON_NOT_FOUND":
-      return {
-        statusCode: 422,
-        message: "That season does not exist.",
-        errors: { "anime.seasonLabel": ["Unknown season."] },
-      };
-    case "NOT_AN_ANIME_EPISODE":
-      return { statusCode: 422, message: "That video is not an anime episode." };
-
     // --- 409: lifecycle conflicts.
-    case "REVIEW_NOT_PENDING":
-      return {
-        statusCode: 409,
-        message: `That episode is already ${error.reviewStatus.replace("_", " ")}.`,
-      };
-    case "EPISODE_NUMBER_TAKEN":
-      return {
-        statusCode: 409,
-        message: `Episode ${error.episodeNumber} already exists in that season.`,
-      };
-    case "SEASON_LABEL_TAKEN":
-      return {
-        statusCode: 409,
-        message: `That series already has a season called "${error.seasonLabel}".`,
-      };
     case "NO_TOKEN_REQUIRED":
       // Deferred route (Appendix A). A YouTube video has nothing to sign, and saying so
       // is more useful than a 404 that would imply the video is missing.

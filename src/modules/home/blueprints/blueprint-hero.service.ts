@@ -31,7 +31,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { animeHeroSlide } from "#src/db/schema.js";
+import { blueprintHeroSlide } from "#src/db/schema.js";
 import {
   deleteBlueprintHeroSlideImage,
   uploadBlueprintHeroSlideImage,
@@ -66,11 +66,11 @@ const HERO_OUTPUT_MAX_DIMENSION_PX = 1600;
 
 export type BlueprintHeroSlideError =
   | PlatformAccessError
-  | { type: "ANIME_HERO_SLIDE_NOT_FOUND"; slideId: string }
-  | { type: "ANIME_HERO_DESTINATION_INVALID"; reason: PromotionalDestinationError }
-  | { type: "ANIME_HERO_SLIDE_WINDOW_INVALID" }
-  | { type: "ANIME_HERO_SLIDE_ORDER_MISMATCH" }
-  | { type: "ANIME_HERO_SLIDE_LIMIT_REACHED"; limit: number }
+  | { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND"; slideId: string }
+  | { type: "BLUEPRINT_HERO_DESTINATION_INVALID"; reason: PromotionalDestinationError }
+  | { type: "BLUEPRINT_HERO_SLIDE_WINDOW_INVALID" }
+  | { type: "BLUEPRINT_HERO_SLIDE_ORDER_MISMATCH" }
+  | { type: "BLUEPRINT_HERO_SLIDE_LIMIT_REACHED"; limit: number }
   | ImageValidationError
   | CloudinaryError;
 
@@ -105,22 +105,22 @@ export interface AdminBlueprintHeroSlide extends PublicBlueprintHeroSlide {
 }
 
 const PUBLIC_VIEW_COLUMNS = {
-  id: animeHeroSlide.id,
-  imageUrl: animeHeroSlide.imageUrl,
-  title: animeHeroSlide.title,
-  destinationPath: animeHeroSlide.destinationPath,
+  id: blueprintHeroSlide.id,
+  imageUrl: blueprintHeroSlide.imageUrl,
+  title: blueprintHeroSlide.title,
+  destinationPath: blueprintHeroSlide.destinationPath,
 } as const;
 
 const ADMIN_VIEW_COLUMNS = {
   ...PUBLIC_VIEW_COLUMNS,
-  position: animeHeroSlide.position,
-  isActive: animeHeroSlide.isActive,
-  startsAt: animeHeroSlide.startsAt,
-  endsAt: animeHeroSlide.endsAt,
-  createdByUserId: animeHeroSlide.createdByUserId,
-  updatedByUserId: animeHeroSlide.updatedByUserId,
-  createdAt: animeHeroSlide.createdAt,
-  updatedAt: animeHeroSlide.updatedAt,
+  position: blueprintHeroSlide.position,
+  isActive: blueprintHeroSlide.isActive,
+  startsAt: blueprintHeroSlide.startsAt,
+  endsAt: blueprintHeroSlide.endsAt,
+  createdByUserId: blueprintHeroSlide.createdByUserId,
+  updatedByUserId: blueprintHeroSlide.updatedByUserId,
+  createdAt: blueprintHeroSlide.createdAt,
+  updatedAt: blueprintHeroSlide.updatedAt,
 } as const;
 
 export interface CreateBlueprintHeroSlideInput {
@@ -196,15 +196,15 @@ export async function listActiveBlueprintHeroSlides(): Promise<
 
   return db
     .select(PUBLIC_VIEW_COLUMNS)
-    .from(animeHeroSlide)
+    .from(blueprintHeroSlide)
     .where(
       and(
-        eq(animeHeroSlide.isActive, true),
-        or(isNull(animeHeroSlide.startsAt), lte(animeHeroSlide.startsAt, now)),
-        or(isNull(animeHeroSlide.endsAt), gt(animeHeroSlide.endsAt, now)),
+        eq(blueprintHeroSlide.isActive, true),
+        or(isNull(blueprintHeroSlide.startsAt), lte(blueprintHeroSlide.startsAt, now)),
+        or(isNull(blueprintHeroSlide.endsAt), gt(blueprintHeroSlide.endsAt, now)),
       ),
     )
-    .orderBy(asc(animeHeroSlide.position), asc(animeHeroSlide.id));
+    .orderBy(asc(blueprintHeroSlide.position), asc(blueprintHeroSlide.id));
 }
 
 /** `GET /blueprints/admin/hero-slides` — every slide, live or not, in display order. */
@@ -220,8 +220,8 @@ export async function listBlueprintHeroSlidesForStaff(
 
   const rows = await db
     .select(ADMIN_VIEW_COLUMNS)
-    .from(animeHeroSlide)
-    .orderBy(asc(animeHeroSlide.position), asc(animeHeroSlide.id));
+    .from(blueprintHeroSlide)
+    .orderBy(asc(blueprintHeroSlide.position), asc(blueprintHeroSlide.id));
 
   return { success: true, value: rows };
 }
@@ -254,22 +254,22 @@ export async function createBlueprintHeroSlide(
   if (!destinationResult.success) {
     return {
       success: false,
-      error: { type: "ANIME_HERO_DESTINATION_INVALID", reason: destinationResult.error },
+      error: { type: "BLUEPRINT_HERO_DESTINATION_INVALID", reason: destinationResult.error },
     };
   }
 
   if (!isScheduleWindowValid(input.startsAt, input.endsAt)) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_WINDOW_INVALID" } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_WINDOW_INVALID" } };
   }
 
   const [existingCount] = await db
     .select({ total: sql<number>`count(*)::int` })
-    .from(animeHeroSlide);
+    .from(blueprintHeroSlide);
   const slideCount = existingCount?.total ?? 0;
   if (slideCount >= MAX_BLUEPRINT_HERO_SLIDES) {
     return {
       success: false,
-      error: { type: "ANIME_HERO_SLIDE_LIMIT_REACHED", limit: MAX_BLUEPRINT_HERO_SLIDES },
+      error: { type: "BLUEPRINT_HERO_SLIDE_LIMIT_REACHED", limit: MAX_BLUEPRINT_HERO_SLIDES },
     };
   }
 
@@ -291,7 +291,7 @@ export async function createBlueprintHeroSlide(
   const [inserted] = await recordPlatformAction(
     async (tx) =>
       tx
-        .insert(animeHeroSlide)
+        .insert(blueprintHeroSlide)
         .values({
           id: slideId,
           imageUrl: uploadResult.value.secureUrl,
@@ -310,7 +310,7 @@ export async function createBlueprintHeroSlide(
       rows[0] === undefined
         ? null
         : {
-            eventKind: "anime_hero_slide_created",
+            eventKind: "blueprint_hero_slide_created",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
             actionLabel: "Created a Blueprints hero slide",
@@ -354,12 +354,12 @@ export async function updateBlueprintHeroSlide(
   // 2. Resources second.
   const [existing] = await db
     .select(ADMIN_VIEW_COLUMNS)
-    .from(animeHeroSlide)
-    .where(eq(animeHeroSlide.id, slideId))
+    .from(blueprintHeroSlide)
+    .where(eq(blueprintHeroSlide.id, slideId))
     .limit(1);
 
   if (!existing) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_NOT_FOUND", slideId } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND", slideId } };
   }
 
   // `undefined` means "leave it alone"; an explicit `null` means "clear the link". Those
@@ -370,7 +370,7 @@ export async function updateBlueprintHeroSlide(
     if (!destinationResult.success) {
       return {
         success: false,
-        error: { type: "ANIME_HERO_DESTINATION_INVALID", reason: destinationResult.error },
+        error: { type: "BLUEPRINT_HERO_DESTINATION_INVALID", reason: destinationResult.error },
       };
     }
     nextDestinationPath = destinationResult.value;
@@ -381,13 +381,13 @@ export async function updateBlueprintHeroSlide(
   const nextStartsAt = input.startsAt === undefined ? existing.startsAt : input.startsAt;
   const nextEndsAt = input.endsAt === undefined ? existing.endsAt : input.endsAt;
   if (!isScheduleWindowValid(nextStartsAt, nextEndsAt)) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_WINDOW_INVALID" } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_WINDOW_INVALID" } };
   }
 
   const [updated] = await recordPlatformAction(
     async (tx) =>
       tx
-        .update(animeHeroSlide)
+        .update(blueprintHeroSlide)
         .set({
           ...(input.title === undefined ? {} : { title: input.title }),
           ...(nextDestinationPath === undefined ? {} : { destinationPath: nextDestinationPath }),
@@ -396,13 +396,13 @@ export async function updateBlueprintHeroSlide(
           ...(input.endsAt === undefined ? {} : { endsAt: input.endsAt }),
           updatedByUserId: actorUserId,
         })
-        .where(eq(animeHeroSlide.id, slideId))
+        .where(eq(blueprintHeroSlide.id, slideId))
         .returning(ADMIN_VIEW_COLUMNS),
     (rows) =>
       rows[0] === undefined
         ? null
         : {
-            eventKind: "anime_hero_slide_updated",
+            eventKind: "blueprint_hero_slide_updated",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
             actionLabel: "Updated a Blueprints hero slide",
@@ -417,7 +417,7 @@ export async function updateBlueprintHeroSlide(
   );
 
   if (!updated) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_NOT_FOUND", slideId } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND", slideId } };
   }
   return { success: true, value: updated };
 }
@@ -447,13 +447,13 @@ export async function replaceBlueprintHeroSlideImage(
 
   // 2. Resources second — and before the expensive decode, so a bad id is cheap.
   const [existing] = await db
-    .select({ id: animeHeroSlide.id })
-    .from(animeHeroSlide)
-    .where(eq(animeHeroSlide.id, slideId))
+    .select({ id: blueprintHeroSlide.id })
+    .from(blueprintHeroSlide)
+    .where(eq(blueprintHeroSlide.id, slideId))
     .limit(1);
 
   if (!existing) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_NOT_FOUND", slideId } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND", slideId } };
   }
 
   const normalizedResult = await validateAndNormalizeImage(rawImageBytes, {
@@ -472,15 +472,15 @@ export async function replaceBlueprintHeroSlideImage(
   const [updated] = await recordPlatformAction(
     async (tx) =>
       tx
-        .update(animeHeroSlide)
+        .update(blueprintHeroSlide)
         .set({ imageUrl: uploadResult.value.secureUrl, updatedByUserId: actorUserId })
-        .where(eq(animeHeroSlide.id, slideId))
+        .where(eq(blueprintHeroSlide.id, slideId))
         .returning(ADMIN_VIEW_COLUMNS),
     (rows) =>
       rows[0] === undefined
         ? null
         : {
-            eventKind: "anime_hero_slide_image_replaced",
+            eventKind: "blueprint_hero_slide_image_replaced",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
             actionLabel: "Replaced a Blueprints hero slide image",
@@ -491,7 +491,7 @@ export async function replaceBlueprintHeroSlideImage(
   );
 
   if (!updated) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_NOT_FOUND", slideId } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND", slideId } };
   }
   return { success: true, value: updated };
 }
@@ -517,7 +517,7 @@ export async function reorderBlueprintHeroSlides(
   }
 
   // 2. Resources second.
-  const existing = await db.select({ id: animeHeroSlide.id }).from(animeHeroSlide);
+  const existing = await db.select({ id: blueprintHeroSlide.id }).from(blueprintHeroSlide);
   const existingIds = existing.map((row) => row.id);
 
   const requestedIds = new Set(slideIds);
@@ -527,16 +527,16 @@ export async function reorderBlueprintHeroSlides(
     existingIds.every((id) => requestedIds.has(id));
 
   if (!isPermutation) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_ORDER_MISMATCH" } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_ORDER_MISMATCH" } };
   }
 
   await recordPlatformAction(
     async (tx) => {
       for (let position = 0; position < slideIds.length; position += 1) {
         await tx
-          .update(animeHeroSlide)
+          .update(blueprintHeroSlide)
           .set({ position, updatedByUserId: actorUserId })
-          .where(eq(animeHeroSlide.id, slideIds[position]));
+          .where(eq(blueprintHeroSlide.id, slideIds[position]));
       }
       return slideIds.length;
     },
@@ -544,7 +544,7 @@ export async function reorderBlueprintHeroSlides(
       rewrittenCount === 0
         ? null
         : {
-            eventKind: "anime_hero_slide_reordered",
+            eventKind: "blueprint_hero_slide_reordered",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
             actionLabel: "Reordered the Blueprints hero carousel",
@@ -556,8 +556,8 @@ export async function reorderBlueprintHeroSlides(
 
   const rows = await db
     .select(ADMIN_VIEW_COLUMNS)
-    .from(animeHeroSlide)
-    .orderBy(asc(animeHeroSlide.position), asc(animeHeroSlide.id));
+    .from(blueprintHeroSlide)
+    .orderBy(asc(blueprintHeroSlide.position), asc(blueprintHeroSlide.id));
 
   return { success: true, value: rows };
 }
@@ -589,13 +589,13 @@ export async function deleteBlueprintHeroSlide(
 
   // 2. Resources second.
   const [existing] = await db
-    .select({ id: animeHeroSlide.id, imageUrl: animeHeroSlide.imageUrl })
-    .from(animeHeroSlide)
-    .where(eq(animeHeroSlide.id, slideId))
+    .select({ id: blueprintHeroSlide.id, imageUrl: blueprintHeroSlide.imageUrl })
+    .from(blueprintHeroSlide)
+    .where(eq(blueprintHeroSlide.id, slideId))
     .limit(1);
 
   if (!existing) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_NOT_FOUND", slideId } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND", slideId } };
   }
 
   if (isCloudinaryHostedImage(existing.imageUrl)) {
@@ -608,9 +608,9 @@ export async function deleteBlueprintHeroSlide(
   const deletedCount = await recordPlatformAction(
     async (tx) => {
       const deleted = await tx
-        .delete(animeHeroSlide)
-        .where(eq(animeHeroSlide.id, slideId))
-        .returning({ id: animeHeroSlide.id });
+        .delete(blueprintHeroSlide)
+        .where(eq(blueprintHeroSlide.id, slideId))
+        .returning({ id: blueprintHeroSlide.id });
 
       if (deleted.length === 0) {
         return 0;
@@ -618,15 +618,15 @@ export async function deleteBlueprintHeroSlide(
 
       // Re-pack so positions stay 0-based and contiguous.
       const remaining = await tx
-        .select({ id: animeHeroSlide.id })
-        .from(animeHeroSlide)
-        .orderBy(asc(animeHeroSlide.position), asc(animeHeroSlide.id));
+        .select({ id: blueprintHeroSlide.id })
+        .from(blueprintHeroSlide)
+        .orderBy(asc(blueprintHeroSlide.position), asc(blueprintHeroSlide.id));
 
       for (let position = 0; position < remaining.length; position += 1) {
         await tx
-          .update(animeHeroSlide)
+          .update(blueprintHeroSlide)
           .set({ position })
-          .where(eq(animeHeroSlide.id, remaining[position].id));
+          .where(eq(blueprintHeroSlide.id, remaining[position].id));
       }
 
       return deleted.length;
@@ -635,7 +635,7 @@ export async function deleteBlueprintHeroSlide(
       count === 0
         ? null
         : {
-            eventKind: "anime_hero_slide_deleted",
+            eventKind: "blueprint_hero_slide_deleted",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
             actionLabel: "Deleted a Blueprints hero slide",
@@ -646,7 +646,7 @@ export async function deleteBlueprintHeroSlide(
   );
 
   if (deletedCount === 0) {
-    return { success: false, error: { type: "ANIME_HERO_SLIDE_NOT_FOUND", slideId } };
+    return { success: false, error: { type: "BLUEPRINT_HERO_SLIDE_NOT_FOUND", slideId } };
   }
   return { success: true, value: { deletedSlideId: slideId } };
 }

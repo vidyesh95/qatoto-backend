@@ -1,10 +1,11 @@
 # Home Feed — Backend Structure
 
-> ⚠️ **THE ANIME VERTICAL WAS RETIRED; the `/anime` router is now `/blueprints`.** The module moved
-> to `src/modules/home/blueprints/` and mounts at `/blueprints`. **Nothing in the database changed** —
-> `anime_series`, `anime_hero_slide`, the two pgEnums, the `anime_episode` value in `video_type` and
-> the five `anime_hero_slide_*` audit labels all keep their names. The studio's own `/series` routes
-> and the admin review queue are untouched. Read every `/anime` URL below as historical.
+> ⚠️ **THE ANIME VERTICAL IS GONE IN FULL.** The module moved to `src/modules/home/blueprints/` and
+> mounts at `/blueprints`; the catalog tables, both pgEnums, the `anime_episode` value in
+> `video_type`, the studio `/series` router and the staff review queue have all since been dropped,
+> and `anime_hero_slide` was renamed `blueprint_hero_slide` (its five audit labels with it). The
+> Cloudinary folder keeps its old name on purpose — a public id is an address. Read every `/anime`
+> URL below as historical.
 >
 > **THE SEVENTY-FOUR LINES THAT USED TO BE HERE NOW LIVE IN
 > [BLUEPRINTS_BACKEND_STRUCTURE.md](BLUEPRINTS_BACKEND_STRUCTURE.md)**, which owns that surface:
@@ -70,8 +71,8 @@ is the same error as fabricating a value the server returned as `null`.
 | ------------------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------- |
 | `video` table, ~50 columns                                   | `src/db/schema.ts:9383`              | ✅ built, YouTube-first                                                          |
 | `videoSource` / `youtubeVideoId` + charset CHECK             | `schema.ts:9280`, `:9513-9521`       | ✅ — the CHECK is a **security** constraint, it closes SSRF at the storage layer |
-| Owner-scoped `/videos` CRUD, publish, review                 | `src/modules/studio/videos/videos.routes.ts:38-120` | ✅ built, **all `requireAuth`**                                                  |
-| `contentReviewAction` audit log, anime review queue          | `schema.ts:9831`                     | ✅ built                                                                         |
+| Owner-scoped `/videos` CRUD and publish                      | `src/modules/studio/videos/videos.routes.ts:38-120` | ✅ built, **all `requireAuth`**                                                  |
+| `contentReviewAction` audit log, anime review queue          | —                                    | 🗑️ removed with the anime vertical                                               |
 | **Any public read route**                                    | —                                    | 🚫 does not exist                                                                |
 | **Taxonomy** (categories with slugs + images)                | —                                    | 🚫 `video.category` is nullable free text                                        |
 | **Engagement** (view, like, comment, share, save, subscribe) | —                                    | 🚫 no tables at all                                                              |

@@ -17,11 +17,16 @@
 `src/modules/home/blueprints/` and mounts at `/blueprints`. Its two public series reads were DELETED
 and only the hero carousel survived.
 
-**Nothing in the database changed.** `anime_series`, `anime_season`, `anime_episode`,
-`anime_hero_slide`, the `anime_audio_mode` / `anime_series_status` pgEnums, the `anime_episode` value
-in `video_type` and the five `anime_hero_slide_*` audit labels all keep their names, because renaming
-any of them costs a migration and buys a tidier grep. The studio's own `/series` routes and its admin
-review queue are untouched. Read every `/anime` name in the schema as historical.
+⚠️ **AND THE DATABASE HAS SINCE FOLLOWED.** This paragraph used to read "nothing in the database
+changed… renaming any of them costs a migration and buys a tidier grep". The migrations were written:
+`anime_series`, `anime_season` and `anime_episode` are DROPPED with both pgEnums and the
+`anime_episode` value in `video_type`; the studio `/series` router and the staff review queue went
+with them. **`anime_hero_slide` is now `blueprint_hero_slide`** and the five audit labels are
+`blueprint_hero_slide_*`.
+
+⚠️ **THE CLOUDINARY FOLDER IS STILL `qatoto/anime-hero-slides`, AND THAT ONE IS NOT AN OVERSIGHT.**
+A public id is the ADDRESS of every uploaded slide image, not a label — renaming it orphans them all.
+A table name is private and costs one `ALTER TABLE`; a storage path is neither.
 
 ---
 

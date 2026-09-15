@@ -131,7 +131,7 @@ describe("blueprint drafts", () => {
 
       const response = await request(app)
         .post(DRAFT_PATH)
-        .send({ arm: "anime", document: "{}", documentSchemaVersion: 1 });
+        .send({ arm: "not_an_arm", document: "{}", documentSchemaVersion: 1 });
 
       expect(response.status).toBe(422);
       expect(createBlueprintDraft).not.toHaveBeenCalled();

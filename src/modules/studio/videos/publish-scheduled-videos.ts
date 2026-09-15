@@ -1,7 +1,7 @@
 import { and, asc, eq, isNotNull, lte, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { animeEpisode, creatorStats, video } from "#src/db/schema.js";
+import { creatorStats, video } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
 import { assertGatingSupported } from "#src/modules/studio/videos/videos.service.js";
@@ -9,10 +9,9 @@ import { assertGatingSupported } from "#src/modules/studio/videos/videos.service
 /**
  * Publishes videos whose scheduled time has arrived.
  *
- * WHY THIS EXISTS. Two paths set `publish_status = 'scheduled'` with a future
- * `scheduled_publish_at` — `publishVideo` when a creator picks a future date, and
- * `approveAnimeEpisode` when a moderator approves an episode with a later premiere date — and
- * until this job, NOTHING ever moved one on. A scheduled video sat there permanently invisible:
+ * WHY THIS EXISTS. `publishVideo` sets `publish_status = 'scheduled'` with a future
+ * `scheduled_publish_at` when a creator picks a future date, and until this job, NOTHING ever
+ * moved one on. A scheduled video sat there permanently invisible:
  * `PUBLICLY_SERVABLE` requires `publish_status = 'published'`, so it was in no feed, on no
  * channel and reachable by no link. The scheduling UI worked; the schedule did not.
  *
@@ -121,7 +120,7 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
       if (lockedRow.uploadStatus !== "ready") return "notQualified" as const;
       if (!lockedRow.isSourceVerified) return "notQualified" as const;
       // An episode edited back into review must not go on air because its old premiere date
-      // arrived. `not_required` is every non-anime video; `approved` is a cleared episode.
+      // arrived. `not_required` is every video this build can produce.
       if (lockedRow.reviewStatus !== "not_required" && lockedRow.reviewStatus !== "approved") {
         return "notQualified" as const;
       }
@@ -147,18 +146,6 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
       }
       if (lockedRow.isMadeForKids === null) return "notQualified" as const;
 
-      // An anime episode with no episode row is the one completeness check that needs a query,
-      // and it is not hypothetical: without it this sweep would publish into /anime a video that
-      // has no season, no number and no place in a series.
-      if (lockedRow.videoType === "anime_episode") {
-        const [linkedEpisode] = await tx
-          .select({ id: animeEpisode.id })
-          .from(animeEpisode)
-          .where(eq(animeEpisode.videoId, lockedRow.id))
-          .limit(1);
-        if (!linkedEpisode) return "notQualified" as const;
-      }
-
       await tx
         .update(video)
         .set({
@@ -170,16 +157,6 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
           publishedAt: lockedRow.scheduledPublishAt,
         })
         .where(eq(video.id, lockedRow.id));
-
-      // An embargoed episode is approved with `released_at` NULL precisely so that approving
-      // early does not put it on air. This is the moment it airs, so this is where that gets
-      // filled in — otherwise the episode would be live with no release date behind it.
-      if (lockedRow.videoType === "anime_episode") {
-        await tx
-          .update(animeEpisode)
-          .set({ releasedAt: lockedRow.scheduledPublishAt })
-          .where(eq(animeEpisode.videoId, lockedRow.id));
-      }
 
       // Same transaction as the status change, same shape as the other two publish doors.
       await tx.insert(creatorStats).values({ userId: lockedRow.creatorId }).onConflictDoNothing();

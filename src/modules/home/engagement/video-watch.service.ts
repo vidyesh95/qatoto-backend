@@ -26,10 +26,6 @@ import {
   type StoreProductCardProjection,
 } from "#src/modules/store/catalog/store-catalog.service.js";
 import { PUBLICLY_SERVABLE } from "#src/modules/studio/public-video-gate.js";
-import {
-  loadPublicSeasonsForVideo,
-  type PublicSeasonSummary,
-} from "#src/modules/studio/series/public-series.service.js";
 // ⚠️ THE LEAF, NOT `videos.service.js`. That file is 2,600 lines and drags `@aws-sdk/client-s3`,
 // `cloudinary`, `sharp` and the job registry onto the public watch path for one string. It was the
 // first import written here and it was wrong; `video-document-paths.ts` holds the whole argument.
@@ -121,7 +117,7 @@ export interface WatchPayload {
    * `roleTitle` is what the creator typed and is always present. `linkedRole` is the REAL
    * `projectOpenRole` behind it when the creator picked one, carrying the skills, commitment
    * and remaining slots the R&D surface renders — which is what lets a viewer apply from here
-   * rather than read a label. Null means free text: anime, unaffiliated videos, and every row
+   * rather than read a label. Null means free text: unaffiliated videos and every row
    * written before the link existed.
    *
    * A CLOSED OR FULL ROLE STILL APPEARS, with its real `status` and slot counts. Hiding it
@@ -134,25 +130,13 @@ export interface WatchPayload {
     readonly linkedRole: OpenRoleView | null;
   }[];
   /**
-   * THE SERIES THIS EPISODE BELONGS TO, or `null` when the video is not an anime episode.
-   *
-   * `null` AND `[]` ARE BOTH REACHABLE AND MEAN DIFFERENT THINGS. Null is "not part of a
-   * series" — every pitch, demo and unaffiliated video. An empty array is a series none of
-   * whose episodes are public yet. The client hides the picker for the first and renders an
-   * empty catalogue for the second, so a single sentinel would lose a real distinction.
-   *
-   * Only publicly-servable episodes appear, so episode numbers can have gaps. See
-   * `loadPublicSeasonsForVideo` for why that visible consequence is the intended one.
-   */
-  readonly seasons: readonly PublicSeasonSummary[] | null;
-  /**
    * THE SHOPPABLE PRODUCTS UNDER THE PLAYER. Written by `PUT /videos/:videoId/products`, which
    * re-verifies the creator owns each product; this is the read half, which had never existed —
    * the note at the bottom of this file called it a follow-up and this is it.
    *
-   * `[]` RATHER THAN `null`, unlike `seasons` directly above, and the asymmetry is deliberate.
-   * Every video CAN carry attached products, so "none" is an empty list rather than an absent
-   * capability; there is no second state for a sentinel to distinguish.
+   * `[]` RATHER THAN `null`. Every video CAN carry attached products, so "none" is an empty
+   * list rather than an absent capability; there is no second state for a sentinel to
+   * distinguish.
    *
    * EACH ENTRY IS RE-CHECKED FOR PUBLIC ELIGIBILITY AT READ TIME, not trusted from the join
    * row. A creator can attach a product and the seller can then unpublish it, delist the
@@ -276,13 +260,8 @@ export async function getWatchPayload(
 
   // Small ordered reads rather than json aggregation in the main query: each is an index scan
   // on `video_id`, and keeping them separate keeps the row above flat.
-  //
-  // `loadPublicSeasonsForVideo` RIDES IN THE SAME `Promise.all`, not after it. It is two
-  // queries of its own and depends on nothing the others return, so awaiting it separately
-  // would add its full latency to a route that already refuses a second round trip on
-  // principle.
-  const [categories, chapters, openRoleRows, attachedProductRows, seasons, documentRows] =
-    await Promise.all([
+  const [categories, chapters, openRoleRows, attachedProductRows, documentRows] = await Promise.all(
+    [
       db
         .select({ slug: contentCategory.slug, label: contentCategory.label })
         .from(videoCategory)
@@ -313,7 +292,6 @@ export async function getWatchPayload(
         // The creator's order, which is what `PUT /videos/:videoId/products` stored. No
         // server-side re-sort: rearranging somebody's carousel is a change they did not ask for.
         .orderBy(asc(videoAttachedProduct.position)),
-      loadPublicSeasonsForVideo(videoId),
       // ⚠️ `objectStorageKey` IS SELECTED NOWHERE. It is an internal address into a private bucket,
       // and a public payload is the last place it may appear. The path below is composed from ids.
       db
@@ -325,7 +303,8 @@ export async function getWatchPayload(
         .from(videoDocument)
         .where(eq(videoDocument.videoId, videoId))
         .orderBy(asc(videoDocument.position)),
-    ]);
+    ],
+  );
 
   // Resolved in ONE query rather than per blurb. Every id here was scoped to this video's own
   // venture when it was written, which is why the batch read does not re-scope it.
@@ -412,7 +391,6 @@ export async function getWatchPayload(
               projectName: row.ventureName,
               stage: row.ventureStage,
             },
-      seasons,
       // Mapped from the CARDS, not from the join rows, so the two lists cannot disagree about
       // what survived the eligibility filter. `?? null` covers a product whose card came back
       // without a matching join row, which the ordered resolve makes impossible today and which
@@ -441,9 +419,6 @@ export async function getWatchPayload(
  *      concept exists in the schema (`talent_profile_skill.is_verified` is a skill
  *      badge on a different subsystem). Omitted rather than hard-coded, because a
  *      constant `false` on a trust signal is a claim we cannot support.
- *   `isPremium` on an episode — the column exists on `anime_episode`; no entitlement model,
- *      tier or paywall does. A lock icon over an episode that plays for free is a claim this
- *      backend cannot support. `loadPublicSeasonsForVideo` records the same rule.
  *   `transcript`, `isPremium` on the video, product reviews, trending search terms — each
  *      needs a table, a job or a model that does not exist, not a projection.
  *

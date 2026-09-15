@@ -1,13 +1,20 @@
 # STUDIO_BACKEND_STRUCTURE.md — Qatoto Creator Studio: Video-Upload API
 
-> ⚠️ **THE ANIME VERTICAL WAS RETIRED; the `/anime` router is now `/blueprints`.** The module
-> moved to `src/modules/home/blueprints/` and mounts at `/blueprints`; its two public series
-> reads (`GET /anime/series`, `GET /anime/series/:seriesSlug`) were DELETED and only the hero
-> carousel survived. **Nothing in the database changed** — `anime_series`, `anime_season`,
-> `anime_episode`, `anime_hero_slide`, the `anime_audio_mode` / `anime_series_status` pgEnums,
-> the `anime_episode` value in `video_type` and the five `anime_hero_slide_*` audit labels all
-> keep their names, because renaming any of them costs a migration. The studio's own `/series`
-> routes and the admin review queue are untouched. Read every `/anime` URL below as historical.
+> ⚠️ **THE ANIME VERTICAL IS GONE IN FULL. EVERY ANIME SECTION BELOW IS HISTORY.**
+> An earlier version of this banner said "nothing in the database changed" and that renaming any
+> of it cost a migration. Those migrations have since been written. **Dropped:** `anime_series`,
+> `anime_season`, `anime_episode`, the `anime_audio_mode` / `anime_series_status` pgEnums, the
+> `anime_episode` value in `video_type`, the studio `/series` router in its entirety, and the
+> staff review queue — `content_review_action`, `content_review_action_kind`, the three
+> `/videos/admin/review*` routes and `content-review.service.ts`.
+> **Renamed:** `anime_hero_slide` → `blueprint_hero_slide`, and the five `anime_hero_slide_*`
+> audit labels → `blueprint_hero_slide_*`.
+>
+> ⚠️ **TWO THINGS DELIBERATELY KEPT.** The Cloudinary folder is still `qatoto/anime-hero-slides`,
+> because a public id is the ADDRESS of every uploaded slide and renaming it orphans them all.
+> And `review_status` / `content_review_status` survive because their literals are byte-matched
+> by `PUBLICLY_SERVABLE`, four hot queries and a partial index — every video is `not_required`
+> forever, and a publish now goes live or `scheduled`, never to review.
 >
 > That surface has its own document now:
 > [BLUEPRINTS_BACKEND_STRUCTURE.md](BLUEPRINTS_BACKEND_STRUCTURE.md).

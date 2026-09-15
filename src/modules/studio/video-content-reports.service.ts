@@ -29,7 +29,7 @@ import type { Result } from "#src/types/index.js";
  * not take part in the controller's exhaustive error switch — it would have to write a
  * response or throw, putting an authorization decision outside the one place that maps
  * domain errors to statuses. `content-review.service.ts` records the same reasoning for the
- * anime queue, and `platform-role.service.ts` states it as the reason
+ * staff queues, and `platform-role.service.ts` states it as the reason
  * `requirePlatformCapability` is a service at all.
  *
  * AND IT RUNS BEFORE ANY ID IS READ. Reversed, every one of these routes is an id oracle for

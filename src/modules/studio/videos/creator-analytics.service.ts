@@ -47,7 +47,7 @@ export interface CreatorSummary {
  * `publishedVideoCount` IS READ FROM THE CACHE, and briefly was not. Building this read exposed
  * two paths that changed a video's published state without maintaining the counter — `deleteVideo`
  * removed a published video without decrementing, and `content-review.service.ts` published an
- * approved anime episode without incrementing. Those drifted the number in OPPOSITE directions,
+ * approved episode without incrementing. Those drifted the number in OPPOSITE directions,
  * so on one account they could even have cancelled out. Both are fixed at the source now and the
  * drifted rows were repaired by `scripts/reconcile-creator-stats.ts`, which is also the standing
  * check: a counter cache with no reconciler is one nobody can prove is right.

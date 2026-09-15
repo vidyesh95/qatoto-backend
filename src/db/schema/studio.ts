@@ -76,14 +76,7 @@ export const videoVisibilityEnum = pgEnum("video_visibility", [
   "investor_only",
 ]);
 
-export const videoTypeEnum = pgEnum("video_type", [
-  "pitch",
-  "demo",
-  "update",
-  "ama",
-  // The curated branch: never self-publishes, always routes through staff review.
-  "anime_episode",
-]);
+export const videoTypeEnum = pgEnum("video_type", ["pitch", "demo", "update", "ama"]);
 
 export const videoStageEnum = pgEnum("video_stage", ["idea", "mvp", "scaling", "shipped"]);
 
@@ -104,8 +97,14 @@ export const videoPublishStatusEnum = pgEnum("video_publish_status", [
   "published",
 ]);
 
-// Moderation state. "not_required" for ordinary videos; an anime episode moves to
-// "pending" on publish and only a moderator can move it on from there.
+// Moderation state.
+//
+// ⚠️ ONLY `not_required` IS REACHABLE IN THIS BUILD, and the other three are kept anyway.
+// The single writer of `pending` was the anime episode queue, which is gone. The column and
+// this enum stay because `review_status IN ('not_required','approved')` is written as a
+// LITERAL into the public video gate, four hot queries and the partial index they must
+// byte-match — see `public-video-gate.ts`. Dropping the column would mean rewriting the gate
+// that decides which videos the public can see, for no behavioural gain.
 export const contentReviewStatusEnum = pgEnum("content_review_status", [
   "not_required",
   "pending",
@@ -116,10 +115,10 @@ export const contentReviewStatusEnum = pgEnum("content_review_status", [
  * A FOURTH ORTHOGONAL STATUS ON `video`, and the reason it is a new column rather than a
  * value on one of the three that already exist.
  *
- * `review_status: 'rejected'` is the ANIME QUEUE's verdict — an episode that never came out
- * of pre-publication review. Reusing it for "a moderator took this down after a report"
- * would merge two facts a creator experiences completely differently and would put reported
- * videos into the anime review queue's `pending`/`rejected` counts. `publish_status: 'draft'`
+ * `review_status: 'rejected'` was a PRE-PUBLICATION verdict — content that never came out of
+ * review at all. Reusing it for "a moderator took this down after a report" would merge two
+ * facts a creator experiences completely differently and would put reported videos into a
+ * pre-publication queue's `pending`/`rejected` counts. `publish_status: 'draft'`
  * is worse: it says the CREATOR chose not to publish, and handing a moderator the creator's
  * own switch loses the distinction the moment anyone looks at the row.
  *
@@ -302,7 +301,7 @@ export const video = pgTable(
      * THE VENTURE THIS VIDEO BELONGS TO — the mirror of `product.researchProjectId` (§11i).
      *
      * Unlike `attachedPitchId` directly above, this one IS a foreign key and IS client-settable,
-     * because the thing it points at exists. Null means unaffiliated content — anime, general
+     * because the thing it points at exists. Null means unaffiliated content — general
      * creator uploads — so those surfaces are untouched.
      *
      * `restrict`: a venture with videos attached is not silently deletable. The edge points
@@ -435,9 +434,6 @@ export const video = pgTable(
     // exactly what an inverted index answers and what a b-tree cannot answer at all.
     index("video_search_document_idx").using("gin", table.searchDocument),
     index("video_publishStatus_idx").on(table.publishStatus),
-    // Composite, not two singles: the admin queue filters reviewStatus AND videoType
-    // together and nothing filters videoType alone.
-    index("video_reviewStatus_videoType_idx").on(table.reviewStatus, table.videoType),
     // INDEXED BUT NOT UNIQUE, on purpose. Two Qatoto rows may legitimately point at
     // one YouTube video — a creator re-listing a demo under a new pitch, or two
     // founders each linking the launch video. Abuse is bounded by the per-user rate
@@ -688,7 +684,7 @@ export const videoOpenRole = pgTable(
      * THE REAL ROLE THIS BLURB ADVERTISES, or null.
      *
      * Null keeps today's behaviour exactly: free text that points at nothing, which is right
-     * for anime and for any video with no venture. When set, the watch page stops rendering a
+     * for any video with no venture. When set, the watch page stops rendering a
      * typed label and starts rendering a projection of the actual `projectOpenRole` — its
      * skills, its commitment, its remaining slots — with an Apply control wired to the R&D
      * application flow that already exists.

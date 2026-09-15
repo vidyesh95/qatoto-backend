@@ -68,13 +68,13 @@ describe("feed routes", () => {
   describe("GET /feed/categories", () => {
     it("returns the active taxonomy for a signed-out visitor, with no session lookup", async () => {
       signOut();
-      listActiveContentCategories.mockResolvedValue([{ slug: "anime", label: "Anime" }]);
+      listActiveContentCategories.mockResolvedValue([{ slug: "robotics", label: "Robotics" }]);
 
       const response = await request(app).get("/feed/categories");
 
       expect(response.status).toBe(200);
       expect(listActiveContentCategories).toHaveBeenCalledWith();
-      expect(response.body.data).toEqual([{ slug: "anime", label: "Anime" }]);
+      expect(response.body.data).toEqual([{ slug: "robotics", label: "Robotics" }]);
     });
   });
 

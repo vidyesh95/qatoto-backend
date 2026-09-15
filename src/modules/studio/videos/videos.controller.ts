@@ -279,12 +279,7 @@ export async function publishVideo(req: Request, res: Response): Promise<void> {
   const response: ApiResponse = {
     status: "success",
     statusCode: 200,
-    // An anime episode is SUBMITTED, not published — say so, or the creator will look
-    // for it in /anime and find nothing.
-    message:
-      publishResult.value.reviewStatus === "pending"
-        ? "Episode submitted for review"
-        : "Video published successfully",
+    message: "Video published successfully",
     data: publishResult.value,
   };
   res.status(200).json(response);
