@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 import type { Express } from "express";
 import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +25,7 @@ import { buildSignedWebhookRequest, signWebhookBody } from "#src/test-support/we
  * adapter's own test so the two suites cannot drift on the signing scheme.
  */
 
-stubServerEnvironment();
+stubServerEnvironment({ RAZORPAY_WEBHOOK_SECRET: "razorpay_webhook_secret_for_route_tests" });
 
 vi.mock("dotenv/config", () => ({}));
 vi.mock("#src/db/index.js", async () => (await import("#src/test-support/database-mock.js")).databaseModuleMock());
@@ -39,6 +41,11 @@ vi.mock("#src/modules/store/fulfillment/commerce-connector.service.js", () => ({
 const applyNormalizedEscrowEvent = vi.fn<(...args: readonly unknown[]) => unknown>();
 vi.mock("#src/modules/store/orders/commerce-escrow.service.js", () => ({
   applyNormalizedEscrowEvent: (...args: readonly unknown[]) => applyNormalizedEscrowEvent(...args),
+}));
+
+const confirmRazorpayOrderFromWebhook = vi.fn<(...args: readonly unknown[]) => unknown>();
+vi.mock("#src/modules/store/orders/commerce-payments.service.js", () => ({
+  confirmRazorpayOrderFromWebhook: (...args: readonly unknown[]) => confirmRazorpayOrderFromWebhook(...args),
 }));
 
 // `external-escrow-provider.adapter.js` is NOT mocked — it is a pure, synchronous
@@ -71,6 +78,20 @@ const RELEASE_EVENT_BODY = {
 
 function signedRequest(body: unknown = RELEASE_EVENT_BODY, timestampSeconds?: number) {
   return buildSignedWebhookRequest(body, SIGNING_SECRET, { timestampSeconds });
+}
+
+const RAZORPAY_WEBHOOK_SECRET = "razorpay_webhook_secret_for_route_tests";
+
+/**
+ * Sent as a STRING: supertest JSON-serializes a Buffer when Content-Type is
+ * application/json (`{"type":"Buffer","data":[…]}`), which would change the signed bytes.
+ */
+function razorpaySignedRequest(body: unknown, secret: string = RAZORPAY_WEBHOOK_SECRET) {
+  const rawBody = Buffer.from(JSON.stringify(body), "utf8");
+  return {
+    rawBody,
+    signature: createHmac("sha256", secret).update(rawBody).digest("hex"),
+  };
 }
 
 describe("commerce webhooks routes", () => {
@@ -298,6 +319,100 @@ describe("commerce webhooks routes", () => {
 
       expect(response.status).toBe(400);
       expect(applyNormalizedEscrowEvent).not.toHaveBeenCalled();
+    });
+  });
+  /**
+   * Razorpay's scheme: HMAC-SHA256 over the raw body in `X-Razorpay-Signature`, no timestamp.
+   * Signed here with `node:crypto` directly rather than the adapter's verifier, so the route is
+   * proven against the documented scheme and not against itself. The payments service is
+   * mocked; that it re-fetches instead of trusting the body is the service's contract.
+   */
+  describe("POST /webhooks/payments/razorpay", () => {
+    const ORDER_PAID_BODY = {
+      entity: "event",
+      event: "order.paid",
+      payload: {
+        payment: { entity: { id: "pay_Webhook1", order_id: "order_Webhook1", status: "captured" } },
+        order: { entity: { id: "order_Webhook1", status: "paid" } },
+      },
+    };
+
+    it("verifies the raw-body signature and confirms the named order", async () => {
+      confirmRazorpayOrderFromWebhook.mockResolvedValue({ success: true, value: { id: "pi_1", state: "settled" } });
+      const { rawBody, signature } = razorpaySignedRequest(ORDER_PAID_BODY);
+
+      const response = await request(app)
+        .post("/webhooks/payments/razorpay")
+        .set("X-Razorpay-Signature", signature)
+        .set("Content-Type", "application/json")
+        .send(rawBody.toString("utf8"));
+
+      expect(response.status).toBe(202);
+      expect(confirmRazorpayOrderFromWebhook).toHaveBeenCalledWith("order_Webhook1", expect.any(Date));
+    });
+
+    it("reads the order id off a payment event that carries no order entity", async () => {
+      confirmRazorpayOrderFromWebhook.mockResolvedValue({ success: true, value: null });
+      const { rawBody, signature } = razorpaySignedRequest({
+        event: "payment.failed",
+        payload: { payment: { entity: { id: "pay_Webhook2", order_id: "order_Webhook2" } } },
+      });
+
+      const response = await request(app)
+        .post("/webhooks/payments/razorpay")
+        .set("X-Razorpay-Signature", signature)
+        .set("Content-Type", "application/json")
+        .send(rawBody.toString("utf8"));
+
+      expect(response.status).toBe(202);
+      expect(confirmRazorpayOrderFromWebhook).toHaveBeenCalledWith("order_Webhook2", expect.any(Date));
+    });
+
+    it.each([
+      { name: "a signature from the wrong secret", signatureFor: "not_the_webhook_secret", header: true },
+      { name: "a missing signature header", signatureFor: RAZORPAY_WEBHOOK_SECRET, header: false },
+    ])("answers 401 for $name without touching the service", async ({ signatureFor, header }) => {
+      const { rawBody, signature } = razorpaySignedRequest(ORDER_PAID_BODY, signatureFor);
+
+      const pending = request(app).post("/webhooks/payments/razorpay").set("Content-Type", "application/json");
+      const response = await (header ? pending.set("X-Razorpay-Signature", signature) : pending).send(
+        rawBody.toString("utf8"),
+      );
+
+      expect(response.status).toBe(401);
+      expect(confirmRazorpayOrderFromWebhook).not.toHaveBeenCalled();
+    });
+
+    it("answers 503 when Razorpay is unreachable so the delivery is retried", async () => {
+      confirmRazorpayOrderFromWebhook.mockResolvedValue({
+        success: false,
+        error: { type: "PROVIDER_UNAVAILABLE", reason: "razorpay_http_503" },
+      });
+      const { rawBody, signature } = razorpaySignedRequest(ORDER_PAID_BODY);
+
+      const response = await request(app)
+        .post("/webhooks/payments/razorpay")
+        .set("X-Razorpay-Signature", signature)
+        .set("Content-Type", "application/json")
+        .send(rawBody.toString("utf8"));
+
+      expect(response.status).toBe(503);
+    });
+
+    it("accepts a signed event with no order without calling the service", async () => {
+      const { rawBody, signature } = razorpaySignedRequest({
+        event: "payment_link.paid",
+        payload: { payment: { entity: { id: "pay_Link1", order_id: null } } },
+      });
+
+      const response = await request(app)
+        .post("/webhooks/payments/razorpay")
+        .set("X-Razorpay-Signature", signature)
+        .set("Content-Type", "application/json")
+        .send(rawBody.toString("utf8"));
+
+      expect(response.status).toBe(202);
+      expect(confirmRazorpayOrderFromWebhook).not.toHaveBeenCalled();
     });
   });
 });

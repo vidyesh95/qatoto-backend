@@ -113,7 +113,9 @@ const createPaymentIntent = vi.fn<(...args: readonly unknown[]) => unknown>();
 const getPaymentIntent = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listRefunds = vi.fn<(...args: readonly unknown[]) => unknown>();
 const createRefund = vi.fn<(...args: readonly unknown[]) => unknown>();
+const verifyRazorpayCheckout = vi.fn<(...args: readonly unknown[]) => unknown>();
 vi.mock("#src/modules/store/orders/commerce-payments.service.js", () => ({
+  verifyRazorpayCheckout: (...args: readonly unknown[]) => verifyRazorpayCheckout(...args),
   createPaymentIntent: (...args: readonly unknown[]) => createPaymentIntent(...args),
   getPaymentIntent: (...args: readonly unknown[]) => getPaymentIntent(...args),
   listRefunds: (...args: readonly unknown[]) => listRefunds(...args),
@@ -362,6 +364,80 @@ describe("commerce payments routes", () => {
 
       expect(response.status).toBe(422);
       expect(createRefund).not.toHaveBeenCalled();
+    });
+  });
+  /**
+   * The Razorpay Checkout success handler's report. The ownership, order-match and HMAC
+   * decisions live in the service; this suite pins the boundary — auth, the 422 shape check
+   * that keeps a malformed value away from the comparison, and the status each outcome maps to.
+   */
+  describe("POST /commerce/payments/:paymentIntentId/razorpay-verification", () => {
+    const path = "/commerce/payments/pi_1/razorpay-verification";
+    const VALID_BODY = {
+      razorpayOrderId: "order_RouteTest1",
+      razorpayPaymentId: "pay_RouteTest1",
+      razorpaySignature: "a".repeat(64),
+    };
+
+    it("answers 401 for a signed-out caller", async () => {
+      signOut();
+
+      const response = await request(app).post(path).send(VALID_BODY);
+
+      expect(response.status).toBe(401);
+      expect(verifyRazorpayCheckout).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "a missing signature", body: { ...VALID_BODY, razorpaySignature: undefined } },
+      { name: "a non-hex signature", body: { ...VALID_BODY, razorpaySignature: "z".repeat(64) } },
+      { name: "a payment id where the order id belongs", body: { ...VALID_BODY, razorpayOrderId: "pay_RouteTest1" } },
+      { name: "Razorpay's raw snake_case keys", body: { razorpay_order_id: "order_RouteTest1" } },
+      { name: "a client-asserted state", body: { ...VALID_BODY, state: "settled" } },
+    ])("rejects $name with 422 before the service runs", async ({ body }) => {
+      const response = await request(app).post(path).send(body);
+
+      expect(response.status).toBe(422);
+      expect(verifyRazorpayCheckout).not.toHaveBeenCalled();
+    });
+
+    it("passes the actor, intent id and parsed body through and answers 200 with the intent", async () => {
+      verifyRazorpayCheckout.mockResolvedValue({ success: true, value: { id: "pi_1", state: "settled" } });
+
+      const response = await request(app).post(path).send(VALID_BODY);
+
+      expect(response.status).toBe(200);
+      expect(verifyRazorpayCheckout).toHaveBeenCalledWith(ACTOR, "pi_1", VALID_BODY, expect.any(Date));
+      expect(response.body.data).toEqual({ id: "pi_1", state: "settled" });
+    });
+
+    it("answers 200 while Razorpay has not yet marked the order paid — the client reads state", async () => {
+      verifyRazorpayCheckout.mockResolvedValue({
+        success: true,
+        value: { id: "pi_1", state: "requires_action" },
+      });
+
+      const response = await request(app).post(path).send(VALID_BODY);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.state).toBe("requires_action");
+    });
+
+    it.each([
+      { errorValue: { type: "SIGNATURE_MISMATCH" }, expectedStatus: 400 },
+      { errorValue: { type: "NOT_FOUND" }, expectedStatus: 404 },
+      { errorValue: { type: "FORBIDDEN" }, expectedStatus: 403 },
+      {
+        errorValue: { type: "CONFLICT", message: "The Razorpay order does not belong to this payment." },
+        expectedStatus: 409,
+      },
+      { errorValue: { type: "PROVIDER_UNAVAILABLE", reason: "razorpay_http_503" }, expectedStatus: 503 },
+    ])("maps $errorValue.type to $expectedStatus", async ({ errorValue, expectedStatus }) => {
+      verifyRazorpayCheckout.mockResolvedValue({ success: false, error: errorValue });
+
+      const response = await request(app).post(path).send(VALID_BODY);
+
+      expect(response.status).toBe(expectedStatus);
     });
   });
 });
