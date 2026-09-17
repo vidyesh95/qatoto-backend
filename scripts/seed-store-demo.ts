@@ -262,16 +262,30 @@ async function ensureBuyerDeliveryAddress(buyerUserId: string): Promise<void> {
 
 async function resolveCategoryId(slug: string): Promise<string> {
   const [category] = await db
-    .select({ id: commerceCategory.id })
+    .select({ id: commerceCategory.id, state: commerceCategory.state })
     .from(commerceCategory)
     .where(eq(commerceCategory.slug, slug))
     .limit(1);
   if (!category) throw new Error(`Root category ${slug} is missing; run db:migrate first.`);
+  /**
+   * A listing in a retired category is not purchasable (`commerce-pricing.ts`), and nothing else
+   * says so: the cart accepts the line and only checkout prepare answers a bare 409. So a retired
+   * root is a seed failure here, not a demo that silently cannot be bought.
+   */
+  if (category.state !== "active") {
+    throw new Error(
+      `Root category ${slug} is ${category.state}; seed demo products into an active one.`,
+    );
+  }
   return category.id;
 }
 
 async function ensureProducts(sellerUserId: string): Promise<void> {
-  const homeCategoryId = await resolveCategoryId("home-kitchen");
+  /**
+   * `furniture`, not `home-kitchen`: migration 0098 retired `home-kitchen` and moved its listings
+   * to `misc`. Every demo product here is furniture.
+   */
+  const homeCategoryId = await resolveCategoryId("furniture");
 
   /**
    * Every one of these is publicly eligible: `status: 'active'`,
@@ -362,7 +376,17 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
        * product silently becomes unbuyable after a few runs. `smoke-store-phase-23` hit exactly
        * that, and a smoke that fails because a fixture ran out reports a defect that is not there.
        */
-      .onConflictDoUpdate({ target: product.id, set: { stockQuantity: 500 } });
+      .onConflictDoUpdate({
+        target: product.id,
+        set: {
+          stockQuantity: 500,
+          /**
+           * A row left in a RETIRED category is moved to this seed's category; a row in any
+           * active one (0098 put the original three in `misc`) is left where someone put it.
+           */
+          categoryId: sql`CASE WHEN ${product.categoryId} IN (SELECT ${commerceCategory.id} FROM ${commerceCategory} WHERE ${commerceCategory.state} <> 'active') THEN excluded.category_id ELSE ${product.categoryId} END`,
+        },
+      });
 
     /**
      * A11. This seed writes `product` rows DIRECTLY rather than through
