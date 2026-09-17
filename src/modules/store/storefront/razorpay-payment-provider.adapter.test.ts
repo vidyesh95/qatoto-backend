@@ -205,7 +205,7 @@ describe("RazorpayCommercePaymentProviderAdapter", () => {
       });
     });
 
-    it("returns the existing order for a retried outbox call instead of minting a second one", async () => {
+    it("returns the existing order when the receipt lookup already sees it (best effort; see the adapter docblock)", async () => {
       fetchImplementation.mockResolvedValueOnce(
         jsonResponse(200, {
           items: [{ id: ORDER_ID, status: "paid", receipt: deriveRazorpayReceipt(IDEMPOTENCY_KEY) }],

@@ -1384,8 +1384,11 @@ Scheduled jobs:
 
 1. `POST /commerce/orders/:orderId/payment-intents` (unchanged; `Idempotency-Key` required) → 202.
 2. The outbox worker creates a Razorpay order (`POST /v1/orders`, `receipt` = first 40 hex chars of
-   SHA-256 over the transfer idempotency key, looked up first so a retry never mints a second
-   order). The intent moves to `requires_action` with `providerPaymentRef = order_…`.
+   SHA-256 over the transfer idempotency key, looked up first). The lookup is BEST EFFORT:
+   Razorpay's order list lagged ~10 s behind creation in the test-mode smoke, so a retry inside
+   that window can mint a second order. That order moves no money and is unreachable — Checkout
+   only ever opens the `order_id` stored on the intent. The intent moves to `requires_action`
+   with `providerPaymentRef = order_…`.
 3. The client polls `GET /commerce/payments/:paymentIntentId` until `state === "requires_action"`
    and `providerPaymentRef` is set, then opens Checkout:
 

@@ -36,11 +36,20 @@ import type { Result } from "#src/types/index.js";
  * CLAUDE.md §4 forbids. Four endpoints over Basic auth are not worth that; every response
  * here is Zod-parsed instead.
  *
- * ## Idempotency
+ * ## Idempotency — best effort, and why that is safe
  *
- * The outbox retries. A retried `POST /v1/orders` would mint a SECOND Razorpay order for the
- * same intent, so the adapter first looks the order up by `receipt`, which is derived from
- * OUR idempotency key. Refunds do the same against the payment's refund list.
+ * The outbox retries, and Razorpay offers no idempotency key for orders. So the adapter first
+ * looks the order up by `receipt`, which is derived from OUR idempotency key.
+ *
+ * THAT LOOKUP CAN MISS. Observed against the test API: `GET /v1/orders?receipt=` did not see a
+ * freshly created order for several seconds (the list is served from a lagging index; ~10 s in
+ * the smoke run). A retry inside that window mints a second order.
+ *
+ * A DUPLICATE ORDER MOVES NO MONEY. An order is a price tag, not a charge, and the buyer can only
+ * ever open Checkout on the `order_id` stored on the intent — the one this call returned. The
+ * stray order is unreachable and simply goes unpaid. The outbox backoff (≥10 s) also puts real
+ * retries mostly outside the window. Refunds DO move money, which is why a refund retry is
+ * bounded by the refund list AND by Razorpay refusing to refund more than was captured.
  */
 
 /** Razorpay rejects orders below one rupee (100 paise). */
