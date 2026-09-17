@@ -78,6 +78,12 @@ const PROVIDER_ORGANIZATION_ID = "store_demo_org_provider";
 const CHAIR_PRODUCT_ID = "store_demo_product_chair";
 const LAMP_PRODUCT_ID = "store_demo_product_lamp";
 const RUG_PRODUCT_ID = "store_demo_product_rug";
+/**
+ * The one INR listing. Razorpay test accounts refuse USD unless international payments are
+ * enabled, so the Razorpay test-mode adapter needs an order priced in rupees. A separate row
+ * rather than re-pricing a USD fixture, because every smoke script above assumes those are USD.
+ */
+const RAZORPAY_INR_PRODUCT_ID = "store_demo_product_razorpay_dining_chair";
 
 async function ensureDemoUsers(): Promise<Record<DemoUserKey, string>> {
   const userIdByKey = new Map<DemoUserKey, string>();
@@ -282,6 +288,7 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
       // A17: orderable and refundable, so a completed sample mints a credit.
       samplePolicy: "refundable" as const,
       samplePriceInCents: 60_000,
+      currency: "USD",
     },
     {
       id: LAMP_PRODUCT_ID,
@@ -291,6 +298,7 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
       priceInCents: 120_000,
       samplePolicy: "paid" as const,
       samplePriceInCents: 18_000,
+      currency: "USD",
     },
     {
       id: RUG_PRODUCT_ID,
@@ -298,6 +306,18 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
       publicSlug: "guest-room-rug",
       imageFileName: "home_furniture.avif",
       priceInCents: 260_000,
+      samplePolicy: "unavailable" as const,
+      samplePriceInCents: null,
+      currency: "USD",
+    },
+    {
+      id: RAZORPAY_INR_PRODUCT_ID,
+      title: "Dining chair (INR · Razorpay demo)",
+      publicSlug: "dining-chair-inr-razorpay-demo",
+      imageFileName: "dining_chair.avif",
+      // ₹500 in paise. The first tier's minimum of 10 makes the smallest order ₹5,000.
+      priceInCents: 50_000,
+      currency: "INR",
       samplePolicy: "unavailable" as const,
       samplePriceInCents: null,
     },
@@ -316,7 +336,7 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
         category: "home_kitchen",
         categoryId: homeCategoryId,
         priceInCents: demoProduct.priceInCents,
-        currency: "USD",
+        currency: demoProduct.currency,
         stockQuantity: 500,
         status: "active",
         moderationState: "approved",
