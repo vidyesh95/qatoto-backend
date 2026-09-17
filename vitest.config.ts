@@ -4,6 +4,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    /**
+     * `*.bench.ts` is deliberately NOT collected here. The CodSpeed benchmarks are tinybench
+     * suites run by `scripts/run-benchmarks.ts` (`pnpm bench`), not Vitest ones: Vitest 5 moved
+     * `bench` from an exported function to a test fixture and dropped the `vitest/runners` and
+     * `vitest/suite` subpaths that `@codspeed/vitest-plugin` is built on.
+     */
     include: ["src/**/*.test.ts"],
     /**
      * `clearMocks` IS ABSENT ON PURPOSE, and since Vitest 5 that means TRUE.
@@ -94,7 +100,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts", "src/types/**"],
+      exclude: ["src/**/*.test.ts", "src/**/*.bench.ts", "src/types/**"],
     },
   },
   resolve: {

@@ -18,6 +18,7 @@
     }
   },
   "scripts": {
+    "bench": "tsx --conditions=development scripts/run-benchmarks.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -174,6 +175,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@codspeed/tinybench-plugin": "^5.7.1",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/debug": "^4.1.13",
@@ -192,6 +194,7 @@
     "oxlint": "^1.83.0",
     "oxlint-tsgolint": "^0.23.0",
     "supertest": "^7.2.2",
+    "tinybench": "^5.1.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"

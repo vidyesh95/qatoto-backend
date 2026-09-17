@@ -1,0 +1,44 @@
+name: CodSpeed Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # `workflow_dispatch` lets CodSpeed trigger a backtest run, which is how the
+  # first baseline for a new project is generated.
+  workflow_dispatch:
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # required for actions/checkout
+      id-token: write # required for OIDC authentication with CodSpeed
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.8.0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # NOT `pnpm bench`. The CodSpeed runner discovers the V8 flags the
+      # instrument needs (`--allow-natives-syntax`, `--predictable`, ...) by
+      # introspecting the command and re-running it with them applied, which it
+      # can only do when the command IS the node process. Behind `pnpm` -> `tsx`
+      # the flags land on the wrong process, the benchmarks run uninstrumented,
+      # and the job fails on the first task. `pnpm bench` runs the same file and
+      # stays the way to run these locally.
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: node --conditions=development --import tsx scripts/run-benchmarks.ts
