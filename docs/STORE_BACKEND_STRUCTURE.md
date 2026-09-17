@@ -1372,6 +1372,72 @@ Scheduled jobs:
 - **Its postings became rail-aware in Phase 24 (A41).** This phase wrote
   `buyer_clearing → order_held`; Phase 14 froze that pair onto a rail it had retired and did not
   revisit this service, so from Phase 14 until Phase 24 no payment could settle on any live rail.
+- **Razorpay Standard Checkout adapter — TEST MODE ONLY (`0199`).** A third
+  `CommercePaymentProviderAdapter` (`storefront/razorpay-payment-provider.adapter.ts`) on the
+  `direct_processor` rail, selected with `COMMERCE_PAYMENT_PROVIDER=razorpay`. **It does not lift
+  §14.** `resolveCommercePaymentProvider` refuses it in production and refuses any `rzp_live_` key
+  everywhere: without Razorpay Route (seller linked accounts filling `settlement_account_ref` and
+  the application fee) a captured payment settles into Qatoto's own merchant account, which is the
+  custody §14 decided against. Route is the deferred next step.
+
+#### Razorpay flow and frontend contract
+
+1. `POST /commerce/orders/:orderId/payment-intents` (unchanged; `Idempotency-Key` required) → 202.
+2. The outbox worker creates a Razorpay order (`POST /v1/orders`, `receipt` = first 40 hex chars of
+   SHA-256 over the transfer idempotency key, looked up first so a retry never mints a second
+   order). The intent moves to `requires_action` with `providerPaymentRef = order_…`.
+3. The client polls `GET /commerce/payments/:paymentIntentId` until `state === "requires_action"`
+   and `providerPaymentRef` is set, then opens Checkout:
+
+   ```ts
+   // Next.js: <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+   // NEXT_PUBLIC_RAZORPAY_KEY_ID only. The key SECRET never reaches the browser.
+   const checkout = new window.Razorpay({
+     key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+     order_id: paymentIntent.providerPaymentRef,
+     amount: paymentIntent.amountInCents, // paise; informational — the order fixes the amount
+     currency: paymentIntent.currency,
+     handler: (checkoutResult) =>
+       postJson(`/commerce/payments/${paymentIntent.id}/razorpay-verification`, {
+         razorpayOrderId: checkoutResult.razorpay_order_id,
+         razorpayPaymentId: checkoutResult.razorpay_payment_id,
+         razorpaySignature: checkoutResult.razorpay_signature,
+       }),
+     modal: { ondismiss: () => showMessage("Payment cancelled. You can try again.") },
+   });
+   checkout.on("payment.failed", (failure) => showError(failure.error.description));
+   checkout.open();
+   ```
+
+   A dismissed modal or a declined card leaves the intent `requires_action` (the Razorpay order is
+   `created`/`attempted`), so "try again" reopens Checkout with the SAME `order_id`.
+4. `POST /commerce/payments/:paymentIntentId/razorpay-verification` — `requireAuth`, buyer
+   organization, paying role (`owner | administrator | buyer | finance`). No `Idempotency-Key`.
+   Body is `.strict()` camelCase: `razorpayOrderId` (`order_…`), `razorpayPaymentId` (`pay_…`),
+   `razorpaySignature` (64 lowercase hex).
+
+   | Outcome | Status |
+   | --- | --- |
+   | malformed / missing / extra field | 422 |
+   | intent unknown, another org's, or the caller is the counterparty | 404 |
+   | buyer-org member without a paying role | 403 |
+   | not a Razorpay intent, or order id ≠ the intent's `providerPaymentRef` | 409 |
+   | HMAC-SHA256(`order_id|payment_id`, key secret) mismatch — nothing written | 400 |
+   | Razorpay unreachable | 503 |
+   | verified; body `data.state` is `settled`, or still `requires_action` if Razorpay has not marked the order paid | 200 |
+
+   **The signature is necessary, not sufficient.** After it verifies, the server re-fetches the
+   order from Razorpay and settles only on `paid`. The client reads `data.state`, and keeps polling
+   `GET /commerce/payments/:id` on `requires_action`.
+5. Backstops: `POST /webhooks/payments/razorpay` (raw body, `X-Razorpay-Signature` =
+   HMAC-SHA256(raw body, `RAZORPAY_WEBHOOK_SECRET`); 503 when unconfigured) and
+   `reconcileCommercePayments`. Verification, webhook and reconcile all call
+   `confirmProviderPaymentIntent`, whose provider event id is deterministic per transfer and state,
+   so whichever arrives second posts nothing.
+
+**Operator notes.** Enable automatic capture on the Razorpay test account, or orders stay
+`attempted` and never become `paid`. Subscribe the webhook to `order.paid` and `payment.failed`.
+Minimum order is 100 paise.
 
 ### Phase 6 — connector execution
 
