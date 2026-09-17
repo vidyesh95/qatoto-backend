@@ -43,7 +43,15 @@
   "include": ["src/**/*.ts"],
   /* `src/test-support/**` is test-only and must not reach dist/. It lives under src/ so
      the suites can import it through the #src/* map like everything else, and it is
-     excluded here rather than moved because tsconfig.test.json re-includes it. */
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/test-support/**"],
+     excluded here rather than moved because tsconfig.test.json re-includes it. The
+     `*.bench.ts` suites are excluded for the same reason: they are run by `vitest bench`
+     under CodSpeed, never by the server. */
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*.test.ts",
+    "src/**/*.bench.ts",
+    "src/test-support/**"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
