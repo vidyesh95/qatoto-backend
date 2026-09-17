@@ -157,7 +157,11 @@ function isMultipart(route: MountedRoute): boolean {
  * path rather than by prefix so a second webhook route has to be added here deliberately,
  * which is the same posture the multipart imports above take.
  */
-const RAW_BODY_ROUTES: ReadonlySet<string> = new Set(["POST /escrow/:providerId"]);
+const RAW_BODY_ROUTES: ReadonlySet<string> = new Set([
+  "POST /escrow/:providerId",
+  // Razorpay payment events (Store Phase 5): same `/webhooks` raw mount, HMAC over raw bytes.
+  "POST /payments/razorpay",
+]);
 
 function isRawBody(route: MountedRoute): boolean {
   return RAW_BODY_ROUTES.has(`${route.method.toUpperCase()} ${route.path}`);
