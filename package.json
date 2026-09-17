@@ -148,8 +148,8 @@
     "gate": "pnpm check:specifiers && pnpm typecheck && pnpm fmt:check && pnpm lint; pnpm test"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1132.0",
-    "@aws-sdk/s3-request-presigner": "^3.1132.0",
+    "@aws-sdk/client-s3": "^3.1133.0",
+    "@aws-sdk/s3-request-presigner": "^3.1133.0",
     "@better-auth/passkey": "^1.7.5",
     "@node-rs/argon2": "^2.2.1",
     "better-auth": "^1.7.5",
@@ -183,11 +183,11 @@
     "@types/http-errors": "^2.0.5",
     "@types/mdast": "^4.0.4",
     "@types/multer": "^2.2.0",
-    "@types/node": "^25.9.6",
+    "@types/node": "^25.9.7",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^6.0.3",
     "@types/swagger-ui-express": "^4.1.8",
-    "@vitest/coverage-v8": "^5.0.0",
+    "@vitest/coverage-v8": "^5.0.1",
     "drizzle-kit": "^0.31.10",
     "esbuild": "0.28.2",
     "oxfmt": "^0.68.0",
@@ -197,7 +197,7 @@
     "tinybench": "^5.1.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   },
   "engines": {
     "node": ">=24.0.0"
