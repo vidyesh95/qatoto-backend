@@ -1305,7 +1305,11 @@ export const commerceDisputeEventKindEnum = pgEnum("commerce_dispute_event_kind"
  * funding rows, and the fake adapter is fail-closed outside local/test environments.
  * `stripe` is reserved so switching a real processor on is an INSERT, not a migration.
  */
-export const commercePaymentProviderEnum = pgEnum("commerce_payment_provider", ["fake", "stripe"]);
+export const commercePaymentProviderEnum = pgEnum("commerce_payment_provider", [
+  "fake",
+  "stripe",
+  "razorpay",
+]);
 
 /**
  * Payment intent lifecycle (STORE_BACKEND_STRUCTURE.md §4.9):

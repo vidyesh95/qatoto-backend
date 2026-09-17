@@ -9,6 +9,7 @@ import {
   ListRefundsQuerySchema,
   OrderIdParamsSchema,
   PaymentIntentIdParamsSchema,
+  RazorpayCheckoutVerificationBodySchema,
 } from "#src/modules/store/orders/commerce-payments.schemas.js";
 import * as commercePaymentsService from "#src/modules/store/orders/commerce-payments.service.js";
 import type { CommercePaymentsError } from "#src/modules/store/orders/commerce-payments.service.js";
@@ -136,6 +137,13 @@ function mapPaymentsError(res: Response, error: CommercePaymentsError): void {
         status: "error",
         statusCode: 422,
         message: "Invalid cursor.",
+      } satisfies ApiResponse);
+      return;
+    case "SIGNATURE_MISMATCH":
+      res.status(400).json({
+        status: "error",
+        statusCode: 400,
+        message: "Payment signature could not be verified. The payment was not recorded.",
       } satisfies ApiResponse);
       return;
     default: {
@@ -275,6 +283,54 @@ export async function createRefund(req: Request, res: Response): Promise<void> {
     status: "success",
     statusCode: 202,
     message: "Refund accepted for processing.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * POST /commerce/payments/:paymentIntentId/razorpay-verification — the Checkout success
+ * handler's report (Store Phase 5, Razorpay test mode).
+ *
+ * No Idempotency-Key: the service writes only through a provider event id that is
+ * deterministic per transfer and state, so a repeated call posts nothing twice.
+ *
+ * 200 even when the intent is still `requires_action` — the signature was genuine and
+ * Razorpay has simply not marked the order paid yet. The client reads `state`, not the status.
+ */
+export async function verifyRazorpayCheckout(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = PaymentIntentIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = RazorpayCheckoutVerificationBodySchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commercePaymentsService.verifyRazorpayCheckout(
+    actor,
+    params.data.paymentIntentId,
+    body.data,
+    new Date(),
+  );
+  if (!result.success) {
+    mapPaymentsError(res, result.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message:
+      result.value.state === "settled"
+        ? "Payment verified and recorded."
+        : "Payment signature verified; waiting for the provider to confirm capture.",
     data: result.value,
   } satisfies ApiResponse);
 }

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."commerce_payment_provider" ADD VALUE 'razorpay';

@@ -40,3 +40,21 @@ export const CreateRefundBodySchema = z
     reason: z.string().trim().min(1).max(1000).optional(),
   })
   .strict();
+
+/**
+ * What the Razorpay Checkout success handler hands the browser, forwarded verbatim.
+ *
+ * camelCase on the wire like every other body here; the frontend renames Razorpay's
+ * snake_case keys. The formats are pinned so a malformed value is a 422 at the boundary and
+ * never reaches the HMAC comparison.
+ */
+export const RazorpayCheckoutVerificationBodySchema = z
+  .object({
+    razorpayOrderId: z.string().regex(/^order_[A-Za-z0-9]+$/, "Invalid Razorpay order id"),
+    razorpayPaymentId: z.string().regex(/^pay_[A-Za-z0-9]+$/, "Invalid Razorpay payment id"),
+    razorpaySignature: z.string().regex(/^[a-f0-9]{64}$/, "Invalid Razorpay signature"),
+  })
+  .strict();
+export type RazorpayCheckoutVerificationBody = z.infer<
+  typeof RazorpayCheckoutVerificationBodySchema
+>;

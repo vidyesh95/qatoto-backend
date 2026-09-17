@@ -1,4 +1,5 @@
 import { config } from "#src/config/index.js";
+import { RazorpayCommercePaymentProviderAdapter } from "#src/modules/store/storefront/razorpay-payment-provider.adapter.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -13,7 +14,7 @@ import type { Result } from "#src/types/index.js";
  * Do not ship client copy that claims a card was charged or funds are escrowed.
  */
 
-export type CommercePaymentProviderName = "fake" | "stripe";
+export type CommercePaymentProviderName = "fake" | "stripe" | "razorpay";
 
 export type CommercePaymentProviderError =
   | { type: "PROVIDER_UNAVAILABLE"; reason: string }
@@ -191,11 +192,75 @@ export function resolveCommercePaymentProvider(): Result<
     return { success: true, value: new FakeCommercePaymentProviderAdapter() };
   }
 
+  if (configuredProvider === "razorpay") {
+    return resolveRazorpayProvider();
+  }
+
   return {
     success: false,
     error: {
       type: "PROVIDER_UNAVAILABLE",
       reason: `Commerce payment provider "${configuredProvider}" is not implemented yet.`,
     },
+  };
+}
+
+/**
+ * Razorpay is TEST MODE ONLY, and each refusal below is deliberate.
+ *
+ * PRODUCTION: §14 still blocks real processors. Without Razorpay Route a captured payment
+ * lands in Qatoto's own merchant account, which is custody — the thing the store decided
+ * never to take. Lifting this is a policy change, not a config change.
+ *
+ * `rzp_live_` KEYS: refused everywhere, so a live key pasted into a staging `.env` cannot
+ * move real money through a code path that was never approved to.
+ */
+function resolveRazorpayProvider(): Result<
+  CommercePaymentProviderAdapter,
+  CommercePaymentProviderError
+> {
+  if (config.NODE_ENV === "production") {
+    return {
+      success: false,
+      error: {
+        type: "PROVIDER_UNAVAILABLE",
+        reason:
+          "COMMERCE_PAYMENT_PROVIDER=razorpay is refuse-closed in production until §14 is lifted; without Razorpay Route the platform would hold buyer funds.",
+      },
+    };
+  }
+
+  const razorpayKeyId = config.RAZORPAY_KEY_ID;
+  const razorpayKeySecret = config.RAZORPAY_KEY_SECRET;
+  if (razorpayKeyId === undefined || razorpayKeySecret === undefined) {
+    return {
+      success: false,
+      error: {
+        type: "PROVIDER_UNAVAILABLE",
+        reason:
+          "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are required when COMMERCE_PAYMENT_PROVIDER=razorpay.",
+      },
+    };
+  }
+
+  if (!razorpayKeyId.startsWith("rzp_test_")) {
+    return {
+      success: false,
+      error: {
+        type: "PROVIDER_UNAVAILABLE",
+        reason:
+          "Only Razorpay test keys (rzp_test_…) are accepted; live keys are refused until §14 is lifted.",
+      },
+    };
+  }
+
+  return {
+    success: true,
+    value: new RazorpayCommercePaymentProviderAdapter({
+      keyId: razorpayKeyId,
+      keySecret: razorpayKeySecret,
+      apiBaseUrl: config.RAZORPAY_API_BASE_URL,
+      timeoutMs: config.RAZORPAY_TIMEOUT_MS,
+    }),
   };
 }

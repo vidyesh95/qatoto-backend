@@ -30,6 +30,20 @@ router.get(
 );
 
 /**
+ * Razorpay Checkout success handler report (test mode only). Buyer-side like the create:
+ * a counterparty may read the intent but never confirm its payment. No Idempotency-Key —
+ * the settlement write is deduplicated by a deterministic provider event id.
+ */
+router.post(
+  "/payments/:paymentIntentId/razorpay-verification",
+  requireAuth,
+  requireActiveBuyerCommerceOrganization,
+  commercePaymentWriteLimiter,
+  compactBody,
+  commercePaymentsController.verifyRazorpayCheckout,
+);
+
+/**
  * A38. The read half of refunds. Declared before the create so the pair reads as a surface
  * rather than a write with an afterthought — until Phase 21 there was only the write, and a
  * requested refund was invisible to both parties from the moment it was requested.

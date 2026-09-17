@@ -1,16 +1,20 @@
 import type { Request, Response } from "express";
 
+import { config } from "#src/config/index.js";
 import { logger } from "#src/lib/logger.js";
 import {
   loadProviderById,
   resolveWebhookSigningSecret,
 } from "#src/modules/store/fulfillment/commerce-connector.service.js";
 import { applyNormalizedEscrowEvent } from "#src/modules/store/orders/commerce-escrow.service.js";
+import { confirmRazorpayOrderFromWebhook } from "#src/modules/store/orders/commerce-payments.service.js";
 import {
   EmptyObjectSchema,
   ProviderIdParamsSchema,
+  RazorpayWebhookBodySchema,
 } from "#src/modules/store/storefront/commerce-webhooks.schemas.js";
 import { resolveExternalEscrowProvider } from "#src/modules/store/storefront/external-escrow-provider.adapter.js";
+import { verifyRazorpayWebhookSignature } from "#src/modules/store/storefront/razorpay-payment-provider.adapter.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**
@@ -29,7 +33,7 @@ function sendAccepted(res: Response, deduplicated: boolean): void {
   } satisfies ApiResponse);
 }
 
-function sendRejected(res: Response, statusCode: 400 | 401 | 404): void {
+function sendRejected(res: Response, statusCode: 400 | 401 | 404 | 503): void {
   res.status(statusCode).json({
     status: "error",
     statusCode,
@@ -150,4 +154,91 @@ export async function receiveEscrowWebhook(req: Request, res: Response): Promise
   }
 
   sendAccepted(res, applied.value.deduplicated);
+}
+
+/**
+ * POST /webhooks/payments/razorpay (Store Phase 5, test mode).
+ *
+ * THE BODY IS A HINT, NOT A FACT. After the signature verifies, the only thing read from it
+ * is the order id; `confirmRazorpayOrderFromWebhook` re-fetches the order from Razorpay and
+ * settles only what Razorpay reports. That is also the replay defence: Razorpay signs no
+ * timestamp, but replaying `order.paid` cannot settle an order Razorpay does not call paid,
+ * and a genuine replay finds the settlement event already recorded and posts nothing.
+ *
+ * 503 when unconfigured or when Razorpay cannot be reached, so Razorpay redelivers; 202 for
+ * everything we accepted, including events for orders this backend never created.
+ */
+export async function receiveRazorpayPaymentWebhook(req: Request, res: Response): Promise<void> {
+  const parsedQuery = EmptyObjectSchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendRejected(res, 400);
+    return;
+  }
+
+  const razorpayWebhookSecret = config.RAZORPAY_WEBHOOK_SECRET;
+  if (razorpayWebhookSecret === undefined) {
+    logger.error("razorpay webhook arrived but RAZORPAY_WEBHOOK_SECRET is not configured");
+    sendRejected(res, 503);
+    return;
+  }
+
+  if (!Buffer.isBuffer(req.body)) {
+    logger.error("razorpay webhook received a parsed body; the raw-body mount is misconfigured", {
+      bodyType: typeof req.body,
+    });
+    sendRejected(res, 400);
+    return;
+  }
+  const rawBody: Buffer = req.body;
+
+  const signatureVerified = verifyRazorpayWebhookSignature({
+    rawBody,
+    signatureHeader: req.header("x-razorpay-signature"),
+    webhookSecret: razorpayWebhookSecret,
+  });
+  if (!signatureVerified.success) {
+    logger.warn("razorpay webhook rejected", { errorType: signatureVerified.error.type });
+    sendRejected(res, 401);
+    return;
+  }
+
+  let rawPayload: unknown;
+  try {
+    rawPayload = JSON.parse(rawBody.toString("utf8"));
+  } catch {
+    sendRejected(res, 400);
+    return;
+  }
+  const parsedBody = RazorpayWebhookBodySchema.safeParse(rawPayload);
+  if (!parsedBody.success) {
+    sendRejected(res, 400);
+    return;
+  }
+
+  const razorpayOrderId =
+    parsedBody.data.payload.order?.entity.id ?? parsedBody.data.payload.payment?.entity.order_id;
+  if (!razorpayOrderId) {
+    // A payment with no order (e.g. a payment link) is not something this backend created.
+    sendAccepted(res, false);
+    return;
+  }
+
+  const confirmed = await confirmRazorpayOrderFromWebhook(razorpayOrderId, new Date());
+  if (!confirmed.success) {
+    logger.warn("razorpay webhook accepted but not applied", {
+      razorpayEvent: parsedBody.data.event,
+      razorpayOrderId,
+      errorType: confirmed.error.type,
+    });
+    // Razorpay unreachable: ask for redelivery. Anything else is ours and a retry storm would
+    // not fix it — accept the delivery; reconcile retries the confirm on its own schedule.
+    if (confirmed.error.type === "PROVIDER_UNAVAILABLE") {
+      sendRejected(res, 503);
+      return;
+    }
+    sendAccepted(res, false);
+    return;
+  }
+
+  sendAccepted(res, false);
 }

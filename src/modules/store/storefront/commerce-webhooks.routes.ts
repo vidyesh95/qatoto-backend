@@ -29,4 +29,15 @@ router.post(
   commerceWebhooksController.receiveEscrowWebhook,
 );
 
+/**
+ * Razorpay payment events (Store Phase 5, test mode). Same raw-body mount and limiter as the
+ * escrow route; the signature is Razorpay's own scheme (raw body, no timestamp), checked in
+ * the controller because the secret is process config rather than a connector row.
+ */
+router.post(
+  "/payments/razorpay",
+  commerceConnectorWebhookLimiter,
+  commerceWebhooksController.receiveRazorpayPaymentWebhook,
+);
+
 export default router;

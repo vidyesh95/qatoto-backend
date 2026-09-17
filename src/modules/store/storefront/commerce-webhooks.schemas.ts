@@ -19,3 +19,19 @@ export const ProviderIdParamsSchema = z
   .strict();
 
 export const EmptyObjectSchema = z.object({}).strict();
+
+/**
+ * The only part of a Razorpay webhook body this backend reads: which order it concerns.
+ * `order.paid` carries the order entity; `payment.*` events carry the payment, whose
+ * `order_id` names it. Everything else in the body is ignored — the state is re-fetched from
+ * Razorpay, never taken from here. Not `.strict()`: Razorpay adds fields without notice.
+ */
+export const RazorpayWebhookBodySchema = z.object({
+  event: z.string().min(1),
+  payload: z.object({
+    order: z.object({ entity: z.object({ id: z.string() }) }).optional(),
+    payment: z
+      .object({ entity: z.object({ order_id: z.string().nullable().optional() }) })
+      .optional(),
+  }),
+});

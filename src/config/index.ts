@@ -361,8 +361,37 @@ const envSchema = z.object({
    *
    * `fake` is the development/test adapter only — it is refuse-closed in production by
    * `resolveCommercePaymentProvider`. `stripe` is reserved for a future real processor.
+   * `razorpay` is TEST MODE ONLY and is refuse-closed in production too (see below).
    */
-  COMMERCE_PAYMENT_PROVIDER: z.enum(["fake", "stripe"]).default("fake"),
+  COMMERCE_PAYMENT_PROVIDER: z.enum(["fake", "stripe", "razorpay"]).default("fake"),
+  /**
+   * Razorpay Standard Checkout credentials (Store Phase 5, `COMMERCE_PAYMENT_PROVIDER=razorpay`).
+   *
+   * OPTIONAL, like Cloudinary and Gemini: absent keys make the resolver answer
+   * PROVIDER_UNAVAILABLE rather than crashing boot.
+   *
+   * TEST KEYS ONLY, AND NOT IN PRODUCTION. §14 still blocks real processors, and without
+   * Razorpay Route a captured payment settles into QATOTO'S merchant account — custody,
+   * which the store has decided never to take. So the resolver refuses production outright
+   * and refuses an `rzp_live_` key everywhere. The regex admits `live` only so that a
+   * mistakenly pasted live key produces that specific refusal instead of a boot crash.
+   *
+   * The key SECRET never leaves this process. The frontend needs only the key id.
+   */
+  RAZORPAY_KEY_ID: z
+    .string()
+    .regex(/^rzp_(test|live)_[A-Za-z0-9]+$/, "Must be a Razorpay key id (rzp_test_… or rzp_live_…)")
+    .optional(),
+  RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
+  /**
+   * The secret configured on the webhook in the Razorpay dashboard — a DIFFERENT value from
+   * the key secret. Absent means `/webhooks/payments/razorpay` answers 503 and the checkout
+   * verification route plus the scheduled reconcile are the only settlement paths.
+   */
+  RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
+  RAZORPAY_API_BASE_URL: z.url().default("https://api.razorpay.com"),
+  // Bounds a Razorpay call so a hanging request cannot hold a worker slot or an HTTP handler.
+  RAZORPAY_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
 
   /**
    * Qatoto's commission, in basis points of an order's value (Store Phase 14).

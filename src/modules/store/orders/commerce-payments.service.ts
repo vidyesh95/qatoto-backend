@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 
+import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import {
   commerceOrder,
@@ -20,6 +21,7 @@ import {
   type CommerceJournalAccountKind,
   type CommerceJournalKind,
 } from "#src/modules/store/orders/commerce-journal.service.js";
+import type { RazorpayCheckoutVerificationBody } from "#src/modules/store/orders/commerce-payments.schemas.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import {
@@ -34,6 +36,7 @@ import {
   type NormalizedPaymentIntentState,
   type NormalizedRefundState,
 } from "#src/modules/store/storefront/commerce-payment-provider.adapter.js";
+import { verifyRazorpayCheckoutSignature } from "#src/modules/store/storefront/razorpay-payment-provider.adapter.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -53,7 +56,9 @@ export type CommercePaymentsError =
   | { type: "PROVIDER_UNAVAILABLE"; reason: string }
   | { type: "PROVIDER_REJECTED"; reason: string }
   /** A38. The refund list is the first paginated read on this service. */
-  | { type: "INVALID_CURSOR" };
+  | { type: "INVALID_CURSOR" }
+  /** Razorpay Checkout handler signature did not verify. Nothing was written. */
+  | { type: "SIGNATURE_MISMATCH" };
 
 export interface CommercePaymentActorContext {
   readonly organizationId: string;
@@ -1777,6 +1782,271 @@ export async function processCommercePaymentOutboxRow(
 }
 
 /**
+ * Intent states a provider observation may still move. Everything else is terminal, or
+ * already settled, and a late observation must not rewrite it.
+ */
+const CONFIRMABLE_PAYMENT_INTENT_STATES: readonly PaymentIntentRow["state"][] = [
+  "created",
+  "requires_action",
+  "processing",
+  "authorized",
+];
+
+function isConfirmablePaymentIntentState(state: PaymentIntentRow["state"]): boolean {
+  return CONFIRMABLE_PAYMENT_INTENT_STATES.includes(state);
+}
+
+/**
+ * Asks the provider where an intent that is waiting on the BUYER now stands, and applies it.
+ *
+ * WHY THIS EXISTS. The outbox path settles only what the provider reports during the
+ * create call. The fake settles instantly, so that was enough. A checkout provider
+ * (Razorpay) answers `requires_action` there — the buyer has not paid yet — and the outbox row
+ * is then `completed`. Re-enqueueing that row, as the reconciler did, claims `already_done` and
+ * never looks again, so a paid order would have stayed `requires_action` forever.
+ *
+ * THREE CALLERS, ONE APPLY. The checkout verification route, the provider webhook and the
+ * scheduled reconcile all land here. Each re-fetches from the provider — none trusts a client
+ * or a webhook body for the state — and the provider event id is deterministic per transfer
+ * and state, the same shape `submitPaymentIntentToProvider` writes, so whichever caller arrives
+ * second finds the event recorded and posts nothing.
+ *
+ * LOCK ORDER MATCHES `claimPaymentOutboxRow` (transfer → intent → order), so this cannot
+ * deadlock against a concurrent outbox dispatch.
+ */
+export async function confirmProviderPaymentIntent(
+  paymentIntentId: string,
+  now: Date,
+): Promise<Result<PaymentIntentProjection, CommercePaymentsError>> {
+  const providerResolved = resolveCommercePaymentProvider();
+  if (!providerResolved.success) {
+    return { success: false, error: mapProviderResolutionError(providerResolved.error) };
+  }
+  const adapter = providerResolved.value;
+
+  const [intent] = await db
+    .select()
+    .from(commercePaymentIntent)
+    .where(eq(commercePaymentIntent.id, paymentIntentId))
+    .limit(1);
+  if (!intent) return { success: false, error: { type: "NOT_FOUND" } };
+
+  if (intent.provider !== adapter.providerName) {
+    return {
+      success: false,
+      error: {
+        type: "INVALID_STATE",
+        message:
+          "This payment was created with a different payment provider than the one configured.",
+      },
+    };
+  }
+  if (!isConfirmablePaymentIntentState(intent.state)) {
+    return { success: true, value: projectPaymentIntent(intent) };
+  }
+  if (!intent.providerPaymentRef) {
+    return {
+      success: false,
+      error: {
+        type: "INVALID_STATE",
+        message: "This payment has not reached the payment provider yet. Try again shortly.",
+      },
+    };
+  }
+
+  const retrieved = await adapter.retrievePaymentIntent(intent.providerPaymentRef);
+  if (!retrieved.success) {
+    return { success: false, error: mapProviderResolutionError(retrieved.error) };
+  }
+
+  const observedState = mapNormalizedPaymentState(retrieved.value.state);
+  if (observedState === "requires_action" || observedState === "processing") {
+    return { success: true, value: projectPaymentIntent(intent) };
+  }
+
+  const providerPaymentRef = retrieved.value.providerPaymentRef;
+  await db.transaction(async (transaction) => {
+    const [transfer] = await transaction
+      .select()
+      .from(commerceProviderTransfer)
+      .where(
+        and(
+          eq(commerceProviderTransfer.paymentIntentId, intent.id),
+          eq(commerceProviderTransfer.direction, "inbound"),
+        ),
+      )
+      .orderBy(desc(commerceProviderTransfer.createdAt), desc(commerceProviderTransfer.id))
+      .limit(1)
+      .for("update");
+    if (!transfer) {
+      throw new Error(
+        `confirmProviderPaymentIntent: inbound transfer for intent ${intent.id} missing`,
+      );
+    }
+
+    const [lockedIntent] = await transaction
+      .select()
+      .from(commercePaymentIntent)
+      .where(eq(commercePaymentIntent.id, intent.id))
+      .for("update");
+    if (!lockedIntent) {
+      throw new Error(`confirmProviderPaymentIntent: intent ${intent.id} vanished under lock`);
+    }
+    if (!isConfirmablePaymentIntentState(lockedIntent.state)) return;
+
+    const [order] = await transaction
+      .select()
+      .from(commerceOrder)
+      .where(eq(commerceOrder.id, lockedIntent.orderId))
+      .for("update");
+    if (!order) {
+      throw new Error(`confirmProviderPaymentIntent: order ${lockedIntent.orderId} missing`);
+    }
+
+    const webhook = await recordWebhookEvent(transaction, {
+      provider: adapter.providerName,
+      providerEventId: `evt_payment_${observedState}_${transfer.id}`,
+      eventType: `payment_intent.${observedState}`,
+      paymentIntentId: lockedIntent.id,
+      transferId: transfer.id,
+      refundId: null,
+      orderId: order.id,
+      payload: {
+        paymentIntentId: lockedIntent.id,
+        transferId: transfer.id,
+        providerPaymentRef,
+        state: observedState,
+        failureReason: retrieved.value.failureReason,
+      },
+    });
+
+    if (!webhook.deduplicated) {
+      if (observedState === "settled" || observedState === "authorized") {
+        await applyPaymentSettlement(
+          transaction,
+          lockedIntent,
+          transfer,
+          order,
+          providerPaymentRef,
+          now,
+        );
+      } else if (observedState === "failed" || observedState === "cancelled") {
+        await applyPaymentFailure(
+          transaction,
+          lockedIntent,
+          transfer,
+          order,
+          retrieved.value.failureReason ?? observedState,
+          now,
+        );
+      }
+    }
+
+    await markWebhookProcessed(transaction, webhook.eventId, null);
+  });
+
+  const [refreshedIntent] = await db
+    .select()
+    .from(commercePaymentIntent)
+    .where(eq(commercePaymentIntent.id, intent.id))
+    .limit(1);
+  if (!refreshedIntent) return { success: false, error: { type: "NOT_FOUND" } };
+  return { success: true, value: projectPaymentIntent(refreshedIntent) };
+}
+
+/**
+ * The Razorpay Checkout success handler's report, checked and then IGNORED for state.
+ *
+ * Order of checks, each one load-bearing:
+ * 1. The intent is the caller's BUYER organization's, and the caller holds a paying role —
+ *    a counterparty can read an intent but has no business confirming its payment.
+ * 2. The intent is a Razorpay intent and its order id is the one the client names. A valid
+ *    signature for ANOTHER order (the caller's own, cheaper one) must not settle this one.
+ * 3. The signature verifies against the key secret. Mismatch writes nothing.
+ * 4. Only then is Razorpay itself asked, via `confirmProviderPaymentIntent`. The signature
+ *    proves Razorpay issued the payment id; the order fetch proves the money was captured.
+ *
+ * The answer may still be `requires_action` when Razorpay has not yet marked the order paid;
+ * the client keeps polling, and the webhook and reconcile paths finish it regardless.
+ */
+export async function verifyRazorpayCheckout(
+  actor: CommercePaymentActorContext,
+  paymentIntentId: string,
+  input: Readonly<RazorpayCheckoutVerificationBody>,
+  now: Date,
+): Promise<Result<PaymentIntentProjection, CommercePaymentsError>> {
+  const [intent] = await db
+    .select()
+    .from(commercePaymentIntent)
+    .where(eq(commercePaymentIntent.id, paymentIntentId))
+    .limit(1);
+  if (!intent || intent.buyerOrganizationId !== actor.organizationId) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+  if (!BUYER_CREATE_PAYMENT_ROLES.includes(actor.memberRole)) {
+    return { success: false, error: { type: "FORBIDDEN" } };
+  }
+  if (intent.provider !== "razorpay") {
+    return {
+      success: false,
+      error: { type: "INVALID_STATE", message: "This payment is not a Razorpay payment." },
+    };
+  }
+  if (intent.providerPaymentRef !== input.razorpayOrderId) {
+    return {
+      success: false,
+      error: {
+        type: "CONFLICT",
+        message: "The Razorpay order does not belong to this payment.",
+      },
+    };
+  }
+
+  const razorpayKeySecret = config.RAZORPAY_KEY_SECRET;
+  if (razorpayKeySecret === undefined) {
+    return {
+      success: false,
+      error: { type: "PROVIDER_UNAVAILABLE", reason: "RAZORPAY_KEY_SECRET is not configured." },
+    };
+  }
+
+  const signatureVerified = verifyRazorpayCheckoutSignature({
+    razorpayOrderId: input.razorpayOrderId,
+    razorpayPaymentId: input.razorpayPaymentId,
+    razorpaySignature: input.razorpaySignature,
+    keySecret: razorpayKeySecret,
+  });
+  if (!signatureVerified.success) {
+    return { success: false, error: { type: "SIGNATURE_MISMATCH" } };
+  }
+
+  return await confirmProviderPaymentIntent(intent.id, now);
+}
+
+/**
+ * The webhook half: Razorpay says something happened to an order. The body is used only to
+ * FIND the intent; `confirmProviderPaymentIntent` re-fetches the state. An order this backend
+ * does not know is not an error — Razorpay sends every event on the account.
+ */
+export async function confirmRazorpayOrderFromWebhook(
+  razorpayOrderId: string,
+  now: Date,
+): Promise<Result<PaymentIntentProjection | null, CommercePaymentsError>> {
+  const [intent] = await db
+    .select({ id: commercePaymentIntent.id })
+    .from(commercePaymentIntent)
+    .where(
+      and(
+        eq(commercePaymentIntent.provider, "razorpay"),
+        eq(commercePaymentIntent.providerPaymentRef, razorpayOrderId),
+      ),
+    )
+    .limit(1);
+  if (!intent) return { success: true, value: null };
+  return await confirmProviderPaymentIntent(intent.id, now);
+}
+
+/**
  * Reconciles stale outbox rows and re-checks submitted transfers against the adapter.
  */
 export async function reconcileCommercePayments(asOf: Date): Promise<{
@@ -1822,6 +2092,20 @@ export async function reconcileCommercePayments(asOf: Date): Promise<{
         .limit(1);
       if (!intent?.providerPaymentRef && transfer.direction === "inbound") {
         // Still waiting for first provider response; outbox owns that path.
+        continue;
+      }
+
+      /**
+       * Waiting on the buyer (a checkout provider). Its outbox row is already `completed`, so
+       * re-enqueueing it would claim `already_done` and never look again — confirm directly.
+       */
+      if (transfer.direction === "inbound" && intent?.state === "requires_action") {
+        const confirmed = await confirmProviderPaymentIntent(intent.id, asOf);
+        if (!confirmed.success) {
+          console.error(
+            `commerce-payments: reconcile could not confirm intent ${intent.id}: ${confirmed.error.type}`,
+          );
+        }
         continue;
       }
 
