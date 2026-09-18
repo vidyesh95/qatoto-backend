@@ -3247,9 +3247,125 @@ and a lane can be perfectly authored and still report them.
 
 #### What this section does not do
 
-It makes the tables **authorable**, not **filled**. A36's commercial half stays open: forwarders
-sell lane price lists, Qatoto has bought none, and until it does the freight surface answers
-`no_active_rate_card` on every lane no matter how well this sequence is documented.
+It makes the tables **authorable**, not **filled** — *by an operator*. ⚠️ **AND THAT WAS THE WHOLE
+PROBLEM, WHICH THIS SECTION STATED AS A PURCHASE.** "Forwarders sell lane price lists, Qatoto has
+bought none" reads as a budget line and is really an access one: the six routes above are
+`moderate_commerce`, so the only person who may type a forwarder's tariff is staff. §19.12 opens
+that.
+
+---
+
+### 19.12 The cards a provider authors — **NOT BUILT. This section is the design.**
+
+A36's commercial half is answered by **supply-side onboarding, not by a purchase**. An approved
+freight provider authors the lanes it already sells, through provider-scoped twins of §19.10's
+write routes.
+
+**Why this and not the four alternatives.** Buying a forwarder lane list costs money and a licence
+to redistribute the tariff. A carrier or aggregator API (FedEx, EasyPost, Shiprocket) cannot be
+rendered at all — §19.9b put the money inside `providerQuote` beside `providerOrganizationId`
+precisely so a rate with no provider behind it has nowhere to sit, and a rate on **Qatoto's own
+account** would make Qatoto the principal (§0). It also answers parcel air and ground only, which is
+one of the four modes this domain carries. A simulator filling the other three is what §19.6 rules
+out by name. A seller-declared flat rate per listing makes the **seller** the freight principal and
+can express neither a customs leg nor a two-leg journey. The frontend records the same refusal at
+`qatoto-frontend/todo.md` §4.
+
+#### The module
+
+`commerce-provider-freight-rates.{routes,controller,service,schemas}.ts` + `-error-response.ts`,
+mirroring `commerce-freight-rates.*`.
+
+| Route | Notes |
+| --- | --- |
+| `GET /commerce/provider/freight-rate-cards` | Own cards only, keyset-paged; reuses §19.10's list projection |
+| `POST /commerce/provider/freight-rate-cards` | Bands required in the same call (1..20), one transaction |
+| `PATCH /commerce/provider/freight-rate-cards/:rateCardId` | Withdraw / retire only |
+| `POST`/`PATCH .../breaks` | Staged cards only, same `assertCardAcceptsBreakWrites` |
+
+**No customs-dwell twin, and that is not an omission.** `commerce_customs_dwell_estimate` has no
+provider column — it is scoped by destination, origin and commodity, and it is platform-wide. A
+forwarder is not a broker, and a per-provider dwell figure would have nothing to key on. Dwell stays
+`moderate_commerce`.
+
+`requireAuth` + `requireActiveCommerceOrganization` on the route; then two assertions **in the
+service**, where `moderate_commerce` is already checked rather than at route level:
+
+1. the caller's active organization owns the card's `providerOrganizationId`;
+2. that organization holds an **approved** provider profile of kind `freight_forwarder` or
+   `logistics_operator` (`commerce_provider_kind_slug`).
+
+⚠️ **`providerOrganizationId` IS DERIVED FROM THE SESSION AND NEVER READ FROM THE BODY.** A
+submitted one is a forwarder authoring a competitor's tariff, so `.strict()` must **refuse** the
+field rather than ignore it.
+
+Writes take `compactBody` + `idempotency({ scope: "active_organization" })` and a new limiter pair
+through `createLimiter`; the Postgres-backed store already in place covers it, so no new
+infrastructure lands — no Redis, no shared HTTP client, no log-redaction helper, none of which a
+carrier integration could have avoided. Six registration points as usual, `MOUNTED_ROUTERS` in
+`rate-limit-coverage.test.ts` among them.
+
+#### `proposed` stays absent from the state enum
+
+`commerce_freight_rate_card_state` remains `active | superseded | withdrawn`. **The provider is the
+moderated entity; the price is not.** A profile is approved before it may sell anything, and the
+rate is the forwarder's own (§19.9b) — Qatoto reviewing a lane price on merit is an endorsement,
+which is the liability the platform is built to avoid. Spam is answered by provider approval and
+withdrawal.
+
+⚠️ **If that has to change, the enum is the small half.** `rateLaneFromCards` selects on the
+validity **window**, never on `state`, so adding `proposed` without also filtering that read
+publishes every unreviewed card the instant its window opens.
+
+#### The three §19.11 traps become composer-blocking rules
+
+§19.11 documents them for an operator reading a runbook. A provider will not read one, so each
+becomes a refusal:
+
+1. **`validFrom` is REQUIRED and must be future.** The admin controller defaults it to `new Date()`,
+   and an in-force card refuses both `/breaks` routes forever
+   (`409 COMMERCE_FREIGHT_RATE_CARD_IN_FORCE`) with no PATCH able to correct it. The provider create
+   schema makes `validFrom` required and refuses a past value, rather than inheriting the default.
+2. **A band with `minBillableWeightGrams: 0` is required to submit.** Without a floor band the lane
+   publishes no option at all, which reaches the buyer as an empty delivery sheet — indistinguishable
+   from having loaded nothing. §19.11 step 4 as a `422`, not as prose.
+3. **`volumetricDivisorCm3PerKg` is refused when absent, never defaulted.** Bounded 100–20000, which
+   catches a decimal slip and nothing subtler; a road divisor on an air card is inside the bound and
+   underbills every bulky consignment silently. The composer shows ocean W/M 1000, road ~3000, air
+   5000–6000 as guidance and makes the forwarder type one — defaulting is the platform choosing a
+   tariff convention on their behalf, the error §19.4 refuses everywhere else.
+
+The composer also restates §19.11's two quiet numbers: `unitPriceInCents` is **cents per kilogram of
+chargeable weight**, and a flat lane price is `minimumChargeInCents`.
+
+#### The bands arrive pasted, and that changes nothing on this side
+
+A forwarder's tariff is a spreadsheet, and a composer that takes one band at a time would leave the
+lanes as empty as the `moderate_commerce` gate did. The Studio composer therefore accepts a **pasted
+grid** — an Excel copy is TSV on the clipboard — parsed **in the browser** into the same band array
+a hand-typed ladder produces, and posted through the route above **unchanged**.
+
+⚠️ **THERE IS NO INGEST ENDPOINT, NO MULTIPART AND NO BACKEND PARSER, DELIBERATELY.** The three
+refusals above are the authority in both cases: a pasted ladder with no zero-weight floor band is
+refused exactly as a typed one is, and **a missing column is refused rather than defaulted** — a
+defaulting importer is how invented data re-enters a surface built to reject it. Nothing about this
+contract knows or cares how the client filled the array.
+
+⛔ **FORWARDER-CONNECTED CARRIER FEEDS ARE REFUSED**, and not on trust-boundary grounds — rows
+written under the forwarder's own `providerOrganizationId` would satisfy §19.9b perfectly. Three
+other reasons: SMB forwarders are brokers and expose no rate API (their tariff is the spreadsheet,
+which is why pasting wins); holding their carrier credentials would make Qatoto a credential
+custodian and pull in the encrypted secret store, outbound HTTP client, per-carrier adapters and
+redaction discipline this section exists to avoid; and a pulled quote is a point-in-time price while
+a rate card is a tariff with a validity window, so an ingested quote keeps pricing after it expired.
+
+#### What does not change
+
+`shippingInCents` stays literal `0` (§19.6) — rating from a card is not a booking. The buyer
+surface is untouched: `delivery-sheet.tsx` already renders `providerQuote`, `quotableProviders`,
+`partialJourneys`, `unavailableReasons`, `chargeableWeightBasis` and `validUntil`. **This work
+changes who may write, not what is read.** Frontend half:
+`qatoto-frontend/todo.md` §18.
 
 ---
 
@@ -4874,6 +4990,15 @@ forwarder's and the wire shape makes rendering it as the platform's impossible (
 dwell figure recorded, so every lane is currently uncovered. There is no seed, deliberately. Until
 rows are loaded, the sheet's honest render is "ships in 15–25 days · shipping and clearance not yet
 estimated" — exactly what §19.4 designed the `null` window to make expressible.
+
+⚠️ **AND THE COMMERCIAL HALF WAS MIS-DIAGNOSED, SETTLED 2026-09-18 — SEE §19.12.** "No forwarder
+lane list has been purchased" framed an **access** problem as a **budget** one, and it is why a
+phase passed with the tables still empty. The six write routes are `moderate_commerce`, so the only
+party who may type a forwarder's tariff is staff — including the tariff of a forwarder already
+approved and selling on `/store/providers`. **Nothing is being bought.** Provider-scoped twins of
+the §19.10 writes let an approved freight provider author its own lanes, which costs onboarding and
+no money. The carrier-API alternative is refused in the same section, and `shippingInCents` stays
+`0` either way.
 
 *Technical:* **closed.** Chargeable weight shipped in `0109` — every option now prices on
 `max(actual, volumetric)` under the forwarder's own divisor and reports which basis won. Everything
