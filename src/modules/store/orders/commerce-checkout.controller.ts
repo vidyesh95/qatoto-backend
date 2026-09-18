@@ -145,6 +145,29 @@ function mapCheckoutError(res: Response, error: CommerceCheckoutError): void {
         message: "The cart has no lines to check out.",
       } satisfies ApiResponse);
       return;
+    /**
+     * 422 RATHER THAN 409, and the difference is the instruction it carries. `EMPTY_CART` is a
+     * state conflict the buyer fixes by adding something; this is a body naming lines that are not
+     * there, which is a field to correct — the same reading `fieldRefusal` gives everywhere else.
+     *
+     * The response names the products that missed rather than saying "some items", because a
+     * client that scoped to one line needs to know it was THAT line.
+     */
+    case "CHECKOUT_ITEMS_NOT_IN_CART":
+      /*
+       * NOT `satisfies ApiResponse`, because this one carries `errors` and that interface does not
+       * model it — the same plain-object shape `respondValidationFailed` emits. `errors` is what
+       * the client reads as `fieldErrors`, so dropping it to satisfy the type would take the
+       * product ids off the wire.
+       */
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message:
+          "Some items you asked to check out are no longer in your cart. Your cart has not been changed.",
+        errors: { items: [...error.missingProductIds] },
+      });
+      return;
     case "PRODUCT_NOT_PURCHASABLE":
       res.status(409).json({
         status: "error",

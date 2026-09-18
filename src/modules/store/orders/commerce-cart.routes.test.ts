@@ -188,6 +188,83 @@ describe("commerce cart and checkout routes", () => {
     expect(checkoutServiceStubs.prepareCheckout).not.toHaveBeenCalled();
   });
 
+  it("forwards a scoped `items` selection to the service verbatim", async () => {
+    // "Buy now": one line out of a cart that may hold several sellers' lines.
+    checkoutServiceStubs.prepareCheckout.mockResolvedValue({
+      success: true,
+      value: {
+        prepareId: "prepare-1",
+        expiresAt: new Date("2026-01-01T00:00:00.000Z").toISOString(),
+        items: [],
+        currencyTotals: [],
+        deliveryAddressSnapshot: null,
+      },
+    });
+
+    const response = await request(app)
+      .post("/commerce/checkout/prepare")
+      .set("Idempotency-Key", "checkout-prepare-scoped")
+      .send({ items: [{ productId: "product-1", variantId: "variant-1" }] });
+
+    expect(response.status).toBe(201);
+    expect(checkoutServiceStubs.prepareCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
+      { items: [{ productId: "product-1", variantId: "variant-1" }] },
+      "checkout-prepare-scoped",
+    );
+  });
+
+  it("refuses an unknown key inside an items entry", async () => {
+    // The entry schema is `.strict()`, so a client cannot smuggle a quantity or a seller in
+    // alongside the tuple and have it quietly ignored.
+    const response = await request(app)
+      .post("/commerce/checkout/prepare")
+      .set("Idempotency-Key", "checkout-prepare-unknown-item-key")
+      .send({ items: [{ productId: "product-1", quantity: 5 }] });
+
+    expect(response.status).toBe(422);
+    expect(checkoutServiceStubs.prepareCheckout).not.toHaveBeenCalled();
+  });
+
+  it("refuses an empty items array and one past the cap", async () => {
+    // Empty is not "the whole cart" — that is what OMITTING the key means. An empty array is a
+    // client that computed a selection and got nothing, which must not silently buy everything.
+    const empty = await request(app)
+      .post("/commerce/checkout/prepare")
+      .set("Idempotency-Key", "checkout-prepare-empty-items")
+      .send({ items: [] });
+
+    const oversized = await request(app)
+      .post("/commerce/checkout/prepare")
+      .set("Idempotency-Key", "checkout-prepare-oversized-items")
+      .send({
+        items: Array.from({ length: 51 }, (_unused, index) => ({
+          productId: `product-${String(index)}`,
+        })),
+      });
+
+    expect(empty.status).toBe(422);
+    expect(oversized.status).toBe(422);
+    expect(checkoutServiceStubs.prepareCheckout).not.toHaveBeenCalled();
+  });
+
+  it("maps CHECKOUT_ITEMS_NOT_IN_CART to 422 naming the products", async () => {
+    // Distinct from EMPTY_CART's 409: the cart is not empty, the named lines are just not in it,
+    // and the buyer needs to know WHICH ones so they do not go looking at the wrong line.
+    checkoutServiceStubs.prepareCheckout.mockResolvedValue({
+      success: false,
+      error: { type: "CHECKOUT_ITEMS_NOT_IN_CART", missingProductIds: ["product-gone"] },
+    });
+
+    const response = await request(app)
+      .post("/commerce/checkout/prepare")
+      .set("Idempotency-Key", "checkout-prepare-items-missing")
+      .send({ items: [{ productId: "product-gone" }] });
+
+    expect(response.status).toBe(422);
+    expect(JSON.stringify(response.body.errors.items)).toContain("product-gone");
+  });
+
   it("maps PRICE_CHANGED from checkout confirm to 409", async () => {
     checkoutServiceStubs.confirmCheckout.mockResolvedValue({
       success: false,

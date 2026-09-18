@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
@@ -77,6 +77,18 @@ export type CommerceCheckoutError =
   | { type: "FORBIDDEN" }
   | { type: "ORGANIZATION_NOT_ACTIVE" }
   | { type: "EMPTY_CART" }
+  /**
+   * The caller scoped this checkout to lines that are not in their cart.
+   *
+   * DISTINCT FROM `EMPTY_CART`, which means there is nothing to buy at all. This one means the
+   * cart has lines and none of them is what you named — telling a buyer their cart is empty when
+   * it is not sends them to look in the wrong place.
+   *
+   * REFUSED RATHER THAN NARROWED (§0). Checking out the subset that did match would charge the
+   * buyer for a different set of lines than the one they asked for, and they would find out from
+   * the order.
+   */
+  | { type: "CHECKOUT_ITEMS_NOT_IN_CART"; missingProductIds: readonly string[] }
   | { type: "ADDRESS_NOT_OWNED" }
   /**
    * A15. The address is the buyer's own, but it is not for receiving goods. Distinct
@@ -136,10 +148,19 @@ export type CommerceCheckoutError =
   | { type: "VALIDATION_FAILED"; message: string }
   | { type: "CONFLICT"; message: string };
 
+/** One cart line, named by the tuple the cart is unique on. See `PrepareCheckoutSchema`. */
+export interface CheckoutItemSelector {
+  readonly productId: string;
+  readonly variantId?: string;
+  readonly isSample?: boolean;
+}
+
 export interface PrepareCheckoutInput {
   readonly deliveryAddressId?: string;
   /** What the buyer asked for, not what was booked. See `PrepareCheckoutSchema`. */
   readonly requestedFreightMode?: FreightMode;
+  /** Absent means the WHOLE CART. See `PrepareCheckoutSchema` for why this is a tuple. */
+  readonly items?: readonly CheckoutItemSelector[];
 }
 
 export interface ConfirmCheckoutInput {
@@ -871,6 +892,14 @@ export async function prepareCheckout(
         return { success: false, error: { type: "ORGANIZATION_NOT_ACTIVE" } };
       case "empty_cart":
         return { success: false, error: { type: "EMPTY_CART" } };
+      case "items_not_in_cart":
+        return {
+          success: false,
+          error: {
+            type: "CHECKOUT_ITEMS_NOT_IN_CART",
+            missingProductIds: outcome.missingProductIds,
+          },
+        };
       case "address_not_owned":
         return { success: false, error: { type: "ADDRESS_NOT_OWNED" } };
       case "address_wrong_kind":
@@ -991,13 +1020,60 @@ async function lockCartForPreparation(
   if (!organizationCanPrepare) return { status: "org_inactive" as const };
 
   const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
-  const lines = await transaction
+  const allLines = await transaction
     .select()
     .from(commerceCartProductLine)
     .where(eq(commerceCartProductLine.cartId, cart.id))
     .orderBy(asc(commerceCartProductLine.createdAt), asc(commerceCartProductLine.id))
     .for("update");
-  if (lines.length === 0) return { status: "empty_cart" as const };
+  if (allLines.length === 0) return { status: "empty_cart" as const };
+
+  /**
+   * SCOPE THE CHECKOUT, IF THE CALLER ASKED FOR ONE.
+   *
+   * ⚠️ THE LOCK IS TAKEN ON THE WHOLE CART FIRST, AND THAT IS NOT AN OVERSIGHT. Two concurrent
+   * scoped prepares on one cart would otherwise lock disjoint row sets and both succeed, and the
+   * second would supersede the first's prepare (that sweep is cart-wide) while its own rows were
+   * already locked — releasing holds for a prepare that is still being written. Locking the cart
+   * makes the two serialize, which is the behaviour the unscoped path has always had.
+   *
+   * FILTERED IN MEMORY rather than in the `WHERE`, because the rows are already in hand and a
+   * second query would be a second lock ordering to reason about.
+   */
+  const lines =
+    input.items === undefined
+      ? allLines
+      : allLines.filter((line) =>
+          input.items?.some(
+            (selector) =>
+              selector.productId === line.productId &&
+              (selector.variantId ?? null) === line.variantId &&
+              (selector.isSample ?? false) === line.isSample,
+          ),
+        );
+
+  /**
+   * ⚠️ REFUSED, NOT NARROWED. Every selector must have found a line: checking out whichever ones
+   * happened to match would charge the buyer for a different set than they named, and they would
+   * discover it from the order rather than from this request (§0).
+   */
+  if (input.items !== undefined) {
+    const missingProductIds = input.items
+      .filter(
+        (selector) =>
+          !lines.some(
+            (line) =>
+              selector.productId === line.productId &&
+              (selector.variantId ?? null) === line.variantId &&
+              (selector.isSample ?? false) === line.isSample,
+          ),
+      )
+      .map((selector) => selector.productId);
+
+    if (missingProductIds.length > 0) {
+      return { status: "items_not_in_cart" as const, missingProductIds };
+    }
+  }
 
   let deliveryAddressId: string | null = null;
   let deliveryAddressSnapshot: string | null = null;
@@ -1798,9 +1874,40 @@ export async function confirmCheckout(
         .set({ state: "consumed", deliveryAddressId, deliveryAddressSnapshot, updatedAt: now })
         .where(eq(commerceCheckoutPrepare.id, prepare.id));
 
-      await transaction
-        .delete(commerceCartProductLine)
-        .where(eq(commerceCartProductLine.cartId, prepare.cartId));
+      /**
+       * CLEAR ONLY WHAT WAS ACTUALLY BOUGHT.
+       *
+       * ⚠️ THIS USED TO DELETE THE WHOLE CART — `WHERE cartId = prepare.cartId` — which was
+       * harmless only for as long as every prepare covered every line. The moment a prepare can be
+       * SCOPED (`PrepareCheckoutSchema.items`, for "Buy now"), that same statement silently empties
+       * the rest of the buyer's cart: they buy one chair and lose the four lines they were still
+       * deciding on. That is the mirror image of the false statement the scoping exists to avoid.
+       *
+       * MATCHED ON THE PREPARE'S OWN SNAPSHOT TUPLE, not on a stored cart-line id, and the tuple is
+       * exact rather than a guess: `commerce_cart_product_line` is UNIQUE on
+       * `(cartId, productId, coalesce(variantId,''), isSample)`. A `cartLineId` column on the
+       * prepare line would be the wrong fix — that table is deliberately decoupled from the cart,
+       * because re-reading the cart at confirm time would be recomputing a commercial fact from
+       * mutable data (§0).
+       *
+       * The buyer cannot have edited these lines since the prepare, either: any cart write
+       * supersedes every active prepare on the cart, so an edited line means this confirm would
+       * already have been refused.
+       */
+      for (const prepareLine of prepareLines) {
+        await transaction
+          .delete(commerceCartProductLine)
+          .where(
+            and(
+              eq(commerceCartProductLine.cartId, prepare.cartId),
+              eq(commerceCartProductLine.productId, prepareLine.productId),
+              prepareLine.variantId === null
+                ? isNull(commerceCartProductLine.variantId)
+                : eq(commerceCartProductLine.variantId, prepareLine.variantId),
+              eq(commerceCartProductLine.isSample, prepareLine.isSample),
+            ),
+          );
+      }
 
       await appendAuditOrThrow(transaction, {
         organizationId: actor.organizationId,

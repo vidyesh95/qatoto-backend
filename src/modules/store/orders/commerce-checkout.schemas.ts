@@ -39,6 +39,41 @@ export const PrepareCheckoutSchema = z
      * chosen it.
      */
     requestedFreightMode: FreightModeSchema.optional(),
+    /**
+     * WHICH CART LINES THIS CHECKOUT COVERS. Absent means the WHOLE CART, which is what every
+     * caller before this field did, so nothing that omits it changes behaviour.
+     *
+     * It exists for "Buy now": a button that says it is buying one chair must not reserve stock
+     * against every other seller's lines and confirm into three orders. That was the reason the
+     * PDP's Buy-now control sat inert — there was no way to say "just this one".
+     *
+     * ⚠️ A LINE IS NAMED BY ITS NATURAL KEY, NOT BY AN ID, and that is deliberate rather than a
+     * convenience. `commerce_cart_product_line` is UNIQUE on
+     * `(cartId, productId, coalesce(variantId,''), isSample)`, so this tuple names at most one
+     * line — it is exact, not a heuristic. It is also the only vocabulary the client HAS: the cart
+     * projection exposes no line id, and `PUT`/`DELETE /commerce/cart/items/:productId` already
+     * address a line exactly this way.
+     *
+     * ⚠️ EVERY ENTRY MUST MATCH A LINE OR THE PREPARE IS REFUSED. Quietly dropping a selector that
+     * matched nothing would charge the buyer for a different set of lines than the one they named,
+     * which is §0's "never trust a client-supplied identifier" applied to a tuple.
+     *
+     * Capped at 50 for the reason `settlementAgreements` is capped at 20: a selection larger than
+     * a cart anyone assembled is a script, not a checkout.
+     */
+    items: z
+      .array(
+        z
+          .object({
+            productId: z.string().trim().min(1).max(200),
+            variantId: z.string().trim().min(1).max(200).optional(),
+            isSample: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50)
+      .optional(),
   })
   .strict();
 
