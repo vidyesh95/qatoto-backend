@@ -17,6 +17,18 @@ import {
   type PlatformAccessError,
 } from "#src/modules/platform/roles/platform-role.service.js";
 import {
+  assertCardAcceptsBreakWrites,
+  findDuplicatedFloor,
+  insertFreightRateCardSupersedingIncumbent,
+  loadBreaksForCard,
+  projectRateCard,
+  type AdminFreightRateCard,
+  type CreateRateCardOutcome,
+  type FreightRateBreakInput,
+  type FreightRateBreakRow as RateBreakRow,
+  type FreightRateCardRow as RateCardRow,
+} from "#src/modules/store/fulfillment/commerce-freight-rate-card-projection.js";
+import {
   ANY_SCOPE_FILTER,
   type FreightMode,
   type FreightRateCardState,
@@ -100,45 +112,15 @@ export type CommerceFreightRateError =
 // Views
 // ---------------------------------------------------------------------------
 
-export interface AdminFreightRateBreak {
-  readonly id: string;
-  readonly position: number;
-  readonly minBillableWeightGrams: number;
-  readonly minVolumeCubicCm: number;
-  readonly unitPriceInCents: number;
-  readonly minimumChargeInCents: number;
-  readonly transitDaysMin: number;
-  readonly transitDaysMax: number;
-}
-
-export interface AdminFreightRateCard {
-  readonly id: string;
-  readonly providerOrganizationId: string;
-  readonly originCountryCode: string;
-  readonly destinationCountryCode: string;
-  readonly mode: FreightMode;
-  readonly currency: string;
-  readonly validFrom: Date;
-  readonly validUntil: Date | null;
-  readonly sourceForwarderName: string;
-  readonly volumetricDivisorCm3PerKg: number;
-  readonly state: "active" | "superseded" | "withdrawn";
-  readonly supersededByRateCardId: string | null;
-  /**
-   * §19.10. Whether the two `/breaks` routes would succeed against this card RIGHT NOW —
-   * `assertCardAcceptsBreakWrites` evaluated at projection time, not a second opinion about it.
-   *
-   * IT IS ON THE SHARED PROJECTION, so the six writes answer with it too. `validFrom` is
-   * optional on create and the controller defaults it to now, so a card keyed in without an
-   * explicit future `validFrom` is in force the instant it exists and can NEVER accept a band
-   * write. A console deriving this itself would own a copy of the deciding predicate and drift
-   * from the server's across clock skew — enabling a control the very next request refuses.
-   */
-  readonly bandsEditable: boolean;
-  readonly breaks: readonly AdminFreightRateBreak[];
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+/**
+ * The card projection and its band rows now live in `commerce-freight-rate-card-projection.ts`,
+ * shared with §19.12's provider surface. RE-EXPORTED rather than re-declared so this module's
+ * controller, its mapper and its route suite keep importing one name from one place.
+ */
+export type {
+  AdminFreightRateBreak,
+  AdminFreightRateCard,
+} from "#src/modules/store/fulfillment/commerce-freight-rate-card-projection.js";
 
 export interface AdminCustomsDwellEstimate {
   readonly id: string;
@@ -158,14 +140,7 @@ export interface AdminCustomsDwellEstimate {
 // Inputs — Dates, never ISO strings. The controller converts at the boundary.
 // ---------------------------------------------------------------------------
 
-export interface FreightRateBreakInput {
-  readonly minBillableWeightGrams: number;
-  readonly minVolumeCubicCm: number;
-  readonly unitPriceInCents: number;
-  readonly minimumChargeInCents: number;
-  readonly transitDaysMin: number;
-  readonly transitDaysMax: number;
-}
+export type { FreightRateBreakInput } from "#src/modules/store/fulfillment/commerce-freight-rate-card-projection.js";
 
 export interface CreateFreightRateCardInput {
   readonly providerOrganizationId: string;
@@ -230,27 +205,17 @@ export interface CreateCustomsDwellEstimateInput {
 // Projection helpers
 // ---------------------------------------------------------------------------
 
-type RateCardRow = typeof commerceFreightRateCard.$inferSelect;
-type RateBreakRow = typeof commerceFreightRateBreak.$inferSelect;
 type DwellEstimateRow = typeof commerceCustomsDwellEstimate.$inferSelect;
 
 /**
- * The transactional outcomes, named rather than inferred.
+ * The dwell outcome, named rather than inferred.
  *
  * `recordPlatformAction<T>` infers `T` from its `work` callback, and a callback returning a
  * discriminated union defeats that inference — the `describe` argument is checked against a
  * half-formed `T` and the whole call collapses to `unknown`. Declaring the union here and
- * passing it explicitly keeps both halves typed.
+ * passing it explicitly keeps both halves typed. `CreateRateCardOutcome` is the card's twin
+ * and lives in the shared projection module, for the same reason and with the same note.
  */
-type CreateRateCardOutcome =
-  | { readonly kind: "predates"; readonly incumbent: RateCardRow }
-  | {
-      readonly kind: "created";
-      readonly insertedCard: RateCardRow | undefined;
-      readonly insertedBreaks: readonly RateBreakRow[];
-      readonly incumbent: RateCardRow | undefined;
-    };
-
 type CreateDwellEstimateOutcome =
   | { readonly kind: "overlaps"; readonly conflicting: DwellEstimateRow }
   | {
@@ -262,85 +227,6 @@ type CreateDwellEstimateOutcome =
 interface ReplaceBreaksOutcome {
   readonly previousBreakCount: number;
   readonly insertedBreaks: readonly RateBreakRow[];
-}
-
-/**
- * Both break verbs share this gate, and `projectRateCard` reports its verdict as
- * `bandsEditable` — ONE function, so a list can never advertise a control the write refuses.
- *
- * A LIVE CARD'S BANDS ARE FROZEN. Breaks form a ladder, so no insertion is monotone —
- * adding a band below the top reprices weights its neighbours covered, and adding one above
- * the top reprices the weights that band used to catch. There is no safe append to a card
- * that has already quoted somebody. A live card is corrected by POSTing a new one, which
- * supersedes; this path exists so a card STAGED for next Monday can be fixed on Thursday.
- *
- * DECLARED HERE, ABOVE THE PROJECTIONS, rather than beside the two verbs that enforce it:
- * the projection is now its second caller and a function must precede the code that reads it
- * in a file this long.
- */
-function assertCardAcceptsBreakWrites(
-  row: RateCardRow,
-  now: Date,
-): CommerceFreightRateError | null {
-  if (row.state !== "active") {
-    return {
-      type: "COMMERCE_FREIGHT_RATE_CARD_NOT_ACTIVE",
-      rateCardId: row.id,
-      state: row.state,
-    };
-  }
-  if (row.validFrom <= now) {
-    return {
-      type: "COMMERCE_FREIGHT_RATE_CARD_IN_FORCE",
-      rateCardId: row.id,
-      validFrom: row.validFrom,
-    };
-  }
-  return null;
-}
-
-function projectBreak(row: RateBreakRow): AdminFreightRateBreak {
-  return {
-    id: row.id,
-    position: row.position,
-    minBillableWeightGrams: row.minBillableWeightGrams,
-    minVolumeCubicCm: row.minVolumeCubicCm,
-    unitPriceInCents: row.unitPriceInCents,
-    minimumChargeInCents: row.minimumChargeInCents,
-    transitDaysMin: row.transitDaysMin,
-    transitDaysMax: row.transitDaysMax,
-  };
-}
-
-/**
- * `now` IS A PARAMETER, not a `new Date()` taken here. Every caller already minted the
- * instant it made its decision against, and a projection that read the clock a second time
- * could report `bandsEditable: true` on the very card the gate had just refused a millisecond
- * earlier — the exact disagreement this field exists to prevent.
- */
-function projectRateCard(
-  row: RateCardRow,
-  breakRows: readonly RateBreakRow[],
-  now: Date,
-): AdminFreightRateCard {
-  return {
-    id: row.id,
-    providerOrganizationId: row.providerOrganizationId,
-    originCountryCode: row.originCountryCode,
-    destinationCountryCode: row.destinationCountryCode,
-    mode: row.mode,
-    currency: row.currency,
-    validFrom: row.validFrom,
-    validUntil: row.validUntil,
-    sourceForwarderName: row.sourceForwarderName,
-    volumetricDivisorCm3PerKg: row.volumetricDivisorCm3PerKg,
-    state: row.state,
-    supersededByRateCardId: row.supersededByRateCardId,
-    bandsEditable: assertCardAcceptsBreakWrites(row, now) === null,
-    breaks: breakRows.map(projectBreak).toSorted((left, right) => left.position - right.position),
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
 }
 
 function projectDwellEstimate(row: DwellEstimateRow): AdminCustomsDwellEstimate {
@@ -357,33 +243,6 @@ function projectDwellEstimate(row: DwellEstimateRow): AdminCustomsDwellEstimate 
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
-}
-
-/**
- * Two bands sharing a floor make "the highest band this consignment clears" an arbitrary
- * pick, and the database refuses it. Caught HERE so the caller gets a 422 naming the
- * offending floor rather than a caught 23505 with no field.
- */
-function findDuplicatedFloor(
-  breaks: readonly FreightRateBreakInput[],
-): FreightRateBreakInput | null {
-  const seenFloors = new Set<string>();
-  for (const band of breaks) {
-    const floorKey = `${band.minBillableWeightGrams}:${band.minVolumeCubicCm}`;
-    if (seenFloors.has(floorKey)) {
-      return band;
-    }
-    seenFloors.add(floorKey);
-  }
-  return null;
-}
-
-async function loadBreaksForCard(rateCardId: string): Promise<readonly RateBreakRow[]> {
-  return db
-    .select()
-    .from(commerceFreightRateBreak)
-    .where(eq(commerceFreightRateBreak.rateCardId, rateCardId))
-    .orderBy(asc(commerceFreightRateBreak.position));
 }
 
 // ---------------------------------------------------------------------------
@@ -451,97 +310,11 @@ export async function createFreightRateCard(
   const rateCardId = randomUUID();
 
   const outcome = await recordPlatformAction<CreateRateCardOutcome>(
-    async (tx) => {
-      /**
-       * Lock and read the incumbent. `FOR UPDATE` so two concurrent creates on one lane
-       * serialize instead of racing the partial unique index into a 500.
-       */
-      const [incumbent] = await tx
-        .select()
-        .from(commerceFreightRateCard)
-        .where(
-          and(
-            eq(commerceFreightRateCard.providerOrganizationId, input.providerOrganizationId),
-            eq(commerceFreightRateCard.originCountryCode, input.originCountryCode),
-            eq(commerceFreightRateCard.destinationCountryCode, input.destinationCountryCode),
-            eq(commerceFreightRateCard.mode, input.mode),
-            eq(commerceFreightRateCard.currency, input.currency),
-            eq(commerceFreightRateCard.state, "active"),
-          ),
-        )
-        .for("update")
-        .limit(1);
-
-      // A successor may not start before its predecessor did — the predecessor's own
-      // `..._window_ck` would reject the close, as a 500 rather than a 422.
-      if (incumbent && incumbent.validFrom >= input.validFrom) {
-        return { kind: "predates" as const, incumbent };
-      }
-
-      /**
-       * CLOSE THE OUTGOING INTERVAL FIRST. `validUntil` is exclusive, so setting it to the
-       * incoming card's `validFrom` leaves no gap and no overlap — the rating read sees one
-       * continuous coverage. `compensation-agreements.service.ts` is the precedent, and its
-       * note applies verbatim: the partial unique index would otherwise reject this insert,
-       * and the correct resolution is to close the old interval rather than refuse the new
-       * card.
-       *
-       * The incumbent flips to `superseded` IMMEDIATELY even when the successor is
-       * future-dated, which is why the rating read must select on the window plus
-       * `state <> 'withdrawn'` and never on `state = 'active'`.
-       */
-      if (incumbent) {
-        await tx
-          .update(commerceFreightRateCard)
-          .set({
-            state: "superseded",
-            validUntil: input.validFrom,
-            supersededByRateCardId: rateCardId,
-          })
-          .where(
-            and(
-              eq(commerceFreightRateCard.id, incumbent.id),
-              // Re-asserted inside the transaction, for the reason the accept path states:
-              // a concurrent write may have landed between the read and this update.
-              eq(commerceFreightRateCard.state, "active"),
-            ),
-          );
-      }
-
-      const [insertedCard] = await tx
-        .insert(commerceFreightRateCard)
-        .values({
-          id: rateCardId,
-          providerOrganizationId: input.providerOrganizationId,
-          originCountryCode: input.originCountryCode,
-          destinationCountryCode: input.destinationCountryCode,
-          mode: input.mode,
-          currency: input.currency,
-          validFrom: input.validFrom,
-          validUntil: input.validUntil,
-          sourceForwarderName: input.sourceForwarderName,
-          volumetricDivisorCm3PerKg: input.volumetricDivisorCm3PerKg,
-        })
-        .returning();
-
-      const insertedBreaks = await tx
-        .insert(commerceFreightRateBreak)
-        .values(
-          input.breaks.map((band, index) => ({
-            rateCardId,
-            position: index,
-            minBillableWeightGrams: band.minBillableWeightGrams,
-            minVolumeCubicCm: band.minVolumeCubicCm,
-            unitPriceInCents: band.unitPriceInCents,
-            minimumChargeInCents: band.minimumChargeInCents,
-            transitDaysMin: band.transitDaysMin,
-            transitDaysMax: band.transitDaysMax,
-          })),
-        )
-        .returning();
-
-      return { kind: "created" as const, insertedCard, insertedBreaks, incumbent };
-    },
+    async (tx) =>
+      // The lock, the supersession and the dense-position band insert are shared with
+      // §19.12's provider surface — see `commerce-freight-rate-card-projection.ts`. What
+      // stays here is the audit, which is this surface's alone.
+      insertFreightRateCardSupersedingIncumbent(tx, rateCardId, input),
     (value) =>
       value.kind !== "created" || value.insertedCard === undefined
         ? // A decision that did not happen must not be recorded as one.
