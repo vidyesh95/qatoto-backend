@@ -27,6 +27,8 @@ import {
   commerceProductCustomizationOption,
   commerceProductStats,
   commerceProductVariant,
+  commerceFreightRateBreak,
+  commerceFreightRateCard,
   commerceProviderKindLink,
   commerceProviderProfile,
   commerceServiceCoverage,
@@ -578,6 +580,109 @@ async function ensureFreightProvider(): Promise<void> {
     .onConflictDoNothing();
 }
 
+/**
+ * ONE PRICED LANE for the demo forwarder — IN→DE by sea, in USD (§19.12).
+ *
+ * WHY THIS IS SEEDED WHEN §19.1 SAYS THE RATE TABLES SHIP EMPTY. That rule is about
+ * PRODUCTION, where an invented lane price would be a number no forwarder sold — §19.6's
+ * cardinal sin. This is the demo database, where `store_demo_org_provider` is itself invented,
+ * and the alternative is a dev environment in which the entire §19 delivery surface can only
+ * ever answer `no_active_rate_card` and no one can see it work.
+ *
+ * ⚠️ IT IS NOT COVERAGE, AND MUST NOT BE READ AS SUCH. One lane, one mode, one currency. Air,
+ * rail and land answer nothing, every other lane answers nothing, and that is the honest empty
+ * §19.4 designed. Adding a second lane here is a deliberate act, not a formality.
+ *
+ * IDEMPOTENT ON THE NATURAL KEY, NOT ON THE ID, and the difference is load-bearing. The
+ * natural key is `commerce_freight_rate_card_active_uidx`'s — provider, lane, mode, currency,
+ * where `state = 'active'` — so a re-run is a no-op even against a database where this lane's
+ * card was later SUPERSEDED by a different id. Keying on the id alone would insert a second
+ * active card and hit that unique index.
+ *
+ * `validFrom` IS BACKDATED so the lane prices immediately. The rating read selects on the
+ * window, so a future-dated seed would leave the surface looking exactly as broken as no seed
+ * at all until the next day.
+ */
+async function ensureFreightRateCard(): Promise<void> {
+  const inserted = await db
+    .insert(commerceFreightRateCard)
+    .values({
+      id: "store_demo_rate_card_in_de_sea",
+      providerOrganizationId: PROVIDER_ORGANIZATION_ID,
+      originCountryCode: "IN",
+      destinationCountryCode: "DE",
+      mode: "sea",
+      currency: "USD",
+      validFrom: new Date("2026-01-01T00:00:00.000Z"),
+      sourceForwarderName: "Store Demo Freight",
+      // §19.9. Ocean LCL's W/M convention: one cubic metre bills as 1000 kg.
+      volumetricDivisorCm3PerKg: 1000,
+    })
+    .onConflictDoNothing({
+      target: [
+        commerceFreightRateCard.providerOrganizationId,
+        commerceFreightRateCard.originCountryCode,
+        commerceFreightRateCard.destinationCountryCode,
+        commerceFreightRateCard.mode,
+        commerceFreightRateCard.currency,
+      ],
+      // The index is PARTIAL, so its predicate must be restated for the arbiter to match it.
+      where: eq(commerceFreightRateCard.state, "active"),
+    })
+    .returning({ id: commerceFreightRateCard.id });
+
+  // Nothing inserted means this lane already has an active card — seeded before, or authored
+  // since. Its ladder is not ours to rewrite.
+  const rateCardId = inserted[0]?.id;
+  if (rateCardId === undefined) return;
+
+  /**
+   * THE FIRST BAND STARTS AT 0 g, and that is the whole difference between a lane that prices
+   * and a lane that looks unloaded (§19.11 step 4). Without it every consignment under 30 kg
+   * rates `below_smallest_break` and the delivery sheet renders empty.
+   *
+   * `unitPriceInCents` is CENTS PER KILOGRAM of chargeable weight — not per consignment.
+   */
+  await db
+    .insert(commerceFreightRateBreak)
+    .values([
+      {
+        id: "store_demo_rate_break_in_de_sea_0",
+        rateCardId,
+        position: 0,
+        minBillableWeightGrams: 0,
+        minVolumeCubicCm: 0,
+        unitPriceInCents: 450,
+        minimumChargeInCents: 15_000,
+        transitDaysMin: 24,
+        transitDaysMax: 34,
+      },
+      {
+        id: "store_demo_rate_break_in_de_sea_1",
+        rateCardId,
+        position: 1,
+        minBillableWeightGrams: 30_000,
+        minVolumeCubicCm: 0,
+        unitPriceInCents: 400,
+        minimumChargeInCents: 15_000,
+        transitDaysMin: 24,
+        transitDaysMax: 34,
+      },
+      {
+        id: "store_demo_rate_break_in_de_sea_2",
+        rateCardId,
+        position: 2,
+        minBillableWeightGrams: 60_000,
+        minVolumeCubicCm: 0,
+        unitPriceInCents: 360,
+        minimumChargeInCents: 15_000,
+        transitDaysMin: 24,
+        transitDaysMax: 34,
+      },
+    ])
+    .onConflictDoNothing();
+}
+
 /** Merchandising, so `GET /store/home` returns something other than empty arrays. */
 async function ensureMerchandising(): Promise<void> {
   await db
@@ -709,6 +814,7 @@ async function main(): Promise<void> {
   await ensureBuyerDeliveryAddress(userIdByKey.buyer);
   await ensureProducts(userIdByKey.seller);
   await ensureFreightProvider();
+  await ensureFreightRateCard();
   await ensureMerchandising();
 
   /**
