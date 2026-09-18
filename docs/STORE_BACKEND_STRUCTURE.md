@@ -3255,7 +3255,7 @@ that.
 
 ---
 
-### 19.12 The cards a provider authors — **NOT BUILT. This section is the design.**
+### 19.12 The cards a provider authors — **SHIPPED (`0200`, audit labels only)**
 
 A36's commercial half is answered by **supply-side onboarding, not by a purchase**. An approved
 freight provider authors the lanes it already sells, through provider-scoped twins of §19.10's
@@ -3276,6 +3276,22 @@ can express neither a customs leg nor a two-leg journey. The frontend records th
 `commerce-provider-freight-rates.{routes,controller,service,schemas}.ts` + `-error-response.ts`,
 mirroring `commerce-freight-rates.*`.
 
+**Plus one file this section did not foresee: `commerce-freight-rate-card-projection.ts`.** §19.10
+settled that both directions of the exchange keep ONE projection and that `bandsEditable` must be
+"the same function the `409` comes from, not a second opinion about it". Those helpers were private
+to the staff service, so honouring that rule across two surfaces meant moving them rather than
+copying them: the projection and its band rows, `assertCardAcceptsBreakWrites`, `findDuplicatedFloor`,
+`loadBreaksForCard`, and `insertFreightRateCardSupersedingIncumbent` — the lock-then-close
+supersession transaction, which is the part neither surface may get subtly different. It carries no
+capability, ownership or audit concern, because those are exactly what differs between the callers;
+a helper taking a flag for which caller it served is how one surface ends up running the other's
+checks. The staff service re-exports the two projection types, so its controller, its mapper and its
+route suite were untouched.
+
+`assertCardAcceptsBreakWrites` now returns the narrower `FreightRateCardBandWriteRefusal`, whose two
+members both error unions include verbatim, so each service returns it unwrapped and still switches
+exhaustively over its own union.
+
 | Route | Notes |
 | --- | --- |
 | `GET /commerce/provider/freight-rate-cards` | Own cards only, keyset-paged; reuses §19.10's list projection |
@@ -3288,22 +3304,82 @@ provider column — it is scoped by destination, origin and commodity, and it is
 forwarder is not a broker, and a per-provider dwell figure would have nothing to key on. Dwell stays
 `moderate_commerce`.
 
-`requireAuth` + `requireActiveCommerceOrganization` on the route; then two assertions **in the
-service**, where `moderate_commerce` is already checked rather than at route level:
+`requireAuth` + **`requireActiveProviderCommerceOrganization`** on the route — this section
+originally specified the plain `requireActiveCommerceOrganization`, and the provider variant is what
+shipped: it is the guard `GET /commerce/provider/rfqs` and `/provider/quotes` already carry, it
+narrows to `PROVIDER_MEMBER_ROLES`, and it leaks nothing the `/provider/` path segment does not
+already state. It is the MEMBERSHIP half only. Then two assertions **in the service**, where
+`moderate_commerce` is already checked rather than at route level:
 
 1. the caller's active organization owns the card's `providerOrganizationId`;
 2. that organization holds an **approved** provider profile of kind `freight_forwarder` or
    `logistics_operator` (`commerce_provider_kind_slug`).
 
+**"Approved" resolved to `verification_state = 'verified'` on the KIND LINK**, which is the
+predicate `providerMayQuoteRfq` already uses to decide who may bid — deliberately **not** the public
+directory's laxer `NOT IN ('rejected','suspended')`, under which an `unverified` self-registered org
+still appears in a listing. Appearing in a directory is a weaker claim than publishing a price a
+buyer will act on, and this whole design rests on the provider being the moderated entity: if
+approval did not mean approval, nothing would be moderating the price either. Verification is
+recorded per kind, so an org verified as a warehouse provider has not been verified to sell sea
+freight.
+
+⚠️ **A CARD BELONGING TO ANOTHER ORGANIZATION ANSWERS `404`, NOT `403`** — byte-identical to a
+garbage id. §19.10's mapper can afford a truthful 404 because its callers are staff and may see
+everything; here a 403 would confirm the card exists, which turns this surface into an id oracle for
+a rival's lane portfolio. The service predicates the lookup on ownership rather than comparing after
+the load, so there is no branch to forget.
+
 ⚠️ **`providerOrganizationId` IS DERIVED FROM THE SESSION AND NEVER READ FROM THE BODY.** A
 submitted one is a forwarder authoring a competitor's tariff, so `.strict()` must **refuse** the
-field rather than ignore it.
+field rather than ignore it. A `.strict()` rejection is an object-level parse issue, so the refusal
+names the key under the reserved `errors.form` rather than under a field key — the shape
+`project-error-response.ts` reserves for exactly this.
 
-Writes take `compactBody` + `idempotency({ scope: "active_organization" })` and a new limiter pair
-through `createLimiter`; the Postgres-backed store already in place covers it, so no new
+⚠️ **`sourceForwarderName` IS DERIVED TOO, AND THAT WAS NOT IN THE ORIGINAL DESIGN.** The column is
+`NOT NULL` and the staff schema takes it from the body, but it is the provenance §19.6 puts on the
+wire beside the price: a free-text one would let a forwarder publish a rate under a carrier's or a
+rival's name. The service writes the caller's own organization `displayName`, and the field is
+refused in a body on the same footing as `providerOrganizationId`.
+
+Writes take `compactBody` + `idempotency({ required: true, scope: "active_organization" })` and a new
+limiter pair through `createLimiter`; the Postgres-backed store already in place covers it, so no new
 infrastructure lands — no Redis, no shared HTTP client, no log-redaction helper, none of which a
 carrier integration could have avoided. Six registration points as usual, `MOUNTED_ROUTERS` in
 `rate-limit-coverage.test.ts` among them.
+
+The scope is `active_organization` where §19.10's is `user`, and that is the mirror of its reason: a
+moderator acts for the platform and may belong to no commerce organization at all, while a provider
+always acts as one — so two operators at the same forwarder retrying one submission must collide
+rather than publish the lane twice. The limiter pair is separate from the staff pair for a reason
+worth stating: the staff buckets are keyed per user across a handful of moderators, these across
+every forwarder on the platform, and sharing them would let one provider keying in a quarter's lanes
+spend the allowance a moderator then needs to correct a live price.
+
+#### Where the writes are audited, which this section left open
+
+**`commerce_organization_audit_entry`, under five new labels (`0200`) — not the platform hash chain.**
+The staff routes append to `platform_audit_entry`, which already carries a
+`commerce_freight_rate_card_created`, and reusing it would have cost no migration at all. It is still
+wrong: that chain snapshots an accountable **platform role**, files the row beside moderation
+decisions, and serializes every append on one global head lock. A forwarder pricing its own lane is
+neither moderating nor staff, and its ordinary business writing does not belong in the record built
+to hold the platform's decisions **about** it. The organization's own trail is where a supplier's
+acts already go, and it is the one its members can be shown.
+
+The labels are unprefixed (`freight_rate_card_created`, `…_window_shortened`, `…_withdrawn`,
+`freight_rate_break_added`, `freight_rate_breaks_replaced`), matching every other label in that enum:
+the table is already scoped to an organization, so `freight_` names the subject and `commerce_` would
+only restate the schema. The platform enum prefixes because its rows span every domain.
+
+⚠️ **THE LABELS ARE PERMANENT.** `commerce_organization_audit_entry` is append-only, so an in-use
+`event_kind` can never be renamed.
+
+⚠️ **EVERY NUMBER IN AN AUDIT PAYLOAD IS A STRING.** `CommerceAuditSafeValue` is
+`string | boolean | null` plus arrays and objects of the same — it has **no number arm** — so
+`breakCount`, the divisor and every position go through `String(…)`. A numeric value is a compile
+error rather than a runtime surprise, and the payload's KEY names must additionally clear the
+service's secret-bearing-name regex before any write.
 
 #### `proposed` stays absent from the state enum
 
@@ -3366,6 +3442,20 @@ surface is untouched: `delivery-sheet.tsx` already renders `providerQuote`, `quo
 `partialJourneys`, `unavailableReasons`, `chargeableWeightBasis` and `validUntil`. **This work
 changes who may write, not what is read.** Frontend half:
 `qatoto-frontend/todo.md` §18.
+
+#### What is still open, and it is not technical
+
+**The tables are still empty, and this section does not fill them — it makes filling them
+possible without staff.** The gate is now a `verified` kind link of `freight_forwarder` or
+`logistics_operator`, so the first lane arrives when the first forwarder holding one publishes it.
+⚠️ **UNTIL ONE EXISTS, EVERY CALL TO THESE ROUTES IS A CORRECT `403` AND NOT A BUG** — and every
+lane still answers `no_active_rate_card`, which is §19.4's honest blank rather than a defect. The
+remaining work is onboarding and verifying a forwarder, which is a business act, not a migration.
+
+**No service-level suite**, matching §19.10's position: the route suite stubs the service wholesale
+and proves the boundary — which query shapes get through, what the parsed object looks like, which
+refusal maps to which status. The keyset, the supersession, the ownership predicate and the audit
+append are exercised only against a real database.
 
 ---
 
@@ -4991,14 +5081,20 @@ dwell figure recorded, so every lane is currently uncovered. There is no seed, d
 rows are loaded, the sheet's honest render is "ships in 15–25 days · shipping and clearance not yet
 estimated" — exactly what §19.4 designed the `null` window to make expressible.
 
-⚠️ **AND THE COMMERCIAL HALF WAS MIS-DIAGNOSED, SETTLED 2026-09-18 — SEE §19.12.** "No forwarder
-lane list has been purchased" framed an **access** problem as a **budget** one, and it is why a
-phase passed with the tables still empty. The six write routes are `moderate_commerce`, so the only
-party who may type a forwarder's tariff is staff — including the tariff of a forwarder already
-approved and selling on `/store/providers`. **Nothing is being bought.** Provider-scoped twins of
-the §19.10 writes let an approved freight provider author its own lanes, which costs onboarding and
-no money. The carrier-API alternative is refused in the same section, and `shippingInCents` stays
-`0` either way.
+⚠️ **AND THE COMMERCIAL HALF WAS MIS-DIAGNOSED, SETTLED 2026-09-18 — SEE §19.12. THE ROUTES ARE NOW
+SHIPPED.** "No forwarder lane list has been purchased" framed an **access** problem as a **budget**
+one, and it is why a phase passed with the tables still empty. The six write routes are
+`moderate_commerce`, so the only party who may type a forwarder's tariff was staff — including the
+tariff of a forwarder already approved and selling on `/store/providers`. **Nothing was bought.**
+Provider-scoped twins of the §19.10 writes now let an approved freight provider author its own lanes,
+which costs onboarding and no money. The carrier-API alternative is refused in the same section, and
+`shippingInCents` stays `0` either way.
+
+**So this entry's "still open" is no longer a backend gap.** The tables remain empty, but the blocker
+is now a business act rather than a missing surface: a forwarder must hold a `verified`
+`freight_forwarder` or `logistics_operator` kind link before it may publish, and none may exist yet.
+Until one does, these routes answer `403` and every lane keeps answering `no_active_rate_card` —
+which is §19.4's designed blank, not a defect.
 
 *Technical:* **closed.** Chargeable weight shipped in `0109` — every option now prices on
 `max(actual, volumetric)` under the forwarder's own divisor and reports which basis won. Everything
