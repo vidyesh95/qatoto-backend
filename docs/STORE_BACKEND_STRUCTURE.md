@@ -665,6 +665,51 @@ partially_completed | completed | cancelled | disputed`
 - product line has ordered, reserved, fulfilled, cancelled, and refunded quantities
 - service line points to a separately stateful connector engagement
 
+#### A checkout may cover PART of the cart — **SHIPPED, no migration**
+
+`POST /commerce/checkout/prepare` takes an optional `items`. **Absent means the whole cart**, which
+is what every caller did before it existed, so the cart page is untouched.
+
+It exists because the PDP's "Buy now" control could not be built. Checkout prepared the ENTIRE cart
+— reserving stock against every other seller's lines and confirming into one order per counterparty
+— so a button saying it bought one chair was a false statement about what the buyer had committed
+to. The control sat rendered but inert for exactly that reason.
+
+**A LINE IS NAMED BY ITS NATURAL KEY, NOT AN ID**, and that is forced rather than chosen: the cart
+projection exposes no line id, so a client has nothing else to send. It is exact all the same —
+`commerce_cart_product_line` is UNIQUE on `(cartId, productId, coalesce(variantId,''), isSample)`,
+so the tuple names at most one line — and it is the vocabulary `PUT` and
+`DELETE /commerce/cart/items/:productId` already use.
+
+⚠️ **EVERY SELECTOR MUST MATCH A LINE OR THE PREPARE IS REFUSED** with
+`CHECKOUT_ITEMS_NOT_IN_CART` (`422`, naming the products). Checking out the subset that happened to
+match would charge the buyer for a different set than the one they named, and they would learn it
+from the order. Deliberately distinct from `EMPTY_CART`'s `409`: the cart is not empty, and telling
+a buyer it is sends them to look in the wrong place.
+
+⚠️ **THE WHOLE CART IS STILL LOCKED `FOR UPDATE` BEFORE FILTERING.** Two concurrent scoped prepares
+would otherwise lock disjoint row sets and both succeed — and the second would supersede the first,
+since that sweep is cart-wide, releasing holds for a prepare still being written.
+
+##### The bug it exposed, fixed in the same change
+
+`confirmCheckout` deleted **every** line of the cart — `WHERE cart_id = prepare.cart_id`. Harmless
+only for as long as every prepare covered every line, and silent data loss the moment one did not:
+buy one chair, lose the four lines you were still deciding on. It now deletes only the lines the
+prepare covered, matched on the prepare's **own snapshot tuple**.
+
+**No `cartLineId` column was added**, and that is the point: the prepare line table is deliberately
+decoupled from the cart, because re-reading the cart at confirm time would recompute a commercial
+fact from mutable data (§0). The snapshot tuple is the right key precisely because it does not
+depend on the cart row still existing.
+
+The buyer cannot have edited those lines in between either — any cart write supersedes every active
+prepare on the cart, so an edited line means the confirm would already have been refused.
+
+**Verified by `pnpm db:smoke-scoped-checkout`**, which is where it has to be: the route suite stubs
+the checkout service wholesale, so the cart-clearing predicate and the reservation lifecycle exist
+only against a real database. It buys one of two sellers' lines and asserts the other survives.
+
 ### 4.9 Payments and journal
 
 Commerce does not post into project-funding rows. It introduces:
@@ -892,7 +937,7 @@ RFQ, validates expiry and authority, then creates order snapshots atomically.
 | GET    | `/commerce/cart`                            | Active organization cart with server-priced projection    |
 | PUT    | `/commerce/cart/items/:productId`           | Set desired quantity                                      |
 | DELETE | `/commerce/cart/items/:productId`           | Remove line                                               |
-| POST   | `/commerce/checkout/prepare`                | Validate cart, reserve stock, return authoritative totals |
+| POST   | `/commerce/checkout/prepare`                | Validate cart, reserve stock, return authoritative totals. Optional `items` scopes it to named lines (§4.8) |
 | POST   | `/commerce/checkout/confirm`                | Create checkout group and counterparty orders             |
 | GET    | `/commerce/orders`                          | Buyer orders, cursor paginated                            |
 | GET    | `/commerce/orders/:orderId`                 | Authorized order detail                                   |
