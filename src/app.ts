@@ -65,8 +65,8 @@ import communityCofounderRouter from "#src/modules/store/community/community-cof
 import communityForumRouter from "#src/modules/store/community/community-forum.routes.js";
 import commerceDocumentsRouter from "#src/modules/store/fulfillment/commerce-documents.routes.js";
 import commerceFreightRatesRouter from "#src/modules/store/fulfillment/commerce-freight-rates.routes.js";
-import commerceProviderFreightRatesRouter from "#src/modules/store/fulfillment/commerce-provider-freight-rates.routes.js";
 import commerceFulfillmentRouter from "#src/modules/store/fulfillment/commerce-fulfillment.routes.js";
+import commerceProviderFreightRatesRouter from "#src/modules/store/fulfillment/commerce-provider-freight-rates.routes.js";
 import commerceCartRouter from "#src/modules/store/orders/commerce-cart.routes.js";
 import commerceOrdersRouter from "#src/modules/store/orders/commerce-orders.routes.js";
 import commercePaymentsRouter from "#src/modules/store/orders/commerce-payments.routes.js";

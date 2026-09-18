@@ -211,10 +211,7 @@ export async function appendProviderFreightRateBreak(req: Request, res: Response
   } satisfies ApiResponse);
 }
 
-export async function replaceProviderFreightRateBreaks(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function replaceProviderFreightRateBreaks(req: Request, res: Response): Promise<void> {
   const actor = requireProviderFreightActor(req, res);
   if (!actor) return;
 
@@ -232,12 +229,11 @@ export async function replaceProviderFreightRateBreaks(
     return;
   }
 
-  const replaceResult =
-    await commerceProviderFreightRatesService.replaceProviderFreightRateBreaks(
-      actor,
-      params.data.rateCardId,
-      body.data,
-    );
+  const replaceResult = await commerceProviderFreightRatesService.replaceProviderFreightRateBreaks(
+    actor,
+    params.data.rateCardId,
+    body.data,
+  );
   if (!replaceResult.success) {
     respondCommerceProviderFreightRateError(res, replaceResult.error);
     return;

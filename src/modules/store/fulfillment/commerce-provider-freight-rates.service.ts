@@ -11,10 +11,6 @@ import {
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
-  appendCommerceOrganizationAuditEntry,
-  type CommerceOrganizationAuditAppendInput,
-} from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import {
   assertCardAcceptsBreakWrites,
   findDuplicatedFloor,
   insertFreightRateCardSupersedingIncumbent,
@@ -31,6 +27,10 @@ import type {
   FreightMode,
   FreightRateCardState,
 } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
+import {
+  appendCommerceOrganizationAuditEntry,
+  type CommerceOrganizationAuditAppendInput,
+} from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
@@ -313,7 +313,10 @@ export async function createProviderFreightRateCard(
   if (input.validFrom <= now) {
     return {
       success: false,
-      error: { type: "COMMERCE_FREIGHT_RATE_CARD_VALID_FROM_NOT_FUTURE", validFrom: input.validFrom },
+      error: {
+        type: "COMMERCE_FREIGHT_RATE_CARD_VALID_FROM_NOT_FUTURE",
+        validFrom: input.validFrom,
+      },
     };
   }
 
@@ -568,67 +571,69 @@ export async function appendProviderFreightRateBreak(
     return { success: false, error: refusal };
   }
 
-  const insertedRows = await db.transaction(async (tx) => {
-    /**
-     * The next position, taken under `FOR UPDATE` so two concurrent appends cannot both read
-     * the same highest band and race `commerce_freight_rate_break_position_uidx` into a 500.
-     */
-    const [highest] = await tx
-      .select({ position: commerceFreightRateBreak.position })
-      .from(commerceFreightRateBreak)
-      .where(eq(commerceFreightRateBreak.rateCardId, rateCardId))
-      .orderBy(desc(commerceFreightRateBreak.position))
-      .for("update")
-      .limit(1);
+  const insertedRows = await db
+    .transaction(async (tx) => {
+      /**
+       * The next position, taken under `FOR UPDATE` so two concurrent appends cannot both read
+       * the same highest band and race `commerce_freight_rate_break_position_uidx` into a 500.
+       */
+      const [highest] = await tx
+        .select({ position: commerceFreightRateBreak.position })
+        .from(commerceFreightRateBreak)
+        .where(eq(commerceFreightRateBreak.rateCardId, rateCardId))
+        .orderBy(desc(commerceFreightRateBreak.position))
+        .for("update")
+        .limit(1);
 
-    const nextPosition = highest === undefined ? 0 : highest.position + 1;
+      const nextPosition = highest === undefined ? 0 : highest.position + 1;
 
-    const [insertedBreak] = await tx
-      .insert(commerceFreightRateBreak)
-      .values({
-        rateCardId,
-        position: nextPosition,
-        minBillableWeightGrams: input.minBillableWeightGrams,
-        minVolumeCubicCm: input.minVolumeCubicCm,
-        unitPriceInCents: input.unitPriceInCents,
-        minimumChargeInCents: input.minimumChargeInCents,
-        transitDaysMin: input.transitDaysMin,
-        transitDaysMax: input.transitDaysMax,
-      })
-      .returning();
+      const [insertedBreak] = await tx
+        .insert(commerceFreightRateBreak)
+        .values({
+          rateCardId,
+          position: nextPosition,
+          minBillableWeightGrams: input.minBillableWeightGrams,
+          minVolumeCubicCm: input.minVolumeCubicCm,
+          unitPriceInCents: input.unitPriceInCents,
+          minimumChargeInCents: input.minimumChargeInCents,
+          transitDaysMin: input.transitDaysMin,
+          transitDaysMax: input.transitDaysMax,
+        })
+        .returning();
 
-    if (!insertedBreak) {
-      throw new Error("appendProviderFreightRateBreak: insert returned no row");
-    }
+      if (!insertedBreak) {
+        throw new Error("appendProviderFreightRateBreak: insert returned no row");
+      }
 
-    await appendAuditOrThrow(tx, {
-      organizationId: actor.organizationId,
-      eventKind: "freight_rate_break_added",
-      actorUserId: actor.userId,
-      actorMemberRoleSnapshot: actor.memberRole,
-      targetEntityType: "commerce_freight_rate_card",
-      targetEntityId: rateCardId,
-      payload: {
-        lane: laneTargetLabel(existing),
-        position: String(nextPosition),
-        minBillableWeightGrams: String(input.minBillableWeightGrams),
-        minVolumeCubicCm: String(input.minVolumeCubicCm),
-      },
-      occurredAt: new Date(),
+      await appendAuditOrThrow(tx, {
+        organizationId: actor.organizationId,
+        eventKind: "freight_rate_break_added",
+        actorUserId: actor.userId,
+        actorMemberRoleSnapshot: actor.memberRole,
+        targetEntityType: "commerce_freight_rate_card",
+        targetEntityId: rateCardId,
+        payload: {
+          lane: laneTargetLabel(existing),
+          position: String(nextPosition),
+          minBillableWeightGrams: String(input.minBillableWeightGrams),
+          minVolumeCubicCm: String(input.minVolumeCubicCm),
+        },
+        occurredAt: new Date(),
+      });
+
+      return insertedBreak;
+    })
+    .catch((error: unknown) => {
+      /**
+       * ONE appended band can collide with a floor already on the card, which the in-memory
+       * pre-check cannot see — the other bands are in the table, not in the body. Caught so the
+       * author gets a 422 naming the floor rather than a bare 23505.
+       */
+      if (isUniqueViolation(error)) {
+        return undefined;
+      }
+      throw error;
     });
-
-    return insertedBreak;
-  }).catch((error: unknown) => {
-    /**
-     * ONE appended band can collide with a floor already on the card, which the in-memory
-     * pre-check cannot see — the other bands are in the table, not in the body. Caught so the
-     * author gets a 422 naming the floor rather than a bare 23505.
-     */
-    if (isUniqueViolation(error)) {
-      return undefined;
-    }
-    throw error;
-  });
 
   if (!insertedRows) {
     return {

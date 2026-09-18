@@ -26,7 +26,6 @@ import {
   type CreateRateCardOutcome,
   type FreightRateBreakInput,
   type FreightRateBreakRow as RateBreakRow,
-  type FreightRateCardRow as RateCardRow,
 } from "#src/modules/store/fulfillment/commerce-freight-rate-card-projection.js";
 import {
   ANY_SCOPE_FILTER,

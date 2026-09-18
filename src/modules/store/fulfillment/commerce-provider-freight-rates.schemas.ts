@@ -130,9 +130,7 @@ export const ProviderCreateFreightRateCardSchema = z
       "One band must start at 0 g, or every consignment lighter than the smallest band prices nothing and the lane publishes no option at all.",
     path: ["breaks"],
   });
-export type ProviderCreateFreightRateCardBody = z.infer<
-  typeof ProviderCreateFreightRateCardSchema
->;
+export type ProviderCreateFreightRateCardBody = z.infer<typeof ProviderCreateFreightRateCardSchema>;
 
 /**
  * `PATCH /commerce/provider/freight-rate-cards/:rateCardId` — §19.12's "withdraw / retire only".
@@ -156,9 +154,7 @@ export const ProviderUpdateFreightRateCardSchema = z.discriminatedUnion("intent"
     })
     .strict(),
 ]);
-export type ProviderUpdateFreightRateCardBody = z.infer<
-  typeof ProviderUpdateFreightRateCardSchema
->;
+export type ProviderUpdateFreightRateCardBody = z.infer<typeof ProviderUpdateFreightRateCardSchema>;
 
 /**
  * `PATCH .../breaks` — a WHOLE-SET replace, never a per-band edit, because breaks form a ladder
