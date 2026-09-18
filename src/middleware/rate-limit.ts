@@ -2180,6 +2180,37 @@ export const commerceFreightRateReadLimiter = createLimiter({
 });
 
 /**
+ * §19.12's PROVIDER-authored lane cards — the five `/commerce/provider/freight-rate-cards`
+ * routes an approved forwarder writes its own tariff through.
+ *
+ * ITS OWN PAIR RATHER THAN THE STAFF BUCKETS ABOVE, and not for tidiness. The staff limiters
+ * are keyed per user across a handful of moderators; these are keyed per user across every
+ * forwarder on the platform. Sharing them would let one busy provider keying in a quarter's
+ * lanes spend the allowance a moderator then needs to correct a live price — the two
+ * populations have nothing to do with each other and must not be able to starve one another.
+ *
+ * WRITES ARE MORE GENEROUS THAN THE STAFF 30, because this is the surface that exists to get
+ * the tables filled: a create carries its whole ladder, so a lane is one call and a forwarder's
+ * onboarding afternoon is a few dozen. The ceiling still bounds a script.
+ */
+export const commerceProviderFreightRateWriteLimiter = createLimiter({
+  namespace: "commerceProviderFreightRateWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
+ * The provider's own list. SEPARATE FROM ITS WRITES for the reason the staff pair states:
+ * paging a lane's history must not spend the allowance the author then needs to fix what the
+ * page showed them.
+ */
+export const commerceProviderFreightRateReadLimiter = createLimiter({
+  namespace: "commerceProviderFreightRateRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
  * `GET /commerce/orders/:orderId/arrival-window` (Store Phase 20, §19.4).
  *
  * Tighter than an ordinary order read because each call RATES A LANE — it scans rate cards

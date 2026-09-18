@@ -161,8 +161,11 @@ export type FreightRateBreakBody = z.infer<typeof FreightRateBreakSchema>;
  * BOUNDED ON BOTH AXES, and both bounds are load-bearing rather than decoration: an
  * unbounded array is an unbounded body, which is what `json-body-budget.test.ts` exists to
  * refuse. Twenty bands is well past any published tariff.
+ *
+ * EXPORTED so §19.12's provider create schema reuses it rather than restating `1..20` in a
+ * second file, where the two could drift apart by one.
  */
-const FreightRateBreakListSchema = z.array(FreightRateBreakSchema).min(1).max(20);
+export const FreightRateBreakListSchema = z.array(FreightRateBreakSchema).min(1).max(20);
 
 /**
  * `breaks` IS REQUIRED, not optional, and that is a rule rather than a convenience.

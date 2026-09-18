@@ -65,6 +65,7 @@ import communityCofounderRouter from "#src/modules/store/community/community-cof
 import communityForumRouter from "#src/modules/store/community/community-forum.routes.js";
 import commerceDocumentsRouter from "#src/modules/store/fulfillment/commerce-documents.routes.js";
 import commerceFreightRatesRouter from "#src/modules/store/fulfillment/commerce-freight-rates.routes.js";
+import commerceProviderFreightRatesRouter from "#src/modules/store/fulfillment/commerce-provider-freight-rates.routes.js";
 import commerceFulfillmentRouter from "#src/modules/store/fulfillment/commerce-fulfillment.routes.js";
 import commerceCartRouter from "#src/modules/store/orders/commerce-cart.routes.js";
 import commerceOrdersRouter from "#src/modules/store/orders/commerce-orders.routes.js";
@@ -218,6 +219,11 @@ app.use("/commerce", commerceOrdersRouter);
 app.use("/commerce", commercePaymentsRouter);
 app.use("/commerce", commerceFulfillmentRouter);
 app.use("/commerce", commerceFreightRatesRouter);
+// §19.12's supply-side twin of the freight admin above: the lanes an APPROVED forwarder
+// prices for itself. A separate router because its gate is a membership guard plus an
+// in-service provider approval, not `moderate_commerce`. Its paths start `/provider/`, so
+// nothing here can collide with the `/admin/` routes mounted on the same prefix.
+app.use("/commerce", commerceProviderFreightRatesRouter);
 app.use("/commerce", commerceTrustRouter);
 app.use("/commerce", commerceCatalogRouter);
 // The browse taxonomy's ADMIN surface and the seller request queue. The public category

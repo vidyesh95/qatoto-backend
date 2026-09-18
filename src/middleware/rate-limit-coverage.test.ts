@@ -142,6 +142,12 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/store/fulfillment/commerce-freight-rates.routes.js",
     exportName: "default",
   },
+  // §19.12. Same rule as the line above: this lands in the SAME commit as the mount in app.ts.
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/fulfillment/commerce-provider-freight-rates.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/commerce", specifier: "#src/modules/store/catalog/commerce-catalog.routes.js", exportName: "default" },
   /**
    * These three were mounted in `app.ts` and MISSING from this list, so every mutating

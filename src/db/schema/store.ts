@@ -396,6 +396,25 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "manufacturing_inquiry_sent",
     "manufacturing_inquiry_answered",
     "manufacturing_inquiry_closed",
+    /**
+     * §19.12. The lanes an APPROVED FREIGHT PROVIDER prices for itself.
+     *
+     * HERE AND NOT ON `platform_audit_event_kind`, which already carries a
+     * `commerce_freight_rate_card_created` for the staff routes. The two are not the same
+     * event wearing two names: the platform chain snapshots an accountable moderator's role
+     * and serializes on one global head lock, and a forwarder authoring its own tariff is
+     * neither moderating nor staff. Filing it there would put a supplier's ordinary business
+     * writing in the record built to hold the platform's decisions about them.
+     *
+     * UNPREFIXED, matching every other label in this enum — the table is already scoped to an
+     * organization, so `freight_` names the subject and `commerce_` would only restate the
+     * schema. The platform enum prefixes because its rows span every domain.
+     */
+    "freight_rate_card_created",
+    "freight_rate_card_window_shortened",
+    "freight_rate_card_withdrawn",
+    "freight_rate_break_added",
+    "freight_rate_breaks_replaced",
   ],
 );
 
