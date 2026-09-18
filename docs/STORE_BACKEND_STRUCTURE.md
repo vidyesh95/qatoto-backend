@@ -3443,6 +3443,39 @@ surface is untouched: `delivery-sheet.tsx` already renders `providerQuote`, `quo
 changes who may write, not what is read.** Frontend half:
 `qatoto-frontend/todo.md` §18.
 
+#### ⚠️ The defect this work uncovered — supersession had never run
+
+**Phase 20's supersession was broken from the day it shipped, and the first provider to replace
+its own card is what found it.** The create closed the incumbent and set its
+`superseded_by_rate_card_id` to the successor's id BEFORE inserting the successor, minting the id
+early so it "can point at a card that does not exist yet". That is only true of a **deferred**
+foreign key, and `commerce_freight_rate_card_superseded_by_rate_card_id_…` is **not deferrable** —
+it is checked per statement, so the first supersession on any lane failed with `23503`.
+
+Three constraints, none of them deferrable, rule out the obvious order entirely:
+
+| Constraint | What it forbids |
+| --- | --- |
+| `commerce_freight_rate_card_active_uidx` | two ACTIVE cards on one lane, so the successor cannot be inserted while the incumbent is still active |
+| `commerce_freight_rate_card_lifecycle_ck` | `state = 'superseded'` with a NULL successor — and a CHECK can **never** be deferred in Postgres |
+| the `superseded_by_rate_card_id` FK | naming a row that does not exist yet |
+
+**The fix is an ordering, not a migration.** The incumbent is PARKED as `withdrawn` first, which
+satisfies the lifecycle CHECK with a NULL successor and frees the partial unique index; the
+successor is inserted; the incumbent is then set to `superseded` and pointed at it. The
+intermediate `withdrawn` is invisible outside the transaction and the committed end state is
+identical to what the single UPDATE intended. Making the FK `DEFERRABLE INITIALLY DEFERRED` would
+have worked too and was rejected: it is a migration against a shipped table to buy back one
+statement.
+
+**Why nothing caught it.** Every constraint was individually correct and every per-constraint
+probe in `verify-store-phase-20-constraints.ts` passed — what was wrong was the ORDER they had to
+be satisfied in, which no single-statement probe can see. The route suites stub the service
+wholesale, §19.10 declined a service-level test on purpose, and the tables shipped empty, so
+nothing ever executed a second card on a lane. `verify-store-phase-20-constraints.ts` now carries
+a probe that walks the whole park → insert → link sequence inside a rolled-back transaction —
+the one shape in that file that tests a SEQUENCE rather than a refusal.
+
 #### What is still open, and it is not technical
 
 **The tables are still empty, and this section does not fill them — it makes filling them

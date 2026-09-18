@@ -45,6 +45,30 @@ async function probeRefusal(statement: string): Promise<boolean> {
   }
 }
 
+/**
+ * The constraint name a rejection carries, dug out WITHOUT a type assertion — `pg` hangs its
+ * error on `cause` and the driver's own type does not surface it, so this narrows by
+ * inspection. A `as { cause?: … }` would be the house rule's forbidden assertion, and it would
+ * also be a lie: nothing guarantees the shape.
+ */
+function describeDatabaseFailure(error: unknown): string {
+  const fallback = error instanceof Error ? error.message : JSON.stringify(error);
+  if (typeof error !== "object" || error === null || !("cause" in error)) {
+    return fallback;
+  }
+  const cause: unknown = error.cause;
+  if (typeof cause !== "object" || cause === null) {
+    return fallback;
+  }
+  if ("constraint" in cause && typeof cause.constraint === "string") {
+    return cause.constraint;
+  }
+  if ("message" in cause && typeof cause.message === "string") {
+    return cause.message;
+  }
+  return fallback;
+}
+
 async function tableExists(tableName: string): Promise<boolean> {
   const found = await scalar(sql`
     SELECT count(*)::int AS value
@@ -314,6 +338,90 @@ const CHECKS: readonly Check[] = [
                  SELECT 1 FROM commerce_freight_rate_break band
                   WHERE band.rate_card_id = card.id)`);
       return { ok: bandless === 0, detail: `${String(bandless)} live card(s) with no bands` };
+    },
+  },
+  {
+    /**
+     * THE ONE CHECK HERE THAT PROBES A SEQUENCE RATHER THAN A SINGLE REFUSAL, and it exists
+     * because a real defect hid behind exactly that gap.
+     *
+     * Phase 20's supersession set the incumbent's `superseded_by_rate_card_id` to the
+     * successor's id BEFORE inserting the successor, on the belief that the FK would be
+     * checked at commit. It is NOT DEFERRABLE, so it is checked at statement, and the first
+     * supersession on any lane would have failed with a `23503`. Every constraint in this
+     * file was individually correct; what was wrong was the ORDER they had to be satisfied in,
+     * and nothing in a per-constraint suite could see it. The tables shipped empty, and §19.10
+     * declined a service-level test, so it stayed dormant until a provider tried to replace
+     * its own card.
+     *
+     * This probe walks the whole three-statement dance the shared
+     * `insertFreightRateCardSupersedingIncumbent` performs — park, insert, link — and fails if
+     * any of it is rejected. It writes nothing: the transaction always rolls back.
+     */
+    name: "supersession sequence is executable end to end",
+    why: "A lane's SECOND card is how a price is ever corrected. If this sequence stops working, every write that supersedes a live card 500s, and no per-constraint probe would notice.",
+    async run() {
+      const lane = {
+        provider: "__verify_probe_provider__",
+        incumbent: "__verify_probe_incumbent__",
+        successor: "__verify_probe_successor__",
+      };
+
+      // Borrow any registered provider — the FK needs a real one, and this rolls back.
+      const providerRow = await db.execute<{ organization_id: string }>(
+        sql`SELECT organization_id FROM commerce_provider_profile LIMIT 1`,
+      );
+      const providerOrganizationId = providerRow.rows[0]?.organization_id;
+      if (providerOrganizationId === undefined) {
+        return { ok: true, detail: "skipped — no provider profile to borrow" };
+      }
+
+      // A lane no real card can occupy, so the probe cannot collide with live data.
+      const origin = "ZZ";
+      const destination = "ZY";
+
+      let failure = "";
+      try {
+        await db.transaction(async (transaction) => {
+          const insertCard = (id: string, validFromDays: number) => sql`
+            INSERT INTO commerce_freight_rate_card
+              (id, provider_organization_id, origin_country_code, destination_country_code,
+               mode, currency, valid_from, source_forwarder_name,
+               volumetric_divisor_cm3_per_kg, state)
+            VALUES (${id}, ${providerOrganizationId}, ${origin}, ${destination},
+                    'sea'::commerce_shipment_leg_mode, 'USD',
+                    now() + (${validFromDays} * interval '1 day'), 'Verify Probe', 1000, 'active')`;
+
+          await transaction.execute(insertCard(lane.incumbent, 1));
+
+          // 1. Park, which frees the partial unique index and satisfies the lifecycle CHECK.
+          await transaction.execute(sql`
+            UPDATE commerce_freight_rate_card SET state = 'withdrawn'
+             WHERE id = ${lane.incumbent} AND state = 'active'`);
+
+          // 2. Insert the successor.
+          await transaction.execute(insertCard(lane.successor, 2));
+
+          // 3. Link the incumbent to it, which the FK can only now accept.
+          await transaction.execute(sql`
+            UPDATE commerce_freight_rate_card
+               SET state = 'superseded',
+                   valid_until = now() + (2 * interval '1 day'),
+                   superseded_by_rate_card_id = ${lane.successor}
+             WHERE id = ${lane.incumbent}`);
+
+          throw new Error("verify-probe-rollback");
+        });
+      } catch (error: unknown) {
+        if (!(error instanceof Error) || error.message !== "verify-probe-rollback") {
+          failure = describeDatabaseFailure(error);
+        }
+      }
+
+      return {
+        ok: failure === "",
+        detail: failure === "" ? "park → insert → link accepted" : `rejected by ${failure}`,
+      };
     },
   },
 ];

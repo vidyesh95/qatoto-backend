@@ -283,25 +283,46 @@ export async function insertFreightRateCardSupersedingIncumbent(
   }
 
   /**
-   * CLOSE THE OUTGOING INTERVAL FIRST. `validUntil` is exclusive, so setting it to the
-   * incoming card's `validFrom` leaves no gap and no overlap — the rating read sees one
-   * continuous coverage. `compensation-agreements.service.ts` is the precedent, and its
-   * note applies verbatim: the partial unique index would otherwise reject this insert,
-   * and the correct resolution is to close the old interval rather than refuse the new
-   * card.
+   * CLOSE THE OUTGOING INTERVAL, IN THREE STATEMENTS RATHER THAN ONE.
    *
-   * The incumbent flips to `superseded` IMMEDIATELY even when the successor is
-   * future-dated, which is why the rating read must select on the window plus
-   * `state <> 'withdrawn'` and never on `state = 'active'`.
+   * `validUntil` is exclusive, so setting it to the incoming card's `validFrom` leaves no gap
+   * and no overlap — the rating read sees one continuous coverage.
+   * `compensation-agreements.service.ts` is the precedent, and its note applies verbatim: the
+   * partial unique index would otherwise reject this insert, and the correct resolution is to
+   * close the old interval rather than refuse the new card.
+   *
+   * ⚠️ WHY IT CANNOT BE THE OBVIOUS SINGLE UPDATE, WHICH IS WHAT PHASE 20 SHIPPED AND WHAT NO
+   * TEST EVER RAN. Three constraints, none of them deferrable, make "supersede the incumbent,
+   * then insert the successor" impossible in that order:
+   *
+   *   - `commerce_freight_rate_card_active_uidx` forbids two ACTIVE cards on one lane, so the
+   *     successor cannot be inserted while the incumbent is still active;
+   *   - `commerce_freight_rate_card_lifecycle_ck` asserts
+   *     `(state = 'superseded') = (superseded_by_rate_card_id IS NOT NULL)`, so the incumbent
+   *     cannot be marked superseded without naming its successor — and a CHECK can never be
+   *     deferred in Postgres;
+   *   - the `superseded_by_rate_card_id` FK is NOT DEFERRABLE, so it cannot name a row that
+   *     does not exist yet.
+   *
+   * The shipped code minted the id early and set `supersededByRateCardId` to it before the
+   * insert, on the belief that the FK would be checked at commit. It is checked at statement,
+   * so the FIRST supersession on any lane would have failed with a `23503` — a defect that lay
+   * dormant only because the tables shipped empty and §19.10 declined a service-level test.
+   *
+   * SO THE INCUMBENT IS PARKED FIRST. `withdrawn` satisfies the lifecycle CHECK with a NULL
+   * successor and frees the partial unique index; the successor is then inserted; then the
+   * incumbent is set to `superseded` and pointed at it. The intermediate `withdrawn` is
+   * invisible outside this transaction, and the committed end state is identical to what the
+   * single UPDATE intended.
+   *
+   * The incumbent flips to `superseded` IMMEDIATELY even when the successor is future-dated,
+   * which is why the rating read must select on the window plus `state <> 'withdrawn'` and
+   * never on `state = 'active'`.
    */
   if (incumbent) {
     await tx
       .update(commerceFreightRateCard)
-      .set({
-        state: "superseded",
-        validUntil: input.validFrom,
-        supersededByRateCardId: rateCardId,
-      })
+      .set({ state: "withdrawn" })
       .where(
         and(
           eq(commerceFreightRateCard.id, incumbent.id),
@@ -343,6 +364,22 @@ export async function insertFreightRateCardSupersedingIncumbent(
       })),
     )
     .returning();
+
+  /**
+   * The third statement: now that the successor exists, the parked incumbent can name it. No
+   * `state` guard here — the park above already proved the row was ours to close, and this
+   * transaction still holds the `FOR UPDATE` lock taken on it.
+   */
+  if (incumbent) {
+    await tx
+      .update(commerceFreightRateCard)
+      .set({
+        state: "superseded",
+        validUntil: input.validFrom,
+        supersededByRateCardId: rateCardId,
+      })
+      .where(eq(commerceFreightRateCard.id, incumbent.id));
+  }
 
   return { kind: "created", insertedCard, insertedBreaks, incumbent };
 }
