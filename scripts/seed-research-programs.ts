@@ -56,8 +56,20 @@ const PAPER_CATEGORY_LABELS: readonly string[] = [
 
 const PROGRAM_TITLE = "Project Immortal";
 const PROGRAM_TAGLINE = "Open research toward extending healthy human life";
+/**
+ * ⚠️ **`programme`, NOT `program`, AND THAT IS THE REGISTER RULE RATHER THAN A TYPO.**
+ * Identity is US `program` everywhere — the slug, `research_program`, every pgEnum label and
+ * `programSlug`. Rendered PROSE is `programme`. This string is prose: the frontend prints it
+ * verbatim under an eyebrow reading "OPEN RESEARCH PROGRAMME", and while it said `program` it was
+ * the only US spelling on that page.
+ *
+ * ⚠️ **EDITING THIS DOES NOT FIX AN ALREADY-SEEDED DATABASE.** The insert below is guarded by a
+ * SELECT on the slug, so a re-run SKIPS an existing row rather than updating it. A database that
+ * has already been seeded needs its own `UPDATE research_program SET mission_statement = ...
+ * WHERE slug = 'project-immortal'`. This edit is what makes FRESH databases correct.
+ */
 const PROGRAM_MISSION = [
-  "Project Immortal is an open research program: anyone may propose a research branch, publish",
+  "Project Immortal is an open research programme: anyone may propose a research branch, publish",
   "into the formal paper library, argue in the informal track, and log the effort they put in.",
   "The branch map exists to make two things visible that closed research hides — where the",
   "gaps are, and where several groups are unknowingly duplicating each other's work. Both of",
