@@ -633,6 +633,9 @@ export interface CreateProblemSubmissionInput {
   readonly categoryId: string;
   readonly description: string;
   readonly locationText: string;
+  /** The reporter's optional coarse pin. Both or neither, enforced by the request schema. */
+  readonly approxLatitudeMicrodegrees?: number | undefined;
+  readonly approxLongitudeMicrodegrees?: number | undefined;
 }
 
 export interface ProblemSubmissionReceiptView {
@@ -659,13 +662,32 @@ export interface ProblemSubmissionReceiptView {
  * imply the count is retry-sensitive when it is the one number specifically designed not
  * to be.
  *
- * The caller is responsible for enqueuing the clustering job IN THE SAME TRANSACTION —
- * see the `db` parameter, which accepts a transaction handle.
+ * The caller enqueues the clustering job after this returns. (An earlier version of this comment
+ * pointed at a `db` parameter accepting a transaction handle; there is no such parameter and there
+ * never was one on this signature.)
  */
 export async function createProblemSubmission(
   reporterUserId: string,
   input: CreateProblemSubmissionInput,
 ): Promise<ProblemSubmissionReceiptView> {
+  // ⚠️ **RE-QUANTIZED HERE, ON THE WAY IN, AND THAT IS NOT BELT-AND-BRACES.** The browser rounds to
+  // 3 decimals before sending, but CLAUDE.md §0 is explicit that a client-side check "exists only
+  // for fast UX feedback" — a hostile client posts 6 decimals and the rounding it skipped is the
+  // whole privacy mechanism. `quantizePublishedMicrodegrees` snaps to the same 1,000-microdegree
+  // (~111 m) grid the published centroid uses, so a precise point cannot be stored even once.
+  //
+  // Both or neither is already guaranteed by the request schema's refinement AND by
+  // `problem_submission_approx_coordinate_ck`, so quantizing each independently cannot produce a
+  // half pin.
+  const approxLatitudeMicrodegrees =
+    input.approxLatitudeMicrodegrees === undefined
+      ? null
+      : quantizePublishedMicrodegrees(input.approxLatitudeMicrodegrees);
+  const approxLongitudeMicrodegrees =
+    input.approxLongitudeMicrodegrees === undefined
+      ? null
+      : quantizePublishedMicrodegrees(input.approxLongitudeMicrodegrees);
+
   const [created] = await db
     .insert(problemSubmission)
     .values({
@@ -674,8 +696,11 @@ export async function createProblemSubmission(
       categoryId: input.categoryId,
       description: input.description,
       locationText: input.locationText,
-      // Everything else falls to its column default: status='queued', coordinates NULL,
-      // countryCode NULL. There is no field here a client could supply for any of them.
+      approxLatitudeMicrodegrees,
+      approxLongitudeMicrodegrees,
+      // Everything else falls to its column default: status='queued', the RESOLVED coordinates
+      // NULL, countryCode NULL. The pin above is the only geography a client can supply, and it
+      // refines position only — see the schema's note.
     })
     .returning({
       id: problemSubmission.id,

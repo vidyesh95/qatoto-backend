@@ -1325,6 +1325,27 @@ export const problemSubmission = pgTable(
     // What the reporter TYPED. Never authoritative geography — it is the geocoder's
     // input, and the resolved label on the cluster is what clients render.
     locationText: text("location_text").notNull(),
+    // --- The reporter's OPTIONAL coarse pin. CLIENT-SUPPLIED, and the only such field here.
+    //
+    // ⚠️ **IT IS A SEPARATE PAIR FROM THE JOB-WRITTEN ONE BELOW, DELIBERATELY.** Those are where
+    // the clustering job PLACED the report; these are what the reporter CLAIMED, and the two are
+    // different kinds of statement even when they hold the same number. `MyProblemReportSchema`
+    // tells the reporter the coordinates beside their report are "server-geocoded and NULL until
+    // the job has run" — writing a client claim into them would make that sentence false, and the
+    // declared-versus-measured separation is the same one `designationSource` enforces on a
+    // teardown's alloy.
+    //
+    // ⚠️ **ALREADY ~110 m COARSE WHEN IT ARRIVES, AND RE-QUANTIZED ANYWAY.** The browser rounds to
+    // 3 decimals before sending so no precise point ever reaches this server, and the service
+    // rounds again on the way in because a client is hostile and its rounding is a UX affordance,
+    // not a control.
+    //
+    // ⚠️ **IT REFINES POSITION AND NOTHING ELSE.** `countryCode` and `regionId` below stay derived
+    // from forward-geocoding `locationText`, because there is no reverse geocoder and `regionId` is
+    // a pure function of the country — a pin cannot produce either, and a region-less cluster
+    // scores zero on the geographic-spread ladder and is excluded from demand signals outright.
+    approxLatitudeMicrodegrees: integer("approx_latitude_microdegrees"),
+    approxLongitudeMicrodegrees: integer("approx_longitude_microdegrees"),
     // --- Everything below is JOB-WRITTEN. None of it appears in any request schema.
     latitudeMicrodegrees: integer("latitude_microdegrees"),
     longitudeMicrodegrees: integer("longitude_microdegrees"),
@@ -1382,6 +1403,17 @@ export const problemSubmission = pgTable(
           AND (longitude_microdegrees IS NULL
                OR longitude_microdegrees BETWEEN -180000000 AND 180000000)
           AND (latitude_microdegrees IS NULL) = (longitude_microdegrees IS NULL)`,
+    ),
+    // Same shape as the job-written pair above: in range, and both or neither. A half pin is not
+    // "a latitude with the longitude to follow" — it is invalid, and the client cannot construct
+    // one either.
+    check(
+      "problem_submission_approx_coordinate_ck",
+      sql`(approx_latitude_microdegrees IS NULL
+           OR approx_latitude_microdegrees BETWEEN -90000000 AND 90000000)
+          AND (approx_longitude_microdegrees IS NULL
+               OR approx_longitude_microdegrees BETWEEN -180000000 AND 180000000)
+          AND (approx_latitude_microdegrees IS NULL) = (approx_longitude_microdegrees IS NULL)`,
     ),
     check(
       "problem_submission_country_ck",

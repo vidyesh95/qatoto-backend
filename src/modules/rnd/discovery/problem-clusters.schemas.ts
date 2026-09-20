@@ -91,15 +91,29 @@ export const CreateClusterProjectLinkSchema = z
  * (server-geocoded — CLAUDE.md §0 names client-supplied country as untrustworthy, and here
  * it feeds the opportunity score), `reportCount`, `distinctReporterCount`,
  * `opportunityScore`, `clusterId`, `mapPosition`, `status`, `reporterUserId` (§13 — every
- * actor id is req.user.id and nothing else), and ANY COORDINATE.
+ * actor id is req.user.id and nothing else), and the RESOLVED coordinates
+ * `latitudeMicrodegrees` / `longitudeMicrodegrees`.
  *
  * The current report-problem-sheet fabricates four of those in the browser:
  * `countryCode: ""`, `mapPosition: {50,50}`, `reportCount: 1`, `opportunityScore: 40`.
  * All four become server-derived, and there is no field left to forge.
  *
- * `locationText` rather than coordinates is a deliberate departure from §11b's body: the
- * sheet has no coordinate capture at all, and §6 forbids client-claimed geography — so the
- * server forward-geocodes, which strengthens the rule rather than bending it.
+ * ⚠️ **THIS BLOCK USED TO SAY "AND ANY COORDINATE", AND THAT IS NO LONGER TRUE.** The optional
+ * `approx*` pair below is the ONE piece of client-supplied geography this body accepts, and the
+ * distinction it turns on is worth stating precisely, because §6 forbids client-claimed geography
+ * and this does not break that rule:
+ *
+ * - `countryCode` and the region derived from it are what the OPPORTUNITY SCORE reads. A client
+ *   that could assert a country could manufacture a crisis in a place it has never been. Those stay
+ *   server-geocoded from `locationText` and nothing here can influence them.
+ * - The `approx*` pair only refines WHERE INSIDE that geocoded place the report sits, and the job
+ *   discards it when the two disagree by more than the clustering radius. A reporter could already
+ *   move their own report anywhere on earth by typing a different `locationText`; this adds no
+ *   forgery surface, it adds resolution.
+ *
+ * ⚠️ **IT ARRIVES COARSE AND IS RE-QUANTIZED ANYWAY.** The browser rounds to 3 decimals (~110 m)
+ * before sending, so no precise point reaches this server; the service rounds again on receipt
+ * because that rounding is a UX affordance in a hostile client, not a control.
  */
 export const CreateProblemReportSchema = z
   .object({
@@ -107,8 +121,41 @@ export const CreateProblemReportSchema = z
     categoryId: z.uuid(),
     description: z.string().trim().min(20).max(5_000),
     locationText: z.string().trim().min(2).max(200),
+    /**
+     * The reporter's optional coarse pin. BOTH OR NEITHER — see the refinement below.
+     *
+     * `locationText` stays required beside it: the pin cannot produce a country, so a report with
+     * a pin and unresolvable text still fails geocoding exactly as it does today.
+     */
+    approxLatitudeMicrodegrees: z
+      .number()
+      .int()
+      .min(-MAXIMUM_LATITUDE_MICRODEGREES)
+      .max(MAXIMUM_LATITUDE_MICRODEGREES)
+      .optional(),
+    approxLongitudeMicrodegrees: z
+      .number()
+      .int()
+      .min(-MAXIMUM_LONGITUDE_MICRODEGREES)
+      .max(MAXIMUM_LONGITUDE_MICRODEGREES)
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((body, context) => {
+    // Mirrors `problem_submission_approx_coordinate_ck` so the refusal is a 422 naming the field
+    // rather than a 500 from the database. Half a pin is not "a latitude with the longitude to
+    // follow"; it is a point that does not exist, and the only thing that could be done with one is
+    // to guess the other half.
+    const hasLatitude = body.approxLatitudeMicrodegrees !== undefined;
+    const hasLongitude = body.approxLongitudeMicrodegrees !== undefined;
+    if (hasLatitude === hasLongitude) return;
+
+    context.addIssue({
+      code: "custom",
+      path: [hasLatitude ? "approxLongitudeMicrodegrees" : "approxLatitudeMicrodegrees"],
+      message: "A map pin needs both a latitude and a longitude, or neither.",
+    });
+  });
 
 export const ListMyProblemReportsQuerySchema = z
   .object({

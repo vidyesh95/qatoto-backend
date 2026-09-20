@@ -5,6 +5,10 @@ import { problemCluster, problemSubmission } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
 import {
+  chooseSubmissionPoint,
+  CLUSTER_RADIUS_MILLIMETRES,
+} from "#src/modules/rnd/discovery/submission-point.js";
+import {
   boundingBoxMicrodegrees,
   isWithinRadius,
   meanCentroidMicrodegrees,
@@ -36,9 +40,6 @@ import {
  *   - The centroid is recomputed from the FULL member set rather than folded in
  *     incrementally, so attach order cannot change it.
  */
-
-/** Two reports within this distance MAY describe the same problem. */
-const CLUSTER_RADIUS_MILLIMETRES = 25_000_000; // 25 km
 
 interface ClusterCandidate {
   readonly id: string;
@@ -188,6 +189,10 @@ export async function handleGeocodeAndClusterSubmission(rawPayload: unknown): Pr
       description: problemSubmission.description,
       categoryId: problemSubmission.categoryId,
       locationText: problemSubmission.locationText,
+      // The reporter's optional coarse pin. Selected because it may replace the geocoded point
+      // below — see `submissionPoint`.
+      approxLatitudeMicrodegrees: problemSubmission.approxLatitudeMicrodegrees,
+      approxLongitudeMicrodegrees: problemSubmission.approxLongitudeMicrodegrees,
       status: problemSubmission.status,
       clusterId: problemSubmission.clusterId,
       reporterUserId: problemSubmission.reporterUserId,
@@ -236,10 +241,27 @@ export async function handleGeocodeAndClusterSubmission(rawPayload: unknown): Pr
   }
 
   const resolved = geocodeResult.value;
-  const submissionPoint: GeoPointMicrodegrees = {
+  const geocodedPoint: GeoPointMicrodegrees = {
     latitudeMicrodegrees: resolved.latitudeMicrodegrees,
     longitudeMicrodegrees: resolved.longitudeMicrodegrees,
   };
+
+  // The reporter's optional coarse pin, when they dropped one. Both columns are non-null together
+  // or not at all — `problem_submission_approx_coordinate_ck` guarantees it — so this cannot
+  // construct half a point.
+  const pinnedPoint: GeoPointMicrodegrees | null =
+    submission.approxLatitudeMicrodegrees !== null &&
+    submission.approxLongitudeMicrodegrees !== null
+      ? {
+          latitudeMicrodegrees: submission.approxLatitudeMicrodegrees,
+          longitudeMicrodegrees: submission.approxLongitudeMicrodegrees,
+        }
+      : null;
+
+  // Determinism (§4c) is preserved: the pin is a stored column, so a replay reads the same value.
+  // It is MORE deterministic than the geocode, not less, which is why it is a column rather than
+  // something carried on the job payload.
+  const submissionPoint = chooseSubmissionPoint(geocodedPoint, pinnedPoint);
 
   const best = await findBestMatchingCluster(submission, submissionPoint);
 
@@ -268,10 +290,12 @@ export async function handleGeocodeAndClusterSubmission(rawPayload: unknown): Pr
           title: submission.title,
           description: submission.description,
           categoryId: submission.categoryId,
-          centroidLatitudeMicrodegrees: resolved.latitudeMicrodegrees,
-          centroidLongitudeMicrodegrees: resolved.longitudeMicrodegrees,
-          centroidLatitudeSumMicrodegrees: resolved.latitudeMicrodegrees,
-          centroidLongitudeSumMicrodegrees: resolved.longitudeMicrodegrees,
+          // `submissionPoint`, not the geocoded point: a founding member's centroid IS its own
+          // position, and the position is the pin when the reporter gave one.
+          centroidLatitudeMicrodegrees: submissionPoint.latitudeMicrodegrees,
+          centroidLongitudeMicrodegrees: submissionPoint.longitudeMicrodegrees,
+          centroidLatitudeSumMicrodegrees: submissionPoint.latitudeMicrodegrees,
+          centroidLongitudeSumMicrodegrees: submissionPoint.longitudeMicrodegrees,
           centroidSampleCount: 1,
           countryCode: resolved.countryCode,
           regionId: resolved.regionId,
@@ -294,8 +318,8 @@ export async function handleGeocodeAndClusterSubmission(rawPayload: unknown): Pr
           clusterId: createdCluster.id,
           clusteredAt: new Date(),
           clusterMatchBasisPoints: 10_000,
-          latitudeMicrodegrees: resolved.latitudeMicrodegrees,
-          longitudeMicrodegrees: resolved.longitudeMicrodegrees,
+          latitudeMicrodegrees: submissionPoint.latitudeMicrodegrees,
+          longitudeMicrodegrees: submissionPoint.longitudeMicrodegrees,
           countryCode: resolved.countryCode,
           regionId: resolved.regionId,
           geocodeFailureReason: null,
@@ -311,8 +335,8 @@ export async function handleGeocodeAndClusterSubmission(rawPayload: unknown): Pr
         clusterId: targetClusterId,
         clusteredAt: new Date(),
         clusterMatchBasisPoints: best?.similarityBasisPoints ?? 0,
-        latitudeMicrodegrees: resolved.latitudeMicrodegrees,
-        longitudeMicrodegrees: resolved.longitudeMicrodegrees,
+        latitudeMicrodegrees: submissionPoint.latitudeMicrodegrees,
+        longitudeMicrodegrees: submissionPoint.longitudeMicrodegrees,
         countryCode: resolved.countryCode,
         regionId: resolved.regionId,
         geocodeFailureReason: null,

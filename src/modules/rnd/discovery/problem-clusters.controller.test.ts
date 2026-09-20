@@ -77,15 +77,32 @@ const VALID_REPORT_BODY = {
  * and this suite is the proof — every key below is one the CURRENT frontend fabricates or
  * that an attacker would try, and every one must be a 422 rather than a silent overwrite.
  *
- * The four the live `report-problem-sheet.tsx` invents in the browser today are
+ * ⚠️ **THIS SUITE USED TO SAY THE BODY CARRIES NO GEOGRAPHY AT ALL. IT NOW CARRIES EXACTLY ONE
+ * PIECE, AND THE LINE BETWEEN THEM IS THE POINT OF THE SWEEP RATHER THAN AN EXCEPTION TO IT.**
+ *
+ * - `countryCode`, and the `regionId` derived from it, are what the OPPORTUNITY SCORE reads. A
+ *   client able to assert either could manufacture a crisis in a country it has never been to.
+ *   They stay server-geocoded, and they stay in the rejected list below.
+ * - The RESOLVED `latitudeMicrodegrees` / `longitudeMicrodegrees` are where the clustering job
+ *   PLACED the report. Still rejected: a client does not get to state the outcome of a job.
+ * - `approxLatitudeMicrodegrees` / `approxLongitudeMicrodegrees` are what the reporter CLAIMED,
+ *   in their own separate columns, and they refine POSITION ONLY. The job discards them when they
+ *   disagree with the geocode by more than the clustering radius, and they can never produce a
+ *   country. A reporter could already move their own report anywhere on earth by typing a
+ *   different `locationText`; this adds resolution, not a forgery surface.
+ *
+ * The four the live `report-problem-sheet.tsx` once invented in the browser were
  * `countryCode: ""`, `mapPosition: {50,50}`, `reportCount: 1` and `opportunityScore: 40`.
  */
 describe("CreateProblemReportSchema — server-owned keys are rejected", () => {
   const REJECTED_SERVER_OWNED_KEYS: readonly (readonly [string, unknown])[] = [
-    // Geography: server-geocoded, and it feeds the opportunity score.
+    // Geography the server owns. `countryCode` feeds the opportunity score; the unprefixed
+    // coordinates are the clustering job's OUTPUT, as distinct from the `approx*` pin the reporter
+    // may supply as an input.
     ["countryCode", "US"],
     ["latitudeMicrodegrees", 1_000_000],
     ["longitudeMicrodegrees", 1_000_000],
+    ["regionId", "11111111-1111-4111-8111-111111111111"],
     ["mapPosition", { leftPercent: 50, topPercent: 50 }],
     // Ranking signals: job-computed, never asserted.
     ["opportunityScore", 99],
@@ -119,9 +136,11 @@ describe("CreateProblemReportSchema — server-owned keys are rejected", () => {
     expect(JSON.stringify(parsed)).toContain(keyName);
   });
 
-  it("accepts the four legitimate fields and nothing else", () => {
+  it("accepts the four required fields and adds nothing when no pin is sent", () => {
     const parsed = CreateProblemReportSchema.safeParse(VALID_REPORT_BODY);
 
+    // An absent optional stays ABSENT rather than becoming `undefined`, which is what lets the
+    // service tell "no pin" from "a pin it failed to read".
     expect(parsed).toEqual({
       success: true,
       data: {
@@ -135,6 +154,70 @@ describe("CreateProblemReportSchema — server-owned keys are rejected", () => {
 
   it("rejects a location that is only whitespace", () => {
     expect(CreateProblemReportSchema.safeParse({ ...VALID_REPORT_BODY, locationText: "   " }).success).toBe(false);
+  });
+});
+
+/**
+ * THE PIN IS BOTH FIELDS OR NEITHER.
+ *
+ * It mirrors `problem_submission_approx_coordinate_ck`, and the reason to enforce it here too is
+ * that a database CHECK surfaces as a 500. A half pin is not "a latitude with the longitude to
+ * follow" — it is a point that does not exist, and the only thing anyone could do with one is guess
+ * the other half.
+ */
+describe("CreateProblemReportSchema — the optional coarse pin", () => {
+  const MUMBAI_PIN = {
+    approxLatitudeMicrodegrees: 19_076_000,
+    approxLongitudeMicrodegrees: 72_877_000,
+  };
+
+  it("accepts both halves together", () => {
+    const parsed = CreateProblemReportSchema.safeParse({ ...VALID_REPORT_BODY, ...MUMBAI_PIN });
+
+    expect(parsed).toEqual({
+      success: true,
+      data: { ...VALID_REPORT_BODY, ...MUMBAI_PIN },
+    });
+  });
+
+  it.each([
+    // The half that IS sent, and the half the refusal must name. Each case carries its own body so
+    // the key does not have to be looked up by a string index, which needs an assertion.
+    [
+      "a latitude without a longitude",
+      { approxLatitudeMicrodegrees: MUMBAI_PIN.approxLatitudeMicrodegrees },
+      "approxLongitudeMicrodegrees",
+    ],
+    [
+      "a longitude without a latitude",
+      { approxLongitudeMicrodegrees: MUMBAI_PIN.approxLongitudeMicrodegrees },
+      "approxLatitudeMicrodegrees",
+    ],
+  ])("rejects %s", (_label, halfPin, missingKey) => {
+    const parsed = CreateProblemReportSchema.safeParse({ ...VALID_REPORT_BODY, ...halfPin });
+
+    expect(parsed.success).toBe(false);
+    // The issue is pathed at the MISSING half, so the client is told which field to supply rather
+    // than which one to remove.
+    expect(JSON.stringify(parsed)).toContain(missingKey);
+  });
+
+  it("rejects a non-integer pin", () => {
+    // Microdegrees are integers on the wire. A float here means the caller sent degrees.
+    expect(
+      CreateProblemReportSchema.safeParse({
+        ...VALID_REPORT_BODY,
+        approxLatitudeMicrodegrees: 19.076,
+        approxLongitudeMicrodegrees: 72.877,
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["latitude past the pole", { approxLatitudeMicrodegrees: 90_000_001, approxLongitudeMicrodegrees: 0 }],
+    ["longitude past the antimeridian", { approxLatitudeMicrodegrees: 0, approxLongitudeMicrodegrees: 180_000_001 }],
+  ])("rejects a %s", (_label, pin) => {
+    expect(CreateProblemReportSchema.safeParse({ ...VALID_REPORT_BODY, ...pin }).success).toBe(false);
   });
 });
 

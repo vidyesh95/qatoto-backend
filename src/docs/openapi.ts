@@ -599,10 +599,16 @@ const handWrittenSpec = {
           "Requires an IDENTIFIED account, not merely a session: `distinctReporterCount` is " +
           "the sybil surface of the whole opportunity score, and the anonymous() plugin " +
           "makes a bare session nearly free. " +
-          "Takes `locationText`, NOT coordinates — the server forward-geocodes it, because " +
-          "§6 forbids client-claimed geography and the country feeds the score. " +
-          "`countryCode`, `opportunityScore`, `reportCount`, `status`, `clusterId` and any " +
-          "coordinate are rejected with 422 by .strict(). " +
+          "`locationText` is REQUIRED and is what the server forward-geocodes: the country and " +
+          "the region derived from it feed the opportunity score, so §6 keeps them server-owned. " +
+          "`approxLatitudeMicrodegrees` / `approxLongitudeMicrodegrees` are the reporter's " +
+          "OPTIONAL coarse pin — both or neither, already rounded to ~110 m by the browser and " +
+          "re-quantized on receipt. The pin refines POSITION ONLY, and the clustering job " +
+          "discards it when it disagrees with the geocoded point by more than 25 km; it can " +
+          "never supply a country or a region. " +
+          "`countryCode`, `opportunityScore`, `reportCount`, `status`, `clusterId` and the " +
+          "RESOLVED `latitudeMicrodegrees` / `longitudeMicrodegrees` are still rejected with 422 " +
+          "by .strict(). " +
           "Returns a RECEIPT, not a cluster: none of those numbers exists yet.",
         requestBody: {
           required: true,
@@ -617,6 +623,19 @@ const handWrittenSpec = {
                   categoryId: { type: "string", format: "uuid" },
                   description: { type: "string", minLength: 20, maxLength: 5000 },
                   locationText: { type: "string", minLength: 2, maxLength: 200 },
+                  // The both-or-neither rule between these two is a Zod refinement, which JSON
+                  // Schema cannot express here any more than the derived emitter can — it is
+                  // stated in the description above instead.
+                  approxLatitudeMicrodegrees: {
+                    type: "integer",
+                    minimum: -90000000,
+                    maximum: 90000000,
+                  },
+                  approxLongitudeMicrodegrees: {
+                    type: "integer",
+                    minimum: -180000000,
+                    maximum: 180000000,
+                  },
                 },
               },
             },
