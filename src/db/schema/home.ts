@@ -2298,8 +2298,21 @@ export const showcaseLaunchHeadingImage = pgTable(
     uploadedByUserId: text("uploaded_by_user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    /** Stored so a delete never has to rebuild it. */
-    publicId: text("public_id").notNull().unique(),
+    /**
+     * Stored so a delete never has to rebuild it.
+     *
+     * ⚠️ **THE UNIQUE CONSTRAINT IS NAMED EXPLICITLY, AND IT HAS TO BE.** Drizzle derives a name
+     * from `<table>_<column>_unique`, which for THIS table and column spells
+     * `showcase_launch_heading_image_public_id_unique` — byte-identical to the name it derives for
+     * `showcase_launch.headingImagePublicId` four hundred lines above. A UNIQUE constraint creates
+     * an INDEX, and index names are unique per SCHEMA rather than per table, so the generated
+     * migration could not be applied to any database that already had that column: measured as
+     * `42P07 relation "showcase_launch_heading_image_public_id_unique" already exists`, which is
+     * why migration 0198 had never landed anywhere.
+     */
+    publicId: text("public_id")
+      .notNull()
+      .unique("showcase_launch_heading_image_asset_public_id_unique"),
     url: text("url").notNull().unique(),
     /** Square within the service's tolerance, and measured on the RE-ENCODED file. */
     widthPx: integer("width_px").notNull(),

@@ -9,7 +9,7 @@ CREATE TABLE "showcase_launch_heading_image" (
 	"height_px" integer NOT NULL,
 	"blur_data_url" text NOT NULL,
 	"created_at" timestamp (3) DEFAULT now() NOT NULL,
-	CONSTRAINT "showcase_launch_heading_image_public_id_unique" UNIQUE("public_id"),
+	CONSTRAINT "showcase_launch_heading_image_asset_public_id_unique" UNIQUE("public_id"),
 	CONSTRAINT "showcase_launch_heading_image_url_unique" UNIQUE("url"),
 	CONSTRAINT "showcase_launch_heading_image_dimensions_ck" CHECK (width_px BETWEEN 1 AND 8192 AND height_px BETWEEN 1 AND 8192),
 	CONSTRAINT "showcase_launch_heading_image_url_ck" CHECK (char_length(url) BETWEEN 1 AND 2048

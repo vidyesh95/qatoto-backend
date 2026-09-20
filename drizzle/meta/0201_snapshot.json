@@ -5382,8 +5382,8 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "showcase_launch_heading_image_public_id_unique": {
-          "name": "showcase_launch_heading_image_public_id_unique",
+        "showcase_launch_heading_image_asset_public_id_unique": {
+          "name": "showcase_launch_heading_image_asset_public_id_unique",
           "nullsNotDistinct": false,
           "columns": [
             "public_id"
