@@ -98,3 +98,10 @@ overrides:
   # @esbuild-kit/esm-loader, which is deprecated and pins core-utils. Remove this
   # override once drizzle-kit drops that chain for tsx.
   "@esbuild-kit/core-utils>esbuild": "^0.25.12"
+
+# drizzle-kit (latest 0.31.x) still depends on the deprecated @esbuild-kit chain; only
+# drizzle-kit 1.0 (beta) drops it. Pinned to exact versions so any NEW deprecation still
+# warns. Remove together with the "@esbuild-kit/core-utils>esbuild" override above.
+allowedDeprecatedVersions:
+  "@esbuild-kit/core-utils": "3.3.2"
+  "@esbuild-kit/esm-loader": "2.6.5"

@@ -61,7 +61,7 @@ export async function sendTransactionalEmail(
   const payload: unknown = await response.json();
   const messageId =
     typeof payload === "object" && payload !== null && "messageId" in payload
-      ? String((payload as { messageId: unknown }).messageId)
+      ? String(payload.messageId)
       : "";
 
   return { success: true, value: { messageId } };

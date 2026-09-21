@@ -22,11 +22,12 @@ const deleteUserPhotoMock = vi.mocked(usersService.deleteUserPhoto);
  * requireAuth + uploadAvatarPhoto have run. Cast confined to the test boundary.
  */
 function createAuthedRequestStub(): Request {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  return {
+  const authedRequestFields = {
     user: { id: "usr_x" },
     file: { buffer: Buffer.from([0x00]) },
-  } as unknown as Request;
+  };
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+  return authedRequestFields as unknown as Request;
 }
 
 function createResponseStub(): {

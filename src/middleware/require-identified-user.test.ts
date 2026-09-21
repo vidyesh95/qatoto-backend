@@ -33,8 +33,7 @@ function createNextStub(): {
   readonly spy: ReturnType<typeof vi.fn>;
 } {
   const spy = vi.fn<(error?: unknown) => void>();
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  return { next: spy as unknown as NextFunction, spy };
+  return { next: spy, spy };
 }
 
 function createResponseStub(): {
