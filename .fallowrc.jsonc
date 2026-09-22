@@ -1,0 +1,25 @@
+{
+  // Confirmed false positives only. Anything else fallow reports is a real finding;
+  // in particular the three Store Phase 14c adapter seams stay reported on purpose,
+  // as a standing reminder that no insurer, laboratory or carrier is wired yet.
+  "usedClassMembers": [
+    {
+      // express-rate-limit calls these through its Store interface, never by name.
+      "implements": "Store",
+      "members": ["localKeys", "init", "increment", "decrement", "resetKey", "get", "shutdown"],
+    },
+  ],
+  "ignoreExports": [
+    {
+      // Loaded as `(await import(...)).databaseModuleMock()` / `.authModuleMock()` inside
+      // vi.mock factories, which fallow's import graph does not follow.
+      "file": "src/test-support/*-mock.ts",
+      "exports": ["databaseModuleMock", "authModuleMock"],
+    },
+    {
+      // rate-limit-store.test.ts re-imports the module per test via a dynamic import().
+      "file": "src/middleware/rate-limit-store.ts",
+      "exports": ["normalizeBucketKey", "MemoryRateLimitStore", "resetRateLimitStoreDegradation"],
+    },
+  ],
+}
