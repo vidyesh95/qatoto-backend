@@ -1634,6 +1634,14 @@ Minimum order is 100 paise.
   event says so. The dispatch job is sent **after the transaction commits**, by the function
   that owns it — a dispatch from inside would hand a worker a row it cannot see yet, and
   would survive a rollback that erased the row entirely.
+- **The memo identity is checked hourly, not only on demand.** `reconcileCommercePayments`
+  (`50 * * * *`) re-derives `funding + custody + released + refunded` from
+  `commerce_journal_line` for every order its pass touched — the payment outbox rows and
+  submitted transfers it already loaded — and logs any order whose memo accounts do not net
+  to zero, naming the rail and each non-zero balance. **It reports and never corrects:**
+  deciding which side is wrong is not something a sweep can do, so `reconciliation_suspense`
+  stays unposted. `scripts/verify-store-phase-14-constraints.ts` still checks every order
+  that has ever existed and remains the authority; this one only sees sooner.
 - **A milestone is asked once.** Completion runs again every time a later shipment or
   service engagement finishes on an order already `completed`, and the milestone is still
   `locked` until the provider answers, so the naive read re-selects it. A milestone

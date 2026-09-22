@@ -15,8 +15,12 @@ import {
   commerceRefund,
 } from "#src/db/schema.js";
 import { sendJob, JOB_NAMES, idempotencyKeyFor } from "#src/lib/jobs.js";
+import { logger } from "#src/lib/logger.js";
 import {
   appendCommerceJournalEntry,
+  deriveCommerceJournalBalances,
+  findMemoIdentityImbalance,
+  isMemorandumAccountKind,
   recognizeCommission,
   type CommerceJournalAccountKind,
   type CommerceJournalKind,
@@ -2052,9 +2056,16 @@ export async function confirmRazorpayOrderFromWebhook(
 export async function reconcileCommercePayments(asOf: Date): Promise<{
   readonly outboxDispatched: number;
   readonly transfersChecked: number;
+  readonly ordersChecked: number;
+  readonly memoIdentityFailures: number;
 }> {
+  const touchedOrderIds = new Set<string>();
   const pendingOutbox = await db
-    .select({ id: commercePaymentOutbox.id, attemptCount: commercePaymentOutbox.attemptCount })
+    .select({
+      id: commercePaymentOutbox.id,
+      attemptCount: commercePaymentOutbox.attemptCount,
+      orderId: commercePaymentOutbox.orderId,
+    })
     .from(commercePaymentOutbox)
     .where(
       and(
@@ -2069,6 +2080,7 @@ export async function reconcileCommercePayments(asOf: Date): Promise<{
   let outboxDispatched = 0;
   for (const row of pendingOutbox) {
     await enqueueOutboxDispatch(row.id, row.attemptCount);
+    touchedOrderIds.add(row.orderId);
     outboxDispatched += 1;
   }
 
@@ -2078,6 +2090,15 @@ export async function reconcileCommercePayments(asOf: Date): Promise<{
     .where(eq(commerceProviderTransfer.state, "submitted"))
     .orderBy(commerceProviderTransfer.updatedAt, commerceProviderTransfer.id)
     .limit(50);
+
+  /**
+   * Collected here rather than inside the adapter loop below: the balance check reads the
+   * journal and needs no provider, so an environment with no payment provider configured
+   * still gets its books checked.
+   */
+  for (const transfer of submittedTransfers) {
+    touchedOrderIds.add(transfer.orderId);
+  }
 
   const providerResolved = resolveCommercePaymentProvider();
   let transfersChecked = 0;
@@ -2131,5 +2152,72 @@ export async function reconcileCommercePayments(asOf: Date): Promise<{
     }
   }
 
-  return { outboxDispatched, transfersChecked };
+  const { ordersChecked, memoIdentityFailures } = await auditMemoIdentity(touchedOrderIds);
+
+  return { outboxDispatched, transfersChecked, ordersChecked, memoIdentityFailures };
+}
+
+/**
+ * Re-derives the memo identity for every order this pass touched, and reports the ones
+ * that do not hold (STORE_BACKEND_STRUCTURE.md §Phase 14).
+ *
+ * THE LEDGER IS RE-DERIVED, NEVER READ FROM A CACHE — there is no cached balance column
+ * in this schema and there is deliberately not going to be one. `commerce_journal_line`
+ * is the only source.
+ *
+ * IT REPORTS AND DOES NOT CORRECT. A reconciler that invented a balancing entry would be
+ * asserting it knows which side is wrong, which nothing here does; `reconciliation_suspense`
+ * stays unposted until a human decides. An imbalance is logged and the sweep moves to the
+ * next order — it is a finding, not a failure.
+ *
+ * A DATABASE ERROR, by contrast, propagates and fails the job, which is the right shape:
+ * the job retries, and the re-enqueue work above it has already happened and is idempotent.
+ * This audit runs LAST for exactly that reason — a books check that cannot read the books
+ * must not cost the sweep its stranded-row recovery.
+ *
+ * This is the hourly counterpart to `scripts/verify-store-phase-14-constraints.ts`, which
+ * checks every order that has ever existed and remains the authority. This one sees only
+ * what payment activity dragged past it, and sees it within the hour.
+ */
+async function auditMemoIdentity(orderIds: ReadonlySet<string>): Promise<{
+  readonly ordersChecked: number;
+  readonly memoIdentityFailures: number;
+}> {
+  if (orderIds.size === 0) return { ordersChecked: 0, memoIdentityFailures: 0 };
+
+  const orderRows = await db
+    .select({ id: commerceOrder.id, settlementRail: commerceOrder.settlementRail })
+    .from(commerceOrder)
+    .where(inArray(commerceOrder.id, [...orderIds]));
+  const railByOrderId = new Map(orderRows.map((order) => [order.id, order.settlementRail]));
+
+  let ordersChecked = 0;
+  let memoIdentityFailures = 0;
+  for (const orderId of orderIds) {
+    const balances = await deriveCommerceJournalBalances(orderId);
+    ordersChecked += 1;
+
+    const imbalanceInCents = findMemoIdentityImbalance(balances);
+    if (imbalanceInCents === 0n) continue;
+
+    memoIdentityFailures += 1;
+    /**
+     * Every figure is stringified: `JSON.stringify` THROWS on a bigint, and a logger call
+     * that dies is the worst possible way to report a ledger discrepancy.
+     */
+    logger.error("commerce journal memo identity does not hold", {
+      orderId,
+      settlementRail: railByOrderId.get(orderId) ?? "unknown",
+      imbalanceInCents: String(imbalanceInCents),
+      memoBalancesInCents: Object.fromEntries(
+        [...balances]
+          .filter(
+            ([accountKind, balance]) => isMemorandumAccountKind(accountKind) && balance !== 0n,
+          )
+          .map(([accountKind, balance]) => [accountKind, String(balance)]),
+      ),
+    });
+  }
+
+  return { ordersChecked, memoIdentityFailures };
 }

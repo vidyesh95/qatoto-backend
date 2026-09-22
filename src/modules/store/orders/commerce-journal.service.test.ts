@@ -9,8 +9,14 @@ stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
-const { COMMERCE_JOURNAL_ACCOUNT_KINDS, COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL, isMemorandumAccountKind } =
-  await import("#src/modules/store/orders/commerce-journal.service.js");
+const {
+  COMMERCE_JOURNAL_ACCOUNT_KINDS,
+  COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL,
+  findMemoIdentityImbalance,
+  isMemorandumAccountKind,
+} = await import("#src/modules/store/orders/commerce-journal.service.js");
+
+type CommerceJournalAccountKind = (typeof COMMERCE_JOURNAL_ACCOUNT_KINDS)[number];
 
 /**
  * The migration that defines `commerce_settlement_rail_account_guard`. Asserted to be the
@@ -182,5 +188,79 @@ describe("memorandum account classification", () => {
     for (const accountKind of settlementAccountKinds) {
       expect(isMemorandumAccountKind(accountKind), `${accountKind} must be off balance sheet`).toBe(true);
     }
+  });
+});
+
+/**
+ * `funding + custody + released + refunded = 0`, per order, on every rail. The live-data
+ * counterpart is `scripts/verify-store-phase-14-constraints.ts`; the hourly one is
+ * `reconcileCommercePayments`, which feeds this function `deriveCommerceJournalBalances`.
+ */
+describe("findMemoIdentityImbalance", () => {
+  const balancesOf = (
+    entries: readonly (readonly [CommerceJournalAccountKind, bigint])[],
+  ): ReadonlyMap<CommerceJournalAccountKind, bigint> => new Map(entries);
+
+  it("holds for a processor settlement, which funds and releases with no custody hop", () => {
+    expect(
+      findMemoIdentityImbalance(
+        balancesOf([
+          ["settlement_funding_memo", -50_000n],
+          ["settlement_released_memo", 50_000n],
+        ]),
+      ),
+    ).toBe(0n);
+  });
+
+  it("holds across an escrow order that funded, partly released and partly refunded", () => {
+    expect(
+      findMemoIdentityImbalance(
+        balancesOf([
+          ["settlement_funding_memo", -120_000n],
+          ["settlement_custody_memo", 20_000n],
+          ["settlement_released_memo", 70_000n],
+          ["settlement_refunded_memo", 30_000n],
+        ]),
+      ),
+    ).toBe(0n);
+  });
+
+  it("returns the exact delta when gross value was recorded moving somewhere it did not", () => {
+    expect(
+      findMemoIdentityImbalance(
+        balancesOf([
+          ["settlement_funding_memo", -50_000n],
+          ["settlement_released_memo", 49_999n],
+        ]),
+      ),
+    ).toBe(-1n);
+  });
+
+  /**
+   * An order with no settlement entries at all — `direct_offline`, or one that never got
+   * paid. `deriveCommerceJournalBalances` seeds only the six frozen kinds, so the memo
+   * accounts are simply absent, and absent must read as zero rather than as a violation.
+   */
+  it("treats an order with no memo lines as balanced", () => {
+    expect(findMemoIdentityImbalance(balancesOf([]))).toBe(0n);
+    expect(
+      findMemoIdentityImbalance(balancesOf(COMMERCE_JOURNAL_ACCOUNT_KINDS.map((accountKind) => [accountKind, 0n]))),
+    ).toBe(0n);
+  });
+
+  /**
+   * Real money is not part of the identity. Summing commission into it would be exactly
+   * the mixture `commerce_journal_account_memorandum_ck` exists to prevent.
+   */
+  it("ignores the real-money accounts entirely", () => {
+    expect(
+      findMemoIdentityImbalance(
+        balancesOf([
+          ["platform_fee_receivable", 2_500n],
+          ["platform_fee_earned", -2_500n],
+          ["platform_fee_cash", 900n],
+        ]),
+      ),
+    ).toBe(0n);
   });
 });

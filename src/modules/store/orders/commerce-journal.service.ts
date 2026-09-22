@@ -442,6 +442,36 @@ export async function deriveCommerceJournalBalances(
 }
 
 /**
+ * The memo identity, as a number: `funding + custody + released + refunded`, which the
+ * schema (`commerce_journal_account`'s header) requires to be zero for every order on
+ * every rail. A non-zero result means gross value was recorded moving somewhere it did
+ * not, and every settlement figure derived from that order is then fiction.
+ *
+ * REAL MONEY IS NOT PART OF THE IDENTITY. The three `platform_fee_*` accounts are Qatoto's
+ * own commission and net to zero on their own terms; folding them in here would be the
+ * exact sum `commerce_journal_account_memorandum_ck` exists to forbid.
+ *
+ * A KIND ABSENT FROM THE MAP READS AS ZERO, deliberately: `deriveCommerceJournalBalances`
+ * seeds only `COMMERCE_JOURNAL_ACCOUNT_KINDS` — the six frozen kinds — so a memo account
+ * appears there only once a line has been posted to it. An order with no settlement
+ * entries balances trivially, which is the correct answer for it.
+ *
+ * IT COUNTS PENDING ENTRIES TOO, because `deriveCommerceJournalBalances` does not filter
+ * on `settlement` and neither does the whole-table check in
+ * `scripts/verify-store-phase-14-constraints.ts`. Nothing writes a `pending` entry today;
+ * if something starts, both see it and both are meant to.
+ */
+export function findMemoIdentityImbalance(
+  balances: ReadonlyMap<CommerceJournalAccountKind, bigint>,
+): bigint {
+  let imbalanceInCents = 0n;
+  for (const [accountKind, balanceInCents] of balances) {
+    if (isMemorandumAccountKind(accountKind)) imbalanceInCents += balanceInCents;
+  }
+  return imbalanceInCents;
+}
+
+/**
  * Accrues Qatoto's commission as a RECEIVABLE against recognized revenue.
  *
  * A receivable and not a deduction, because no rail here lets Qatoto take its fee out of money it
