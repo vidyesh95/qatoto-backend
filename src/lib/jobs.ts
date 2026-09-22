@@ -55,16 +55,6 @@ export const JOB_NAMES = {
   sweepDisputeWindows: "sweep-dispute-windows",
   recomputeEquitySnapshotTick: "recompute-equity-snapshot-tick",
   recomputeEquitySnapshot: "recompute-equity-snapshot",
-  // THESE THREE ARE RETIRED (§7A.6). Nothing enqueues them, no worker subscribes to them
-  // and no cron fires them: escrow left this domain, `createPledge` records a commitment
-  // and stops, and there is no provider balance left to reconcile against. The names
-  // survive so migration 0016's queue rows stay explicable and an operator can drain
-  // anything still in flight by hand. **Do not re-bind them** — putting Qatoto back in
-  // the position of holding someone else's money is a licensing decision taken with
-  // counsel, not a code change.
-  submitProviderTransfer: "submit-provider-transfer",
-  reconcileEscrowLedgerTick: "reconcile-escrow-ledger-tick",
-  reconcileEscrowLedger: "reconcile-escrow-ledger",
   recomputeInvestorConfidenceTick: "recompute-investor-confidence-tick",
   recomputeInvestorConfidence: "recompute-investor-confidence",
   // §7A's two jobs. Both are DAILY ticks, including the close — a period is a calendar
@@ -317,14 +307,6 @@ const VerificationStagePayloadSchema = z.object({ runId: z.uuid() }).strict();
 const RecomputeEquitySnapshotPayloadSchema = z
   .object({ asOf: AsOfSchema, projectId: z.uuid().nullable() })
   .strict();
-
-/**
- * The transfer id and NOTHING else — the same rule as every payload above, and it matters
- * most here. The amount, the currency, the destination and the idempotency key are all
- * read from the row inside the handler, so there is no field an operator with a queue
- * dashboard could edit to move a different sum to a different place.
- */
-const SubmitProviderTransferPayloadSchema = z.object({ transferId: z.uuid() }).strict();
 
 /** Same `projectId: nullable` shape as the equity snapshot, for the same reason. */
 const ProjectScopedAsOfPayloadSchema = z
@@ -802,44 +784,6 @@ export const JOB_DEFINITIONS = {
       ...RECOMPUTE_RETRY,
       expireInSeconds: 1_800,
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeEquitySnapshot),
-    },
-  },
-  [JOB_NAMES.submitProviderTransfer]: {
-    name: JOB_NAMES.submitProviderTransfer,
-    payloadSchema: SubmitProviderTransferPayloadSchema,
-    queueOptions: {
-      policy: "standard",
-      ...STANDARD_RETRY,
-      // Generous, because against a real card network this is an outbound HTTPS call.
-      // Against the internal adapter it is a status flip; the ceiling costs nothing and
-      // does not have to change when Appendix A3 lands.
-      expireInSeconds: 120,
-      deadLetter: deadLetterNameFor(JOB_NAMES.submitProviderTransfer),
-    },
-  },
-  [JOB_NAMES.reconcileEscrowLedgerTick]: {
-    name: JOB_NAMES.reconcileEscrowLedgerTick,
-    payloadSchema: TickPayloadSchema,
-    queueOptions: {
-      policy: "exclusive",
-      retryLimit: 2,
-      retryDelay: 60,
-      retryBackoff: true,
-      retryDelayMax: 600,
-      expireInSeconds: 60,
-      deadLetter: deadLetterNameFor(JOB_NAMES.reconcileEscrowLedgerTick),
-    },
-  },
-  [JOB_NAMES.reconcileEscrowLedger]: {
-    name: JOB_NAMES.reconcileEscrowLedger,
-    payloadSchema: ProjectScopedAsOfPayloadSchema,
-    queueOptions: {
-      // `singleton` — one reconciliation at a time. Two concurrent runs would both see a
-      // discrepancy, both post a suspense entry for it, and double-count the delta.
-      policy: "singleton",
-      ...RECOMPUTE_RETRY,
-      expireInSeconds: 1_800,
-      deadLetter: deadLetterNameFor(JOB_NAMES.reconcileEscrowLedger),
     },
   },
   [JOB_NAMES.recomputeInvestorConfidenceTick]: {
@@ -2049,9 +1993,6 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.sweepDisputeWindows]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.recomputeEquitySnapshotTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeEquitySnapshot]: RecomputeEquitySnapshotPayloadSchema,
-  [JOB_NAMES.submitProviderTransfer]: SubmitProviderTransferPayloadSchema,
-  [JOB_NAMES.reconcileEscrowLedgerTick]: TickPayloadSchema,
-  [JOB_NAMES.reconcileEscrowLedger]: ProjectScopedAsOfPayloadSchema,
   [JOB_NAMES.recomputeInvestorConfidenceTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeInvestorConfidence]: ProjectScopedAsOfPayloadSchema,
   [JOB_NAMES.closeCompensationPeriodTick]: TickPayloadSchema,
@@ -2184,13 +2125,6 @@ export const idempotencyKeyFor = {
   sweepDisputeWindows: (asOfIso: string): string => `${JOB_NAMES.sweepDisputeWindows}:${asOfIso}`,
   recomputeEquitySnapshot: (asOfIso: string, projectId: string | null): string =>
     `${JOB_NAMES.recomputeEquitySnapshot}:${asOfIso}:${projectId ?? "all"}`,
-  // Keyed on the TRANSFER alone. A retried pledge request that somehow reaches the enqueue
-  // twice must submit once — this is the one job in the registry where a duplicate would
-  // cost money once a real card network is behind it.
-  submitProviderTransfer: (transferId: string): string =>
-    `${JOB_NAMES.submitProviderTransfer}:${transferId}`,
-  reconcileEscrowLedger: (asOfIso: string, projectId: string | null): string =>
-    `${JOB_NAMES.reconcileEscrowLedger}:${asOfIso}:${projectId ?? "all"}`,
   recomputeInvestorConfidence: (asOfIso: string, projectId: string | null): string =>
     `${JOB_NAMES.recomputeInvestorConfidence}:${asOfIso}:${projectId ?? "all"}`,
   // Keyed on `(asOf, project)` like the other recomputes. A double cron fire inside the

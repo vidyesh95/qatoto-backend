@@ -732,12 +732,11 @@ async function startWorker(): Promise<void> {
 
   // §7 — funding.
   //
-  // THREE QUEUES ARE DELIBERATELY UNBOUND HERE: `submit-provider-transfer`,
-  // `reconcile-escrow-ledger` and its tick. Escrow has left this domain (§7A.6) and
-  // nothing enqueues them any more — `createPledge` records a commitment and stops. Their
-  // handlers and queue definitions survive so migration 0016's rows stay explicable and
-  // an operator can still drain anything left in flight by hand, but no worker subscribes
-  // and no cron fires.
+  // Escrow has left this domain (§7A.6): `createPledge` records a commitment and stops.
+  // The `submit-provider-transfer` and `reconcile-escrow-ledger` queues, their tick and
+  // their handlers are deleted; any stale pg-boss rows from before are inert. **Do not
+  // bring them back** — putting Qatoto back in the position of holding someone else's
+  // money is a licensing decision taken with counsel, not a code change.
   await boss.work(
     JOB_NAMES.recomputeInvestorConfidenceTick,
     workOptions,

@@ -798,11 +798,10 @@ transaction — which is also why the cron count (9) is lower than the queue cou
 | `resweep-unverified-daily-logs`                                                    | `20 4 * * *` via tick | Re-verify daily logs left unverified by deferred verification (§8) — the REPAIR half of that trade. `revalidate-youtube-embeds` cannot cover it: that job re-checks links already known good, this one retries links that never verified at all |
 | `recompute-program-stats`                                                          | ⏳ not built          | Project Immortal stats (§10)                                                              |
 
-`reconcile-escrow-ledger`, its tick and `submit-provider-transfer` are **unbound**, along with the
-surface they served. Nothing in this domain has a provider balance to disagree with any more, and
-nothing enqueues a transfer because a pledge is a commitment. The queue names survive so migration
-0016's rows stay explicable and an operator can drain anything left in flight; no worker subscribes
-and no cron fires.
+`reconcile-escrow-ledger`, its tick and `submit-provider-transfer` are **deleted**, along with the
+surface they served: handlers, queue definitions, payload schemas and idempotency keys. Nothing in
+this domain has a provider balance to disagree with any more, and nothing enqueues a transfer
+because a pledge is a commitment. Any pg-boss rows left from migration 0016's era are inert.
 
 **The two §7A jobs are DAILY ticks, including the close, and that is the design rather than an
 accident.** §7A.3
@@ -1380,7 +1379,7 @@ route under `/escrow/*`, `/escrow-releases/*` and `/provider-transfers/*`. Also 
 mount it would have needed.
 
 The tables and services still exist in the running backend (migration 0016, `escrow.service.ts` and
-six siblings), but **nothing routes to them and no worker binds their jobs** — see §11g. This
+six siblings), but **nothing routes to them and their jobs are deleted** — see §11g. This
 contract does not describe them, and no new code may call them.
 
 ---
@@ -3217,7 +3216,7 @@ Backed by `funding.routes.ts`, `funding.controller.ts` / `funding-error-response
 
 **These nine paths return `404`.** The handlers are deleted, the routes are unmounted, and the
 three jobs behind them (`submit-provider-transfer`, `reconcile-escrow-ledger` and its tick) are
-unbound with no cron. The design behind them is preserved in
+deleted. The design behind them is preserved in
 [ESCROW_LEDGER_STRUCTURE.md](ESCROW_LEDGER_STRUCTURE.md) for the commerce domain.
 
 ```text
@@ -3234,8 +3233,8 @@ router and no raw-body mount anywhere in `src/app.ts`, and there must not be one
 **The tables and services are still on disk and in the database**, uncalled: `escrow_account`,
 `escrow_journal_entry`, `escrow_posting`, `escrow_release`, `provider_transfer`,
 `provider_webhook_event`, `reconciliation_discrepancy`, migration 0016 and seven services. Dropping
-them would discard rows the append-only triggers exist to protect, and the queue names survive so
-an operator can drain anything left in flight. **Do not re-bind them.** Putting Qatoto back in the
+them would discard rows the append-only triggers exist to protect. The queues that served them are
+deleted. **Do not bring them back.** Putting Qatoto back in the
 position of holding someone else's money is a licensing decision taken with counsel (§7A.6), not a
 code change.
 
@@ -4874,9 +4873,9 @@ Route, Cashfree Easy Split, Stripe Connect, Mangopay) rather than custodying any
 
 **What is still in the backend, and what is not.** The routes are **gone** — all nine 404, the
 handlers are deleted, and `submit-provider-transfer`, `reconcile-escrow-ledger` and its tick are
-unbound with no cron. Migration 0016, its seven tables and the services
+deleted too. Migration 0016, its seven tables and the services
 (`escrow.service.ts`, `escrow-settlement.service.ts`, `escrow-releases.service.ts`,
-`escrow-provider-adapter.service.ts` and the two jobs) are still on disk and in the database,
+`escrow-provider-adapter.service.ts`) are still on disk and in the database,
 **uncalled**.
 
 They stay because dropping the tables would discard rows the append-only triggers exist to protect,
