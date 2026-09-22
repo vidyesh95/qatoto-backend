@@ -1634,6 +1634,13 @@ Minimum order is 100 paise.
   event says so. The dispatch job is sent **after the transaction commits**, by the function
   that owns it — a dispatch from inside would hand a worker a row it cannot see yet, and
   would survive a rollback that erased the row entirely.
+- **A milestone is asked once.** Completion runs again every time a later shipment or
+  service engagement finishes on an order already `completed`, and the milestone is still
+  `locked` until the provider answers, so the naive read re-selects it. A milestone
+  carrying an `escrow_request_release` outbox row in `pending`, `processing` or `completed`
+  is therefore skipped; `failed` is not, because a command that never reached the provider
+  may legitimately be raised again. The minted idempotency key cannot cover this — it is
+  fresh per command, so the outbox's unique index would see two unrelated rows.
 - **Shipped and hardened (`0082`–`0089`).** See `docs/STORE_PHASE_14_ROLLOUT.md`. Five things
   the specification did not anticipate. **`ensureCommerceJournalAccounts` was a live
   blocker** — it created all six legacy accounts unconditionally, which the new rail guard

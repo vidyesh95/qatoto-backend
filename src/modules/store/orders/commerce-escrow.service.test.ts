@@ -38,7 +38,7 @@ type FakeMilestone = {
 
 /**
  * A drizzle transaction handle is not constructible by hand, so the seam is cast — the
- * stub models only the two chains the function under test walks.
+ * stub models only the three chains the function under test walks.
  *
  * ⚠️ IT DOES NOT INTERPRET THE QUERY. `milestones` comes back whatever the `state` filter
  * says, so the `locked | verification_pending` selection is asserted by construction here,
@@ -47,14 +47,21 @@ type FakeMilestone = {
 function createFakeTransaction(
   session: FakeEscrowSession | null,
   milestones: readonly FakeMilestone[],
+  milestoneIdsWithLiveRelease: readonly string[] = [],
 ): TransactionParam {
   const transactionStub = {
     select: () => ({
       from: () => ({
-        where: () => ({
-          for: (_mode: string) => Promise.resolve(session ? [session] : []),
-          orderBy: () => Promise.resolve(milestones),
-        }),
+        // Awaited directly by the live-release lookup; `.for` / `.orderBy` serve the
+        // session and milestone reads.
+        where: () =>
+          Object.assign(
+            Promise.resolve(milestoneIdsWithLiveRelease.map((escrowMilestoneId) => ({ escrowMilestoneId }))),
+            {
+              for: (_mode: string) => Promise.resolve(session ? [session] : []),
+              orderBy: () => Promise.resolve(milestones),
+            },
+          ),
       }),
     }),
   };
@@ -174,6 +181,36 @@ describe("requestEscrowReleaseForCompletedOrder", () => {
         },
       }),
     );
+  });
+
+  it("skips a milestone that already has a live release command in the outbox", async () => {
+    enqueueConnectorCommandMock.mockReset();
+    enqueueConnectorCommandMock.mockResolvedValue({ outboxId: "outbox_rel_second" });
+
+    const fakeTx = createFakeTransaction(
+      {
+        id: "escrow_session_reentry",
+        orderId: "ord_reentry",
+        providerId: "escrow_provider_1",
+        fundedAt: new Date("2026-09-01T10:00:00Z"),
+      },
+      [
+        {
+          id: "milestone_already_requested",
+          sessionId: "escrow_session_reentry",
+          state: "locked",
+          sequence: 1,
+          amountInCents: 30000,
+          currency: "USD",
+        },
+      ],
+      ["milestone_already_requested"],
+    );
+
+    const result = await requestEscrowReleaseForCompletedOrder(fakeTx, "ord_reentry");
+
+    expect(result).toEqual({ requested: [] });
+    expect(enqueueConnectorCommandMock).not.toHaveBeenCalled();
   });
 });
 

@@ -1004,8 +1004,34 @@ export async function requestEscrowReleaseForCompletedOrder(
     )
     .orderBy(commerceEscrowMilestone.sequence);
 
+  /**
+   * ASKING TWICE IS NOT FREE, and the milestone's own state cannot stop it. A milestone
+   * leaves `locked` only when the provider's event arrives, so every completion pass in
+   * the meantime re-selects it — and completion runs again whenever a later shipment or
+   * service engagement finishes on an order already `completed`. The idempotency key is
+   * freshly minted per command, so the outbox's unique index cannot absorb the repeat
+   * either; two rows would be two release instructions for one sum of money.
+   *
+   * `failed` is deliberately absent: a command that never reached the provider is one
+   * this path may legitimately raise again.
+   */
+  const alreadyRequested = await transaction
+    .select({ escrowMilestoneId: commerceConnectorOutbox.escrowMilestoneId })
+    .from(commerceConnectorOutbox)
+    .where(
+      and(
+        eq(commerceConnectorOutbox.escrowSessionId, session.id),
+        eq(commerceConnectorOutbox.kind, "escrow_request_release"),
+        inArray(commerceConnectorOutbox.state, ["pending", "processing", "completed"]),
+      ),
+    );
+  const milestoneIdsWithLiveRelease = new Set(
+    alreadyRequested.map((outboxRow) => outboxRow.escrowMilestoneId),
+  );
+
   const outboxIds: string[] = [];
   for (const milestone of releasable) {
+    if (milestoneIdsWithLiveRelease.has(milestone.id)) continue;
     const enqueued = await enqueueConnectorCommand(transaction, {
       providerId: session.providerId,
       connectorKind: "external_escrow",
