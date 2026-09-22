@@ -1623,6 +1623,17 @@ Minimum order is 100 paise.
 - **14b** supplies the malware scanner A18 was missing, without which a product carrying a
   required upload slot could not be checked out by anybody. **14c** adds the four remaining
   §3 adapter seams. **14d** retires `product.seller_id` and the dead `store_pathway_item`.
+- **Release is requested when the order completes.** `issueCompletionsForOrder` calls
+  `requestEscrowReleaseForCompletedOrder` once the order's aggregate state is `completed` —
+  not `partially_completed`, because a part-finished order must not release. It enqueues one
+  `escrow_request_release` per milestone still in `locked` or `verification_pending` and
+  returns the outbox ids; an order with no funded escrow session enqueues nothing, which is
+  how every non-escrow rail falls out. **Asking is not moving.** The request is an
+  instruction to the provider; `applyNormalizedEscrowEvent` remains the only function that
+  moves a settlement balance, and the milestone leaves `locked` only when the provider's
+  event says so. The dispatch job is sent **after the transaction commits**, by the function
+  that owns it — a dispatch from inside would hand a worker a row it cannot see yet, and
+  would survive a rollback that erased the row entirely.
 - **Shipped and hardened (`0082`–`0089`).** See `docs/STORE_PHASE_14_ROLLOUT.md`. Five things
   the specification did not anticipate. **`ensureCommerceJournalAccounts` was a live
   blocker** — it created all six legacy accounts unconditionally, which the new rail guard

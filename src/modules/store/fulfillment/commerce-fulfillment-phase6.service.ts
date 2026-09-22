@@ -51,6 +51,7 @@ import type {
   TypedDeliverableResultSchema,
 } from "#src/modules/store/fulfillment/commerce-fulfillment.schemas.js";
 import { issueCompletionsForOrder } from "#src/modules/store/orders/commerce-completion.service.js";
+import { scheduleEscrowCommands } from "#src/modules/store/orders/commerce-escrow.service.js";
 import {
   memberCanOperateBuyer,
   memberCanOperateCounterparty,
@@ -793,14 +794,16 @@ export async function executeShipmentLegCommand(
         .set({ state: "in_transit", version: shipment.version + 1, updatedAt: now })
         .where(eq(commerceShipment.id, shipment.id));
     }
+    let escrowOutboxIds: readonly string[] = [];
     if (nextState === "completed" || nextState === "cancelled") {
-      await reconcileShipmentStateFromLegs(
+      const reconcileOutcome = await reconcileShipmentStateFromLegs(
         transaction,
         shipment.id,
         now,
         actor.memberId,
         actor.actorUserId,
       );
+      escrowOutboxIds = reconcileOutcome.escrowOutboxIds;
     }
 
     const projection = projectShipmentLeg(updated);
@@ -832,7 +835,7 @@ export async function executeShipmentLegCommand(
       occurredAt: now,
     });
 
-    return { status: "ok" as const, projection };
+    return { status: "ok" as const, projection, escrowOutboxIds };
   });
 
   switch (outcome.status) {
@@ -858,8 +861,10 @@ export async function executeShipmentLegCommand(
       return { success: false, error: outcome.error };
     case "replay":
       return { success: true, value: outcome.body };
-    case "ok":
+    case "ok": {
+      await scheduleEscrowCommands(outcome.escrowOutboxIds);
       return { success: true, value: outcome.projection };
+    }
     default: {
       const exhaustiveCheck: never = outcome;
       throw new Error(`Unhandled leg command outcome: ${JSON.stringify(exhaustiveCheck)}`);
@@ -1966,9 +1971,16 @@ export async function executeServiceEngagementCommand(
     if (!updated) {
       return { status: "version_conflict" as const, currentVersion: engagement.version };
     }
+    let escrowOutboxIds: readonly string[] = [];
     await reconcileOrderAggregateState(transaction, engagement.orderId, now);
     if (nextState === "completed") {
-      await issueCompletionsForOrder(transaction, engagement.orderId, now, actor.actorUserId);
+      const completionOutcome = await issueCompletionsForOrder(
+        transaction,
+        engagement.orderId,
+        now,
+        actor.actorUserId,
+      );
+      escrowOutboxIds = completionOutcome.escrowReleaseOutboxIds;
     }
 
     const projection = projectEngagement(updated);
@@ -2000,7 +2012,7 @@ export async function executeServiceEngagementCommand(
       occurredAt: now,
     });
 
-    return { status: "ok" as const, projection };
+    return { status: "ok" as const, projection, escrowOutboxIds };
   });
 
   switch (outcome.status) {
@@ -2040,8 +2052,10 @@ export async function executeServiceEngagementCommand(
     }
     case "replay":
       return { success: true, value: outcome.body };
-    case "ok":
+    case "ok": {
+      await scheduleEscrowCommands(outcome.escrowOutboxIds);
       return { success: true, value: outcome.projection };
+    }
     default: {
       const exhaustiveCheck: never = outcome;
       throw new Error(`Unhandled engagement command outcome: ${JSON.stringify(exhaustiveCheck)}`);

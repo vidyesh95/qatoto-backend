@@ -156,14 +156,14 @@ export async function finalizeShipmentState(
   targetState: ShipmentTerminalState,
   occurredAt: Date,
   actorUserId: string | null,
-): Promise<boolean> {
+): Promise<{ readonly applied: boolean; readonly escrowOutboxIds: readonly string[] }> {
   const [shipment] = await transaction
     .select()
     .from(commerceShipment)
     .where(eq(commerceShipment.id, shipmentId))
     .for("update");
   if (!shipment || shipment.state === "delivered" || shipment.state === "cancelled") {
-    return false;
+    return { applied: false, escrowOutboxIds: [] };
   }
 
   const [order] = await transaction
@@ -201,9 +201,14 @@ export async function finalizeShipmentState(
     .where(eq(commerceShipment.id, shipment.id));
 
   await reconcileOrderAggregateState(transaction, order.id, occurredAt);
-  await issueCompletionsForOrder(transaction, order.id, occurredAt, actorUserId);
+  const completionOutcome = await issueCompletionsForOrder(
+    transaction,
+    order.id,
+    occurredAt,
+    actorUserId,
+  );
 
-  return true;
+  return { applied: true, escrowOutboxIds: completionOutcome.escrowReleaseOutboxIds };
 }
 
 export async function reconcileShipmentStateFromLegs(
@@ -212,17 +217,17 @@ export async function reconcileShipmentStateFromLegs(
   occurredAt: Date,
   createdByMemberId: string,
   actorUserId: string,
-): Promise<void> {
+): Promise<{ readonly escrowOutboxIds: readonly string[] }> {
   const shipmentLegs = await transaction
     .select({ state: commerceShipmentLeg.state })
     .from(commerceShipmentLeg)
     .where(eq(commerceShipmentLeg.shipmentId, shipmentId));
-  if (shipmentLegs.length === 0) return;
+  if (shipmentLegs.length === 0) return { escrowOutboxIds: [] };
 
   const targetState = deriveShipmentTerminalState(
     shipmentLegs.map((shipmentLeg) => shipmentLeg.state),
   );
-  if (targetState === null) return;
+  if (targetState === null) return { escrowOutboxIds: [] };
 
   const finalized = await finalizeShipmentState(
     transaction,
@@ -231,7 +236,7 @@ export async function reconcileShipmentStateFromLegs(
     occurredAt,
     actorUserId,
   );
-  if (!finalized) return;
+  if (!finalized.applied) return { escrowOutboxIds: [] };
 
   await transaction.insert(commerceShipmentEvent).values({
     shipmentId,
@@ -243,4 +248,6 @@ export async function reconcileShipmentStateFromLegs(
         : "All shipment legs were cancelled.",
     createdByMemberId,
   });
+
+  return { escrowOutboxIds: finalized.escrowOutboxIds };
 }

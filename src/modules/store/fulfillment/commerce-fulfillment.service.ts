@@ -36,6 +36,7 @@ import {
 } from "#src/modules/store/fulfillment/commerce-fulfillment-reconciliation.service.js";
 import type { ShipmentLegInput } from "#src/modules/store/fulfillment/commerce-fulfillment.schemas.js";
 import { issueCompletionsForOrder } from "#src/modules/store/orders/commerce-completion.service.js";
+import { scheduleEscrowCommands } from "#src/modules/store/orders/commerce-escrow.service.js";
 import {
   memberCanOperateBuyer,
   memberCanOperateCounterparty,
@@ -554,25 +555,28 @@ export async function appendShipmentEvent(
       createdByMemberId: actor.memberId,
     });
 
+    let escrowOutboxIds: readonly string[] = [];
     switch (input.eventKind) {
       case "delivered": {
-        await finalizeShipmentState(
+        const finalized = await finalizeShipmentState(
           transaction,
           shipment.id,
           "delivered",
           recordedAt,
           actor.actorUserId,
         );
+        escrowOutboxIds = finalized.escrowOutboxIds;
         break;
       }
       case "cancelled": {
-        await finalizeShipmentState(
+        const finalized = await finalizeShipmentState(
           transaction,
           shipment.id,
           "cancelled",
           recordedAt,
           actor.actorUserId,
         );
+        escrowOutboxIds = finalized.escrowOutboxIds;
         break;
       }
       case "picked_up":
@@ -612,7 +616,7 @@ export async function appendShipmentEvent(
       occurredAt: recordedAt,
     });
 
-    return { status: "recorded" as const, shipmentId: shipment.id };
+    return { status: "recorded" as const, shipmentId: shipment.id, escrowOutboxIds };
   });
 
   switch (outcome.status) {
@@ -623,6 +627,7 @@ export async function appendShipmentEvent(
     case "conflict":
       return { success: false, error: { type: "CONFLICT", message: outcome.message } };
     case "recorded": {
+      await scheduleEscrowCommands(outcome.escrowOutboxIds);
       const projection = await loadShipmentProjection(outcome.shipmentId);
       if (!projection) throw new Error("Shipment vanished immediately after an event append.");
       return { success: true, value: projection };
@@ -1056,9 +1061,16 @@ export async function transitionServiceEngagement(
       occurredAt: now,
       createdByMemberId: actor.memberId,
     });
+    let escrowOutboxIds: readonly string[] = [];
     await reconcileOrderAggregateState(transaction, engagement.orderId, now);
     if (input.targetState === "completed") {
-      await issueCompletionsForOrder(transaction, engagement.orderId, now, actor.actorUserId);
+      const completionOutcome = await issueCompletionsForOrder(
+        transaction,
+        engagement.orderId,
+        now,
+        actor.actorUserId,
+      );
+      escrowOutboxIds = completionOutcome.escrowReleaseOutboxIds;
     }
 
     await appendAuditOrThrow(transaction, {
@@ -1077,7 +1089,7 @@ export async function transitionServiceEngagement(
       occurredAt: now,
     });
 
-    return { status: "transitioned" as const, engagement: updatedEngagement };
+    return { status: "transitioned" as const, engagement: updatedEngagement, escrowOutboxIds };
   });
 
   switch (outcome.status) {
@@ -1091,8 +1103,10 @@ export async function transitionServiceEngagement(
       return { success: false, error: { type: "VALIDATION_FAILED", message: outcome.message } };
     case "conflict":
       return { success: false, error: { type: "CONFLICT", message: outcome.message } };
-    case "transitioned":
+    case "transitioned": {
+      await scheduleEscrowCommands(outcome.escrowOutboxIds);
       return { success: true, value: projectEngagement(outcome.engagement) };
+    }
     default: {
       const exhaustiveCheck: never = outcome;
       throw new Error(

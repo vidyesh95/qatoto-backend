@@ -10,6 +10,7 @@ import {
   commerceReview,
   commerceServiceEngagement,
 } from "#src/db/schema.js";
+import { requestEscrowReleaseForCompletedOrder } from "#src/modules/store/orders/commerce-escrow.service.js";
 import { mintSampleCreditsForOrder } from "#src/modules/store/orders/commerce-sample-credit.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
@@ -73,7 +74,7 @@ export async function issueCompletionsForOrder(
   orderId: string,
   occurredAt: Date,
   actorUserId: string | null,
-): Promise<void> {
+): Promise<{ readonly escrowReleaseOutboxIds: readonly string[] }> {
   const [order] = await transaction
     .select()
     .from(commerceOrder)
@@ -83,10 +84,10 @@ export async function issueCompletionsForOrder(
     throw new Error("Order vanished while issuing commerce completions.");
   }
   if (order.buyerOrganizationId === order.counterpartyOrganizationId) {
-    return;
+    return { escrowReleaseOutboxIds: [] };
   }
   if (!isOrderEligibleForCompletion(order.state)) {
-    return;
+    return { escrowReleaseOutboxIds: [] };
   }
 
   /**
@@ -201,6 +202,14 @@ export async function issueCompletionsForOrder(
       occurredAt,
     });
   }
+
+  let escrowReleaseOutboxIds: readonly string[] = [];
+  if (order.state === "completed") {
+    const releaseResult = await requestEscrowReleaseForCompletedOrder(transaction, order.id);
+    escrowReleaseOutboxIds = releaseResult.requested;
+  }
+
+  return { escrowReleaseOutboxIds };
 }
 
 /**
