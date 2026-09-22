@@ -20,7 +20,7 @@ import { z } from "zod";
  * default is how a rename ends up resetting a playlist's visibility. Same reasoning as
  * videos.controller.ts and products.controller.ts.
  */
-export const playlistFieldShapes = {
+const playlistFieldShapes = {
   title: z.string().trim().min(1).max(150),
   description: z.string().trim().max(5000),
   visibility: z.enum(["public", "unlisted", "private"]),

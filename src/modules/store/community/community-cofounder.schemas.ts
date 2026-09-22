@@ -14,23 +14,14 @@ import { z } from "zod";
  * parse unchanged. Only the composer needs an edit.
  */
 
-export const COFOUNDER_CONTRIBUTION_KINDS = [
-  "capital",
-  "expertise",
-  "influence",
-  "operations",
-] as const;
+const COFOUNDER_CONTRIBUTION_KINDS = ["capital", "expertise", "influence", "operations"] as const;
 
-export const COFOUNDER_COMMITMENT_LEVELS = ["full_time", "part_time", "advisory"] as const;
+const COFOUNDER_COMMITMENT_LEVELS = ["full_time", "part_time", "advisory"] as const;
 
-export const COFOUNDER_ENGAGEMENT_STATES = [
-  "open_to_intros",
-  "in_conversation",
-  "not_looking",
-] as const;
+const COFOUNDER_ENGAGEMENT_STATES = ["open_to_intros", "in_conversation", "not_looking"] as const;
 
-export const CofounderContributionKindSchema = z.enum(COFOUNDER_CONTRIBUTION_KINDS);
-export const CofounderCommitmentLevelSchema = z.enum(COFOUNDER_COMMITMENT_LEVELS);
+const CofounderContributionKindSchema = z.enum(COFOUNDER_CONTRIBUTION_KINDS);
+const CofounderCommitmentLevelSchema = z.enum(COFOUNDER_COMMITMENT_LEVELS);
 
 /**
  * NO `sort` KEY AND NO `state` KEY, and both absences are rules.

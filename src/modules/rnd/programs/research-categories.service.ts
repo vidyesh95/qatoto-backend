@@ -44,7 +44,7 @@ const CATEGORY_VIEW_COLUMNS = {
  * duplicate. That is the opposite of `research_project.slug`, which auto-suffixes —
  * two projects may legitimately share a name, two categories may not.
  */
-export function slugifyCategoryLabel(label: string): string {
+function slugifyCategoryLabel(label: string): string {
   return label
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
@@ -105,15 +105,6 @@ export async function createResearchCategory(
     }
     throw error;
   }
-}
-
-/** Resolves a category id, used by the project create/update gate. */
-export async function findCategoryById(categoryId: string): Promise<ResearchCategoryView | null> {
-  const [row] = await db
-    .select(CATEGORY_VIEW_COLUMNS)
-    .from(researchCategory)
-    .where(eq(researchCategory.id, categoryId));
-  return row ?? null;
 }
 
 /**

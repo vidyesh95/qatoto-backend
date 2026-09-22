@@ -54,10 +54,10 @@ export type ResearchProgramBranchError =
  * navigate on one canvas. Bounding it here means the CHECK is never the thing a user
  * meets.
  */
-export const MAX_BRANCH_DEPTH = 8;
+const MAX_BRANCH_DEPTH = 8;
 
 /** How many nodes one program's tree may hold, and therefore one read may return. */
-export const MAX_BRANCH_TREE_SIZE = 500;
+const MAX_BRANCH_TREE_SIZE = 500;
 
 /**
  * One branch as read back to a client.

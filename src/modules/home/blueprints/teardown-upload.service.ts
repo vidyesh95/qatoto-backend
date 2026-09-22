@@ -45,7 +45,7 @@ import type { Result } from "#src/types/index.js";
  */
 
 /** Eight documents plus eight fabrication files is the submission's own ceiling; this matches it. */
-export const MAX_UNCLAIMED_TEARDOWN_UPLOADS_PER_AUTHOR = 16;
+const MAX_UNCLAIMED_TEARDOWN_UPLOADS_PER_AUTHOR = 16;
 
 export type TeardownUploadError =
   | { readonly type: "TEARDOWN_UPLOAD_REJECTED"; readonly reason: TeardownFileValidationError }

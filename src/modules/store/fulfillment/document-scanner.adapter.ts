@@ -24,7 +24,7 @@ import type { Result } from "#src/types/index.js";
  * would be invisible right up until somebody attached a payload a seller then opened.
  */
 
-export const DOCUMENT_SCANNER_NAMES = ["fake", "clamav"] as const;
+const DOCUMENT_SCANNER_NAMES = ["fake", "clamav"] as const;
 
 export type DocumentScannerName = (typeof DOCUMENT_SCANNER_NAMES)[number];
 

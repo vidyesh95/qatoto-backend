@@ -198,7 +198,7 @@ export function computeConsignmentMeasurement(
 }
 
 /** Loads the geometry the seller declared for these products, then measures the consignment. */
-export async function measureConsignmentForLines(
+async function measureConsignmentForLines(
   lines: readonly ConsignmentLineInput[],
 ): Promise<ConsignmentMeasurement> {
   if (lines.length === 0) {

@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
@@ -52,16 +50,11 @@ export type CommerceConnectorError =
  * Retries mirror the payment outbox: bounded attempts, exponential backoff, and a terminal
  * `failed` state that stops the loop rather than retrying a rejected command forever.
  */
-export const MAX_CONNECTOR_OUTBOX_ATTEMPTS = 8;
+const MAX_CONNECTOR_OUTBOX_ATTEMPTS = 8;
 const CONNECTOR_OUTBOX_BACKOFF_BASE_MS = 5_000;
 
-export function computeConnectorBackoffMs(attemptCount: number): number {
+function computeConnectorBackoffMs(attemptCount: number): number {
   return CONNECTOR_OUTBOX_BACKOFF_BASE_MS * 2 ** Math.min(attemptCount, 6);
-}
-
-/** Ours, minted before the call, so a retried command is recognisably the same command. */
-export function mintConnectorIdempotencyKey(kind: ConnectorCommandKind): string {
-  return `${kind}_${randomUUID()}`;
 }
 
 // ---------------------------------------------------------------------------

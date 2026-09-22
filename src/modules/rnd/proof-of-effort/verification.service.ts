@@ -18,7 +18,6 @@ import { idempotencyKeyFor, JOB_NAMES, PermanentJobError, sendJob } from "#src/l
 import { fetchAuthoredCommits } from "#src/modules/rnd/github-integration.js";
 import { decryptToken } from "#src/modules/rnd/token-encryption.js";
 import {
-  decideClaimVerdict,
   VERIFICATION_STEP_KINDS,
   type VerificationStepKind,
   type VerificationStepStatus,
@@ -57,7 +56,7 @@ import {
  */
 
 /** Bumped when a heuristic below changes, so a re-run is distinguishable from a re-read. */
-export const VERIFICATION_ANALYZER_VERSION = "poe-analyzer-v1";
+const VERIFICATION_ANALYZER_VERSION = "poe-analyzer-v1";
 
 /**
  * A claim is flagged for time theft when the artifacts cluster into a window far shorter
@@ -799,11 +798,6 @@ export async function loadStepOutcomes(runId: string): Promise<
     .from(verificationStep)
     .where(eq(verificationStep.runId, runId))
     .orderBy(asc(verificationStep.stepOrder));
-}
-
-/** The verdict a run's steps currently imply, without writing anything. */
-export async function peekVerdict(runId: string): Promise<ReturnType<typeof decideClaimVerdict>> {
-  return decideClaimVerdict(await loadStepOutcomes(runId));
 }
 
 /**

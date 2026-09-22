@@ -78,12 +78,8 @@ export const ListProviderFreightRateCardsQuerySchema = z
     cursor: PageCursorSchema,
   })
   .strict();
-export type ListProviderFreightRateCardsQuery = z.infer<
-  typeof ListProviderFreightRateCardsQuerySchema
->;
-
 /** §19.11 step 4, as a parse-time refusal rather than prose. */
-export function hasZeroWeightFloorBand(
+function hasZeroWeightFloorBand(
   breaks: readonly { readonly minBillableWeightGrams: number }[],
 ): boolean {
   return breaks.some((band) => band.minBillableWeightGrams === 0);
@@ -130,8 +126,6 @@ export const ProviderCreateFreightRateCardSchema = z
       "One band must start at 0 g, or every consignment lighter than the smallest band prices nothing and the lane publishes no option at all.",
     path: ["breaks"],
   });
-export type ProviderCreateFreightRateCardBody = z.infer<typeof ProviderCreateFreightRateCardSchema>;
-
 /**
  * `PATCH /commerce/provider/freight-rate-cards/:rateCardId` — §19.12's "withdraw / retire only".
  *
@@ -154,8 +148,6 @@ export const ProviderUpdateFreightRateCardSchema = z.discriminatedUnion("intent"
     })
     .strict(),
 ]);
-export type ProviderUpdateFreightRateCardBody = z.infer<typeof ProviderUpdateFreightRateCardSchema>;
-
 /**
  * `PATCH .../breaks` — a WHOLE-SET replace, never a per-band edit, because breaks form a ladder
  * and changing one band's floor silently reprices the weights its neighbours covered.
@@ -172,6 +164,3 @@ export const ProviderReplaceFreightRateBreaksSchema = z
       "One band must start at 0 g, or every consignment lighter than the smallest band prices nothing and the lane publishes no option at all.",
     path: ["breaks"],
   });
-export type ProviderReplaceFreightRateBreaksBody = z.infer<
-  typeof ProviderReplaceFreightRateBreaksSchema
->;

@@ -81,7 +81,7 @@ export interface MyTeardownView {
  * carries no cursor, which is the other half of the same decision. The day somebody passes this
  * number is the day this becomes a keyset page and the frontend grows a cursor.
  */
-export const MY_TEARDOWN_LIST_LIMIT = 200;
+const MY_TEARDOWN_LIST_LIMIT = 200;
 
 /**
  * The normalised unit-name predicate, run IN SQL.

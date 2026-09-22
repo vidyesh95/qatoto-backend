@@ -34,7 +34,7 @@ import { z } from "zod";
 import type { Result } from "#src/types/index.js";
 
 /** The v1 data endpoint. Overridable per call so a test never resolves a real host. */
-export const COMTRADE_BASE_URL = "https://comtradeapi.un.org/data/v1/get";
+const COMTRADE_BASE_URL = "https://comtradeapi.un.org/data/v1/get";
 
 /**
  * Generous, because a full year of one country's HS6 lines is a ~4 MB response the API

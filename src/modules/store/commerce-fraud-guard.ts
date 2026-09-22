@@ -95,10 +95,10 @@ export type FraudGuardVerdict =
     };
 
 /** Conversion below this fraction of the category average satisfies clause (b). */
-export const CONVERSION_COLLAPSE_RATIO = 0.2;
+const CONVERSION_COLLAPSE_RATIO = 0.2;
 
 /** Either bound below this satisfies clause (c). */
-export const THIN_DEMAND_THRESHOLD = 10;
+const THIN_DEMAND_THRESHOLD = 10;
 
 /**
  * What a fired switch does.
@@ -107,7 +107,7 @@ export const THIN_DEMAND_THRESHOLD = 10;
  * a human in the loop, not remove a seller from the market. Quarantine remains available
  * for a moderator acting deliberately.
  */
-export const DEFAULT_AUTOMATIC_ACTION: RankingEnforcementAction = "review_queued";
+const DEFAULT_AUTOMATIC_ACTION: RankingEnforcementAction = "review_queued";
 
 /**
  * Evaluates all four clauses and reports which held, which did not, and which could not be

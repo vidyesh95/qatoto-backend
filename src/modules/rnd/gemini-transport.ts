@@ -22,8 +22,8 @@ import type { Result } from "#src/types/index.js";
 
 const GENERATIVE_LANGUAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
-export const DEFAULT_TIMEOUT_MS = 180_000;
-export const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
+const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
 
 export type FetchImplementation = typeof globalThis.fetch;
 

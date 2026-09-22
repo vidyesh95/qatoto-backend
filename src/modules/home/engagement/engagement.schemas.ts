@@ -36,7 +36,7 @@ export const CreatorIdParamSchema = z
   .strict();
 
 /** Byte-identical to `videoFeedSourceEnum`'s labels. snake_case on the wire (§5.4). */
-export const FEED_SOURCES = [
+const FEED_SOURCES = [
   "feed_recommended",
   "feed_explore",
   "feed_spotlight",
@@ -47,7 +47,7 @@ export const FEED_SOURCES = [
 ] as const;
 
 /** 12 hours — §3.3's bound, restated at the boundary so the service never sees worse. */
-export const MAXIMUM_VIDEO_SECONDS = 43_200;
+const MAXIMUM_VIDEO_SECONDS = 43_200;
 
 /**
  * SECONDS ARRIVE AS FLOATS AND LEAVE AS INTEGERS.
@@ -59,7 +59,7 @@ export const MAXIMUM_VIDEO_SECONDS = 43_200;
  *
  * The bounds double as the NaN/Infinity guard — every one of those fails a comparison.
  */
-export const WatchSecondsSchema = z
+const WatchSecondsSchema = z
   .number()
   .min(0)
   .max(MAXIMUM_VIDEO_SECONDS)

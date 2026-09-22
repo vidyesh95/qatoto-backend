@@ -52,7 +52,7 @@ import type { ApiResponse } from "#src/types/index.js";
  * payloads: a description, problem statement, solution summary and evidence notes in one
  * body, where a 5,000-character field is ~5 kb in ASCII and up to 15 kb in UTF-8.
  */
-export const MAX_JSON_BODY_BYTES = 128 * 1024;
+const MAX_JSON_BODY_BYTES = 128 * 1024;
 
 /** Short bodies: notes, decisions, titles, single-field patches. */
 export const COMPACT_JSON_BODY_BYTES = 16 * 1024;

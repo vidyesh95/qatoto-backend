@@ -40,7 +40,7 @@ export const DEFAULT_FLOOR_RATE_BASIS_POINTS = 5_000;
  *
  * 30 means a product needs 30 observations before its own rate carries half the weight.
  */
-export const SMOOTHING_CONSTANT = 30;
+const SMOOTHING_CONSTANT = 30;
 
 export type CategoryPriorLevel = "category" | "parent_category" | "global" | "default_floor";
 

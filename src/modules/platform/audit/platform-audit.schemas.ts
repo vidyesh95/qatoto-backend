@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-export const PLATFORM_AUDIT_EVENT_KINDS = [
+const PLATFORM_AUDIT_EVENT_KINDS = [
   "taxonomy_category_approved",
   "taxonomy_category_rejected",
   "cluster_merge_approved",

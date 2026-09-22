@@ -86,6 +86,4 @@ export const SellerQuestionInboxQuerySchema = z
   })
   .strict();
 
-export type SellerQuestionInboxQuery = z.infer<typeof SellerQuestionInboxQuerySchema>;
-
 export const EmptyObjectSchema = z.object({}).strict();

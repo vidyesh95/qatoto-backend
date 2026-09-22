@@ -27,12 +27,11 @@ import type { StoreFactoriesError } from "#src/modules/store/storefront/store-fa
 
 export {
   firstParam,
-  optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
 
-export function mapStoreFactoriesErrorToResponse(error: StoreFactoriesError): {
+function mapStoreFactoriesErrorToResponse(error: StoreFactoriesError): {
   readonly statusCode: number;
   readonly message: string;
 } {
@@ -53,7 +52,7 @@ export function respondStoreFactoriesError(res: Response, error: StoreFactoriesE
   res.status(statusCode).json({ status: "error", statusCode, message });
 }
 
-export function mapManufacturingInquiryErrorToResponse(error: CommerceManufacturingInquiryError): {
+function mapManufacturingInquiryErrorToResponse(error: CommerceManufacturingInquiryError): {
   readonly statusCode: number;
   readonly message: string;
 } {

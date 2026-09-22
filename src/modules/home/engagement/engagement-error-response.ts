@@ -62,7 +62,7 @@ export type EngagementDomainError =
   | CreatorSubscriptionError
   | FeedPreferenceError;
 
-export function mapEngagementErrorToResponse(error: EngagementDomainError): {
+function mapEngagementErrorToResponse(error: EngagementDomainError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

@@ -25,7 +25,7 @@ const CurrencyCodeSchema = z
   .trim()
   .regex(/^[A-Z]{3}$/);
 
-export const ShipmentLegInputSchema = z
+const ShipmentLegInputSchema = z
   .object({
     sequence: z.number().int().min(0),
     mode: z.enum(["air", "sea", "land", "rail"]),
@@ -65,8 +65,6 @@ export const CreateShipmentWithLegsSchema = z
     legs: z.array(ShipmentLegInputSchema).max(50).optional(),
   })
   .strict();
-
-export type CreateShipmentWithLegsInput = z.infer<typeof CreateShipmentWithLegsSchema>;
 
 /**
  * `POST /commerce/shipments/:shipmentId/legs` — add legs to a shipment that already exists.
@@ -270,7 +268,7 @@ const FreightDetailSchema = z
   })
   .strict();
 
-export const EngagementExecutionDetailSchema = z
+const EngagementExecutionDetailSchema = z
   .discriminatedUnion("kind", [
     FreightDetailSchema,
     CustomsDetailSchema,
@@ -534,7 +532,7 @@ export const EngagementIdParamsSchema = z
   .object({ engagementId: z.string().trim().min(1).max(200) })
   .strict();
 
-export const ListQuerySchema = z
+const ListQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).optional(),
     cursor: z.string().trim().min(1).max(500).optional(),

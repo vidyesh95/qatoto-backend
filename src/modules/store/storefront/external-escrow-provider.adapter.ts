@@ -31,7 +31,7 @@ import type { Result } from "#src/types/index.js";
  * rather than being a database enum. Adding a provider is then an INSERT plus an adapter
  * rather than a migration, while the switch that dispatches on it stays exhaustive.
  */
-export const EXTERNAL_ESCROW_PROVIDER_NAMES = ["fake", "escrow_com", "shieldpay"] as const;
+const EXTERNAL_ESCROW_PROVIDER_NAMES = ["fake", "escrow_com", "shieldpay"] as const;
 
 export type ExternalEscrowProviderName = (typeof EXTERNAL_ESCROW_PROVIDER_NAMES)[number];
 
@@ -187,7 +187,7 @@ export interface EscrowMilestoneResult {
  * quietly adding a field to a release event should be a loud rejection we investigate, not
  * a field we ignore while moving the money the rest of the payload describes.
  */
-export const NormalizedEscrowEventSchema = z.discriminatedUnion("kind", [
+const NormalizedEscrowEventSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("session_state_changed"),

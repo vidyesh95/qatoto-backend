@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-export const PROJECT_STAGES = [
+const PROJECT_STAGES = [
   "market_research",
   "problem_validation",
   "team_building",
@@ -23,14 +23,14 @@ export const PROJECT_STAGES = [
   "go_to_market",
 ] as const;
 
-export const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
+const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
 
-export const PROJECT_STATUSES = ["draft", "active", "archived"] as const;
+const PROJECT_STATUSES = ["draft", "active", "archived"] as const;
 
 /** Basis points, 10000 = 100%. Integer only — no float ever touches equity (§4c). */
-export const BasisPointsSchema = z.number().int().min(0).max(10_000);
+const BasisPointsSchema = z.number().int().min(0).max(10_000);
 
-export const ProjectFieldsSchema = z.object({
+const ProjectFieldsSchema = z.object({
   name: z.string().trim().min(1).max(120),
   tagline: z.string().trim().min(1).max(200),
   categoryId: z.string().trim().min(1),
@@ -46,7 +46,7 @@ export const ProjectFieldsSchema = z.object({
 });
 
 /** Rejects an inverted band inside ONE payload; the service re-checks across PATCHes. */
-export const equityBandIsOrdered = (value: {
+const equityBandIsOrdered = (value: {
   readonly offeredEquityBasisPointsMin?: number | undefined;
   readonly offeredEquityBasisPointsMax?: number | undefined;
 }): boolean =>
@@ -54,7 +54,7 @@ export const equityBandIsOrdered = (value: {
   value.offeredEquityBasisPointsMax === undefined ||
   value.offeredEquityBasisPointsMin <= value.offeredEquityBasisPointsMax;
 
-export const EQUITY_BAND_MESSAGE = {
+const EQUITY_BAND_MESSAGE = {
   message: "The minimum offered equity cannot exceed the maximum.",
   path: ["offeredEquityBasisPointsMin"],
 };
@@ -128,7 +128,3 @@ export const ListProjectVideosQuerySchema = z
 export const LinkMarketInsightSchema = z.object({ insightId: z.uuid() }).strict();
 
 export const InsightIdParamSchema = z.object({ insightId: z.uuid() }).strict();
-
-export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;
-
-export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>;

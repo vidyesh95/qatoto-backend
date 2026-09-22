@@ -24,7 +24,7 @@ import { isYoutubeVideoUrl } from "#src/lib/youtube.js";
  * the client as an `href`. The protocol allowlist is what makes that safe. Normalizing
  * through `URL` afterwards means one stored spelling per link rather than three.
  */
-export const HttpUrlSchema = z
+const HttpUrlSchema = z
   .url({ protocol: /^https?$/ })
   .max(2048)
   .transform((rawUrl) => new URL(rawUrl).toString());
@@ -39,14 +39,14 @@ export const HttpUrlSchema = z
  * browser runs. Proof that the video EXISTS is a separate layer (the oEmbed call in the
  * service); do not collapse the two.
  */
-export const YoutubeUrlSchema = z
+const YoutubeUrlSchema = z
   .string()
   .trim()
   .min(1)
   .max(2048)
   .refine(isYoutubeVideoUrl, "Not a YouTube video link");
 
-export const ChapterSchema = z
+const ChapterSchema = z
   .object({
     startSeconds: z.number().int().min(0),
     title: z.string().trim().min(1).max(120),
@@ -65,7 +65,7 @@ export const ChapterSchema = z
  *
  * Never derive a PATCH schema from a schema carrying `.default()`.
  */
-export const videoFieldShapes = {
+const videoFieldShapes = {
   youtubeUrl: YoutubeUrlSchema,
   title: z.string().trim().min(1).max(100),
   description: z.string().trim().max(5000),

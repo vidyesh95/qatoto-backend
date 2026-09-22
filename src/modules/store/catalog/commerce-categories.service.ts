@@ -47,7 +47,7 @@ import type { Result } from "#src/types/index.js";
  * Where a listing waits while the category it asked for is being reviewed. Seeded by
  * migration 0098 with a fixed id, so this is a constant rather than a lookup.
  */
-export const MISC_CATEGORY_ID = "commerce_category_misc";
+const MISC_CATEGORY_ID = "commerce_category_misc";
 
 /**
  * How many roots the store home rail renders.

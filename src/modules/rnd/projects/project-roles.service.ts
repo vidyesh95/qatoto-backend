@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -552,7 +552,7 @@ async function attachCompensation(
   }));
 }
 
-export async function findOpenRoleById(roleId: string): Promise<OpenRoleView | null> {
+async function findOpenRoleById(roleId: string): Promise<OpenRoleView | null> {
   const [row] = await db
     .select(OPEN_ROLE_VIEW_COLUMNS)
     .from(projectOpenRole)
@@ -729,31 +729,4 @@ export async function listOpenRolesAcrossProjects(
     .where(predicate);
 
   return { rows: await attachCompensation(rows), total: totals?.value ?? 0 };
-}
-
-/** Resolves a role that must belong to this project. Used by the apply gate. */
-export async function findProjectOpenRole(
-  projectId: string,
-  roleId: string,
-): Promise<typeof projectOpenRole.$inferSelect | null> {
-  const [row] = await db
-    .select()
-    .from(projectOpenRole)
-    .where(and(eq(projectOpenRole.id, roleId), eq(projectOpenRole.projectId, projectId)));
-  return row ?? null;
-}
-
-/** Roles with at least one seat left, for the "still hiring" facet. */
-export async function countOpenSeats(projectId: string): Promise<number> {
-  const [totals] = await db
-    .select({ value: count() })
-    .from(projectOpenRole)
-    .where(
-      and(
-        eq(projectOpenRole.projectId, projectId),
-        eq(projectOpenRole.status, "open"),
-        gte(projectOpenRole.slotsTotal, 1),
-      ),
-    );
-  return totals?.value ?? 0;
 }

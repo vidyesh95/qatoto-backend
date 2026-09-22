@@ -42,7 +42,7 @@ import type { Result } from "#src/types/index.js";
  */
 
 /** How long a deletion stays cancellable. The frontend's copy commits to this number. */
-export const ACCOUNT_DELETION_GRACE_PERIOD_DAYS = 30;
+const ACCOUNT_DELETION_GRACE_PERIOD_DAYS = 30;
 
 const MILLISECONDS_PER_DAY = 86_400_000;
 

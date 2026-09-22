@@ -94,7 +94,7 @@ export function percentageFundedBasisPoints(
  * accepting a pledge, and in the `/funding/deals` filter — four places, because a type
  * that is merely hidden in one of them is still reachable from `curl`.
  */
-export function isRoundTypeEnabled(roundType: FundingRoundType): boolean {
+function isRoundTypeEnabled(roundType: FundingRoundType): boolean {
   return config.ENABLED_FUNDING_ROUND_TYPES.includes(roundType);
 }
 

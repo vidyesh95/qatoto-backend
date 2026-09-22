@@ -298,7 +298,7 @@ export async function unlinkProjectFromCluster(
  */
 const CENTROID_PUBLIC_GRID_MICRODEGREES = 1_000;
 
-export function quantizePublishedMicrodegrees(microdegrees: number): number {
+function quantizePublishedMicrodegrees(microdegrees: number): number {
   const half = CENTROID_PUBLIC_GRID_MICRODEGREES / 2;
   const shifted = microdegrees >= 0 ? microdegrees + half : microdegrees - half;
   return shifted - (shifted % CENTROID_PUBLIC_GRID_MICRODEGREES);

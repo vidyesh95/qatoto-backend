@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-export const ProviderKindSchema = z.enum([
+const ProviderKindSchema = z.enum([
   "freight_forwarder",
   "logistics_operator",
   "customs_broker",
@@ -37,7 +37,7 @@ export const UpsertProfileSchema = z
 
 export const AddKindLinkSchema = z.object({ providerKind: ProviderKindSchema }).strict();
 
-export const FreightDetailSchema = z
+const FreightDetailSchema = z
   .object({
     kind: z.enum(["freight_forwarder", "logistics_operator"]),
     transportModes: z
@@ -50,7 +50,7 @@ export const FreightDetailSchema = z
   })
   .strict();
 
-export const CustomsDetailSchema = z
+const CustomsDetailSchema = z
   .object({
     kind: z.literal("customs_broker"),
     jurisdictions: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -60,7 +60,7 @@ export const CustomsDetailSchema = z
   })
   .strict();
 
-export const InsuranceDetailSchema = z
+const InsuranceDetailSchema = z
   .object({
     kind: z.literal("insurance_provider"),
     cargoCoverageClasses: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -75,7 +75,7 @@ export const InsuranceDetailSchema = z
   })
   .strict();
 
-export const InspectionDetailSchema = z
+const InspectionDetailSchema = z
   .object({
     kind: z.literal("inspection_agency"),
     preProduction: z.boolean(),
@@ -85,7 +85,7 @@ export const InspectionDetailSchema = z
   })
   .strict();
 
-export const TestingDetailSchema = z
+const TestingDetailSchema = z
   .object({
     kind: z.literal("testing_certification_lab"),
     standards: z.array(z.string().trim().min(1).max(120)).max(50),
@@ -94,7 +94,7 @@ export const TestingDetailSchema = z
   })
   .strict();
 
-export const MarketingDetailSchema = z
+const MarketingDetailSchema = z
   .object({
     kind: z.literal("marketing_agency"),
     channels: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -104,7 +104,7 @@ export const MarketingDetailSchema = z
   })
   .strict();
 
-export const WarehouseDetailSchema = z
+const WarehouseDetailSchema = z
   .object({
     kind: z.literal("warehouse_provider"),
     storageTypes: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -114,7 +114,7 @@ export const WarehouseDetailSchema = z
   })
   .strict();
 
-export const FxDetailSchema = z
+const FxDetailSchema = z
   .object({
     kind: z.literal("foreign_exchange_facilitator"),
     currencyPairs: z.array(z.string().trim().min(1).max(20)).max(100),
@@ -129,7 +129,7 @@ export const FxDetailSchema = z
   })
   .strict();
 
-export const OfferingDetailSchema = z.discriminatedUnion("kind", [
+const OfferingDetailSchema = z.discriminatedUnion("kind", [
   FreightDetailSchema,
   CustomsDetailSchema,
   InsuranceDetailSchema,
@@ -180,7 +180,7 @@ export const UpdateOfferingSchema = z
   })
   .strict();
 
-export const CoverageSchema = z
+const CoverageSchema = z
   .object({
     originCountryCode: z
       .string()

@@ -195,7 +195,7 @@ const VERBS_BY_ARM: Readonly<Record<BlueprintEngagementArm, readonly BlueprintTo
   case_study: ["like"],
 };
 
-export function armOffersVerb(arm: BlueprintEngagementArm, verb: BlueprintToggleVerb): boolean {
+function armOffersVerb(arm: BlueprintEngagementArm, verb: BlueprintToggleVerb): boolean {
   return VERBS_BY_ARM[arm].includes(verb);
 }
 

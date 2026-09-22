@@ -10,10 +10,10 @@ import { z } from "zod";
  */
 
 /** 12 fixtures at 8 per page is two pages, so the paging control renders. */
-export const TEARDOWN_INDEX_DEFAULT_LIMIT = 8;
+const TEARDOWN_INDEX_DEFAULT_LIMIT = 8;
 
 /** Matches the frontend's `BlueprintDifficulty`, which is why these are the wire values. */
-export const TEARDOWN_DIFFICULTIES = ["beginner", "intermediate", "advanced"] as const;
+const TEARDOWN_DIFFICULTIES = ["beginner", "intermediate", "advanced"] as const;
 
 /**
  * `?media=` — what the teardown published, which is its own filter rather than a tag.
@@ -21,7 +21,7 @@ export const TEARDOWN_DIFFICULTIES = ["beginner", "intermediate", "advanced"] as
  * Mirrors the frontend's `TEARDOWN_MEDIA_FILTERS`. Each value becomes a predicate over a column or
  * a child table in the read service; none is a stored boolean.
  */
-export const TEARDOWN_MEDIA_FILTERS = ["assembly", "video", "documents"] as const;
+const TEARDOWN_MEDIA_FILTERS = ["assembly", "video", "documents"] as const;
 export type TeardownMediaFilter = (typeof TEARDOWN_MEDIA_FILTERS)[number];
 
 /**
@@ -43,8 +43,6 @@ export const PublicTeardownIndexQuerySchema = z
     cursor: z.string().min(1).max(200).optional(),
   })
   .strip();
-
-export type PublicTeardownIndexQuery = z.infer<typeof PublicTeardownIndexQuerySchema>;
 
 /**
  * A teardown address, shaped exactly as `teardown_slug_ck` stores one.

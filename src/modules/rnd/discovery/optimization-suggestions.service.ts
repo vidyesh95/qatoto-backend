@@ -24,8 +24,8 @@ import type { Result } from "#src/types/index.js";
  */
 
 /** The provenance a maintainer-authored suggestion carries. */
-export const HUMAN_AUTHORED_MODEL = "human";
-export const HUMAN_AUTHORED_PROMPT_VERSION = "human-v1";
+const HUMAN_AUTHORED_MODEL = "human";
+const HUMAN_AUTHORED_PROMPT_VERSION = "human-v1";
 
 export type SuggestionStatus = (typeof optimizationSuggestion.$inferSelect)["status"];
 
@@ -132,7 +132,7 @@ export async function listSuggestions(
   return views.filter((view): view is SuggestionView => view !== null);
 }
 
-export async function findSuggestion(
+async function findSuggestion(
   projectId: string,
   suggestionId: string,
 ): Promise<SuggestionView | null> {

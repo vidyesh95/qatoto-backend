@@ -4,7 +4,6 @@ import type { ImportIntelligenceError } from "#src/modules/rnd/import-intelligen
 
 export {
   firstParam,
-  optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
@@ -35,7 +34,7 @@ export {
  * The exhaustive `switch` with a `never` default is what makes a new error variant a
  * COMPILE error rather than an unhandled 500.
  */
-export function mapImportIntelligenceErrorToResponse(error: ImportIntelligenceError): {
+function mapImportIntelligenceErrorToResponse(error: ImportIntelligenceError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

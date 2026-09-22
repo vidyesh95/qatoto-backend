@@ -413,7 +413,7 @@ export interface PutVarianceInput {
  * — a clamp that is looser than its constraint is a 500 waiting for a data-entry accident,
  * and a clamp that is tighter silently truncates values the column would have accepted.
  */
-export const VARIANCE_BASIS_POINTS_BOUND = 1_000_000;
+const VARIANCE_BASIS_POINTS_BOUND = 1_000_000;
 
 /**
  * Computes the signed schedule variance in basis points.

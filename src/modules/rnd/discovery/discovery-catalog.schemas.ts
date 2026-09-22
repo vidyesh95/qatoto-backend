@@ -30,7 +30,7 @@ export const ListRegionsQuerySchema = z
   .object({ countryCode: z.string().trim().length(2).toUpperCase().optional() })
   .strict();
 
-export const MARKET_INSIGHT_STAT_KINDS = [
+const MARKET_INSIGHT_STAT_KINDS = [
   "percent_change",
   "percent_level",
   "absolute_count",

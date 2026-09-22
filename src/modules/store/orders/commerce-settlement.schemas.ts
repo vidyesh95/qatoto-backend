@@ -16,13 +16,13 @@ import { z } from "zod";
 
 export const EmptyObjectSchema = z.object({}).strict();
 
-export const IdentifierSchema = z.string().trim().min(1).max(200);
+const IdentifierSchema = z.string().trim().min(1).max(200);
 
 export const ThreadIdParamsSchema = z.object({ threadId: IdentifierSchema }).strict();
 
 export const AgreementIdParamsSchema = z.object({ agreementId: IdentifierSchema }).strict();
 
-export const CurrencySchema = z
+const CurrencySchema = z
   .string()
   .trim()
   .regex(/^[A-Z]{3}$/, "Currency must be an ISO-4217 alpha-3 code");
@@ -31,7 +31,7 @@ export const CurrencySchema = z
  * A milestone plan is capped at twenty. An escrow with a hundred tranches is not a payment
  * schedule anyone administers; it is a way to make a release queue unreviewable.
  */
-export const MilestoneSchema = z
+const MilestoneSchema = z
   .object({
     sequence: z.number().int().positive().max(20),
     milestoneKind: z.enum(["deposit", "shipment", "inspection", "delivery", "final"]),

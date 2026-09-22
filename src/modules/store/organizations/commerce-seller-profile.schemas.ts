@@ -33,7 +33,7 @@ export const CertificationParamsSchema = z.object({ certificationId: z.string().
  * added to the database and forgotten here is rejected at the boundary and nobody can ever
  * create one — the failure mode the address-kind schema documents from Phase 11.
  */
-export const BusinessTypeSchema = z.enum([
+const BusinessTypeSchema = z.enum([
   "manufacturer",
   "trading_company",
   "manufacturer_trading",
@@ -41,19 +41,13 @@ export const BusinessTypeSchema = z.enum([
   "distributor",
 ]);
 
-export const VisitPolicySchema = z.enum(["welcome", "by_appointment", "not_available"]);
+const VisitPolicySchema = z.enum(["welcome", "by_appointment", "not_available"]);
 
-export const MediaKindSchema = z.enum([
-  "factory",
-  "office",
-  "warehouse",
-  "production_line",
-  "showcase",
-]);
+const MediaKindSchema = z.enum(["factory", "office", "warehouse", "production_line", "showcase"]);
 
-export const SiteAccessModeSchema = z.enum(["road", "sea", "air", "rail"]);
+const SiteAccessModeSchema = z.enum(["road", "sea", "air", "rail"]);
 
-export const CapabilityKindSchema = z.enum([
+const CapabilityKindSchema = z.enum([
   "oem",
   "odm",
   "customization",
@@ -71,7 +65,7 @@ export const CapabilityKindSchema = z.enum([
  * a fuzzy match would put a factory into a compliance filter it never claimed. Omitting it
  * costs the seller only filterability; the certificate still renders on the detail page.
  */
-export const CertificationStandardCodeSchema = z.enum([
+const CertificationStandardCodeSchema = z.enum([
   "iso_9001",
   "iso_14001",
   "bsci",
@@ -88,7 +82,7 @@ export const CertificationStandardCodeSchema = z.enum([
  * Postgres refuses it in a constraint — so the real rule lives here, where a clock is
  * readable.
  */
-export const YearFoundedSchema = z
+const YearFoundedSchema = z
   .number()
   .int()
   .min(1800)
@@ -97,7 +91,7 @@ export const YearFoundedSchema = z
     "A founding year cannot be in the future.",
   );
 
-export const nonNegativeCount = z.number().int().min(0).max(10_000_000);
+const nonNegativeCount = z.number().int().min(0).max(10_000_000);
 
 export const UpsertSellerProfileSchema = z
   .object({
@@ -186,9 +180,7 @@ export const AddOrganizationMediaSchema = z
   })
   .strict();
 
-export const IsoDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected an ISO date (YYYY-MM-DD).");
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected an ISO date (YYYY-MM-DD).");
 
 export const SubmitCertificationSchema = z
   .object({

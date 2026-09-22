@@ -50,7 +50,7 @@ export type ProofOfEffortDomainError =
   | PieBakeError
   | OptimizationSuggestionError;
 
-export function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError): {
+function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

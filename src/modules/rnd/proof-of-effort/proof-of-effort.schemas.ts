@@ -14,9 +14,7 @@
  */
 import { z } from "zod";
 
-export const IsoDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
 
 /**
  * Money in, as a decimal STRING rather than a JS number.
@@ -24,7 +22,7 @@ export const IsoDateSchema = z
  * A rate is a `bigint` cent value; `z.number()` would silently lose precision past 2^53
  * and, worse, would accept `120.5` for a value that must be an integer number of cents.
  */
-export const CentsStringSchema = z
+const CentsStringSchema = z
   .string()
   .regex(/^\d{1,15}$/, "Must be a whole number of cents, as a string");
 

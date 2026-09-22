@@ -1,10 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
-import { artifactEvidence, effortClaim, integrationConsentGrant } from "#src/db/schema.js";
+import { artifactEvidence, integrationConsentGrant } from "#src/db/schema.js";
 import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import {
@@ -74,7 +74,7 @@ export interface IntegrationGrantView {
  * resulting token with. Storing an org-scoped token in plaintext because one env var was
  * forgotten is the failure this function exists to prevent.
  */
-export function isProviderConfigured(provider: IntegrationProvider): boolean {
+function isProviderConfigured(provider: IntegrationProvider): boolean {
   if (!isTokenEncryptionConfigured()) {
     return false;
   }
@@ -133,7 +133,7 @@ interface OauthStateClaims {
  * what makes "this callback belongs to that member, on that project" a fact the server can
  * check rather than infer.
  */
-export function signOauthState(claims: Omit<OauthStateClaims, "nonce" | "issuedAtMs">): string {
+function signOauthState(claims: Omit<OauthStateClaims, "nonce" | "issuedAtMs">): string {
   const secret = config.INTEGRATION_TOKEN_SECRET ?? config.BETTER_AUTH_SECRET;
   const payload: OauthStateClaims = {
     ...claims,
@@ -559,36 +559,4 @@ export async function revokeGrant(
       evidenceRowsPurged: outcome.evidenceRowsPurged,
     },
   };
-}
-
-/**
- * How many of a member's claims a revocation would make un-re-verifiable.
- *
- * Read BEFORE revoking, so the confirmation a member sees is the real number rather than a
- * guess (§9.10). Counts distinct claims, not evidence rows: forty commits on one claim is
- * one claim at risk, and saying "40" would misrepresent the consequence.
- */
-export async function countClaimsAtRisk(
-  projectId: string,
-  memberId: string,
-  provider: IntegrationProvider,
-): Promise<number> {
-  const [row] = await db
-    .select({ claimCount: sql<number>`count(DISTINCT ${artifactEvidence.claimId})::int` })
-    .from(artifactEvidence)
-    .innerJoin(
-      integrationConsentGrant,
-      eq(integrationConsentGrant.id, artifactEvidence.consentGrantId),
-    )
-    .innerJoin(effortClaim, eq(effortClaim.id, artifactEvidence.claimId))
-    .where(
-      and(
-        eq(integrationConsentGrant.projectId, projectId),
-        eq(integrationConsentGrant.memberId, memberId),
-        eq(integrationConsentGrant.provider, provider),
-        eq(artifactEvidence.evidenceRetained, true),
-      ),
-    );
-
-  return row?.claimCount ?? 0;
 }

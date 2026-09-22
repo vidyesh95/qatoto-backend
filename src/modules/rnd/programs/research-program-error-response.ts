@@ -73,7 +73,7 @@ export type ResearchProgramDomainError =
   | ResearchProgramModerationError
   | PlatformAccessError;
 
-export function mapResearchProgramErrorToResponse(error: ResearchProgramDomainError): {
+function mapResearchProgramErrorToResponse(error: ResearchProgramDomainError): {
   readonly statusCode: number;
   readonly message: string;
 } {

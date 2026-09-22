@@ -1,6 +1,3 @@
-import { randomUUID } from "node:crypto";
-
-import { config } from "#src/config/index.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -26,7 +23,7 @@ import type { Result } from "#src/types/index.js";
  * redesign, and so the outbox/inbox substrate has a second shape to prove it is general.
  */
 
-export const FX_PROVIDER_NAMES = ["fake"] as const;
+const FX_PROVIDER_NAMES = ["fake"] as const;
 
 export type ForeignExchangeProviderName = (typeof FX_PROVIDER_NAMES)[number];
 
@@ -194,38 +191,4 @@ export class FakeForeignExchangeProviderAdapter implements ForeignExchangeProvid
       value: this.buildQuote(providerQuoteRef, "USD/USD", 0n, "quoted"),
     };
   }
-}
-
-export function mintFxIdempotencyKey(purpose: "quote" | "lock"): string {
-  return `fx_${purpose}_${randomUUID()}`;
-}
-
-/**
- * Refuse-closed in production, like the payment and escrow factories and unlike the document
- * scanner. The asymmetry is deliberate: an absent scanner blocks a feature, whereas a fake FX
- * rate reaching a quote would put an invented exchange rate on a commercial document.
- */
-export function resolveForeignExchangeProvider(
-  providerSlug: string,
-): Result<ForeignExchangeProviderAdapter, ForeignExchangeProviderError> {
-  if (providerSlug !== "fake") {
-    return {
-      success: false,
-      error: {
-        type: "PROVIDER_UNAVAILABLE",
-        reason: `Foreign-exchange provider "${providerSlug}" is not implemented yet.`,
-      },
-    };
-  }
-  if (config.NODE_ENV === "production") {
-    return {
-      success: false,
-      error: {
-        type: "PROVIDER_UNAVAILABLE",
-        reason:
-          'The "fake" foreign-exchange provider is refuse-closed in production; its rates are synthetic and must never reach a commercial document.',
-      },
-    };
-  }
-  return { success: true, value: new FakeForeignExchangeProviderAdapter() };
 }

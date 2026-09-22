@@ -36,7 +36,6 @@ import type { PromotionalSlideError } from "#src/modules/home/promotions/promoti
 
 export {
   firstParam,
-  optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
@@ -65,7 +64,7 @@ const DESTINATION_REJECTION_MESSAGES: Readonly<
  * Maps a promotional-slide error to its HTTP shape. Does NOT touch `res` — a pure
  * function, so it is testable without a request, mirroring every other mapper here.
  */
-export function mapPromotionalSlideErrorToResponse(error: PromotionalSlideError): {
+function mapPromotionalSlideErrorToResponse(error: PromotionalSlideError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

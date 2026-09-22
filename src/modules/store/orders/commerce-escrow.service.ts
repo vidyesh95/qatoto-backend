@@ -59,8 +59,6 @@ import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type EscrowSessionRow = typeof commerceExternalEscrowSession.$inferSelect;
-type EscrowMilestoneRow = typeof commerceEscrowMilestone.$inferSelect;
-
 export type CommerceEscrowError =
   | CommerceConnectorError
   | { type: "SESSION_NOT_FOUND" }
@@ -1034,5 +1032,3 @@ export async function scheduleEscrowCommands(outboxIds: readonly string[]): Prom
     await scheduleConnectorDispatch(outboxId);
   }
 }
-
-export type { EscrowMilestoneRow };

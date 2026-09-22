@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -60,10 +60,10 @@ export type ResearchProgramPostError =
  * threading is how a public discussion becomes both unrenderable and unmoderatable. A
  * reply to a reply is expressed by quoting, not by nesting.
  */
-export const MAX_REPLY_DEPTH = 1;
+const MAX_REPLY_DEPTH = 1;
 
 /** How many replies travel INLINE with a top-level post before the client must page. */
-export const INLINE_REPLY_LIMIT = 3;
+const INLINE_REPLY_LIMIT = 3;
 
 export interface ResearchProgramPostView {
   readonly postId: string;
@@ -646,19 +646,4 @@ export async function findPostInProgram(
     .where(and(eq(researchProgramPost.id, postId), eq(researchProgramPost.programId, programId)));
 
   return row ?? null;
-}
-
-/** Counts open reports, for the moderation badge. */
-export async function countOpenReports(programId: string): Promise<number> {
-  const [row] = await db
-    .select({ total: count() })
-    .from(researchProgramContentReport)
-    .where(
-      and(
-        eq(researchProgramContentReport.programId, programId),
-        eq(researchProgramContentReport.status, "open"),
-      ),
-    );
-
-  return row?.total ?? 0;
 }

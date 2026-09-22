@@ -52,7 +52,7 @@ import { GROSS_ONLY_NOTICE } from "#src/modules/rnd/compensation/compensation-pe
  * what say so out loud: Qatoto holds no funds and charges nobody · a verification verdict
  * never reduces cash · a statement is gross only.
  */
-export const GOVERNANCE_DISCLOSURE_KEYS = [
+const GOVERNANCE_DISCLOSURE_KEYS = [
   "platform_holds_no_funds",
   "verification_never_reduces_cash",
   "statement_is_gross_only",

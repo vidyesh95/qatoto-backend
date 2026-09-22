@@ -29,7 +29,7 @@ import { createExternalUrlSchema } from "#src/modules/home/blueprints/blueprint-
  */
 
 /** Both count in hundredths — cents, paise — which is why one integer column carries either. */
-export const CASE_STUDY_CURRENCIES = ["USD", "INR"] as const;
+const CASE_STUDY_CURRENCIES = ["USD", "INR"] as const;
 
 export const CASE_STUDY_DISCIPLINES = [
   "tooling",
@@ -39,9 +39,9 @@ export const CASE_STUDY_DISCIPLINES = [
   "unit_economics",
 ] as const;
 
-export const CASE_STUDY_AUTHOR_RELATIONSHIPS = ["first_hand", "public_sources"] as const;
+const CASE_STUDY_AUTHOR_RELATIONSHIPS = ["first_hand", "public_sources"] as const;
 
-export const CASE_STUDY_STATEMENT_IDS = [
+const CASE_STUDY_STATEMENT_IDS = [
   "was_part_of_it",
   "figures_from_records",
   "figures_in_linked_sources",
@@ -65,9 +65,6 @@ export const CASE_STUDY_STATEMENT_IDS_BY_RELATIONSHIP: Readonly<
   first_hand: ["was_part_of_it", "figures_from_records"],
   public_sources: ["figures_in_linked_sources", "says_only_what_sources_say"],
 };
-
-/** The route literals under `/blueprints/case-studies/`, which no minted slug may shadow. */
-export const CASE_STUDY_RESERVED_SLUGS = ["new", "mine", "slugs", "options"] as const;
 
 const EvidenceCompanySubmissionSchema = z
   .object({
@@ -133,7 +130,7 @@ const OutcomeMetricSubmissionSchema = z
  * frontend's `CaseStudySourceDraftSchema` carries the same 512 so the two still agree — a server
  * stricter than the form it serves is the mismatch this codebase keeps finding.
  */
-export const CASE_STUDY_SOURCE_URL_MAXIMUM_CHARACTERS = 512;
+const CASE_STUDY_SOURCE_URL_MAXIMUM_CHARACTERS = 512;
 
 const SourceSubmissionSchema = z
   .object({

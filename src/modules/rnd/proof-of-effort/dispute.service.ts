@@ -786,10 +786,7 @@ export async function getDispute(
   return { success: true, value: found };
 }
 
-export async function findDispute(
-  projectId: string,
-  disputeId: string,
-): Promise<DisputeView | null> {
+async function findDispute(projectId: string, disputeId: string): Promise<DisputeView | null> {
   const [row] = await db
     .select({ dispute, raisedByName: user.name })
     .from(dispute)

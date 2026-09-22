@@ -5,7 +5,6 @@ import { db } from "#src/db/index.js";
 // the raw-SQL count subqueries below, by name.
 import {
   researchProgram,
-  researchProgramPaper,
   researchProgramPost,
   researchProgramStatSnapshot,
 } from "#src/db/schema.js";
@@ -422,21 +421,6 @@ export async function countProgramPosts(programId: string): Promise<number> {
     .from(researchProgramPost)
     .where(
       and(eq(researchProgramPost.programId, programId), eq(researchProgramPost.isHidden, false)),
-    );
-
-  return row?.total ?? 0;
-}
-
-/** Counts a program's APPROVED papers. A queued paper is not yet part of the library. */
-export async function countApprovedProgramPapers(programId: string): Promise<number> {
-  const [row] = await db
-    .select({ total: count() })
-    .from(researchProgramPaper)
-    .where(
-      and(
-        eq(researchProgramPaper.programId, programId),
-        eq(researchProgramPaper.moderationStatus, "approved"),
-      ),
     );
 
   return row?.total ?? 0;

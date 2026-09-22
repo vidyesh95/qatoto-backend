@@ -132,7 +132,7 @@ const EXPLICIT_SIGNAL_LADDER: readonly ScoreLadderRung[] = [
  * is a second hard filter, and there is already a hard filter (§4.5's `NOT EXISTS`) doing
  * that job properly.
  */
-export const NEGATIVE_SIGNAL_BUDGET_POINTS = 40;
+const NEGATIVE_SIGNAL_BUDGET_POINTS = 40;
 
 /**
  * Which formula produced a snapshot row — written explicitly by the job rather than left to
@@ -203,7 +203,7 @@ assertLadderIsWellFormed(
  * a reaction to one video. Only ever set on a CREATOR affinity — a category cannot be
  * subscribed to.
  */
-export const SUBSCRIPTION_SIGNAL_WEIGHT = 4;
+const SUBSCRIPTION_SIGNAL_WEIGHT = 4;
 
 /**
  * The mirror image of `SUBSCRIPTION_SIGNAL_WEIGHT`, and set to the ladder's top rung so ONE
@@ -224,7 +224,7 @@ export const SUBSCRIPTION_SIGNAL_WEIGHT = 4;
  * not hide their product category either. The topic call passes `isCreatorMuted: false`
  * exactly as it already passes `isSubscribedToCreator: false`.
  */
-export const MUTE_SIGNAL_WEIGHT = 12;
+const MUTE_SIGNAL_WEIGHT = 12;
 
 export interface AffinityScoreInputs {
   readonly countedViewCount: number;

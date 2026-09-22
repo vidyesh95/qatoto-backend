@@ -75,4 +75,3 @@ export function computeClientSubnetHash(clientIp: string | undefined): string | 
  * Re-exported from `network-block.ts`, which holds the parsing so a test can exercise it
  * without this module's `config` dependency.
  */
-export { deriveClientNetworkBlock } from "#src/modules/store/network-block.js";

@@ -5,7 +5,6 @@ import {
   discoveryRegion,
   product,
   projectStats,
-  projectSupplierEngagement,
   researchProject,
   supplier,
   supplierCapability,
@@ -577,14 +576,4 @@ export async function listLaunchReadyProjects(filter: {
     })),
     total: totalRow?.total ?? 0,
   };
-}
-
-/** How many suppliers a project has on record. Feeds the readiness checklist. */
-export async function countProjectSupplierEngagements(projectId: string): Promise<number> {
-  const [row] = await db
-    .select({ total: sql<number>`count(*)::int` })
-    .from(projectSupplierEngagement)
-    .where(eq(projectSupplierEngagement.projectId, projectId));
-
-  return row?.total ?? 0;
 }

@@ -116,10 +116,7 @@ export type CommerceFreightRateError =
  * shared with §19.12's provider surface. RE-EXPORTED rather than re-declared so this module's
  * controller, its mapper and its route suite keep importing one name from one place.
  */
-export type {
-  AdminFreightRateBreak,
-  AdminFreightRateCard,
-} from "#src/modules/store/fulfillment/commerce-freight-rate-card-projection.js";
+export type { AdminFreightRateCard } from "#src/modules/store/fulfillment/commerce-freight-rate-card-projection.js";
 
 export interface AdminCustomsDwellEstimate {
   readonly id: string;

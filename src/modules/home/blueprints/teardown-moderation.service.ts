@@ -125,7 +125,7 @@ export interface TeardownModerationDecisionView {
  * `unknown`, which goes to `safeParse` — there is no assertion anywhere on this path, which is the
  * point of storing text rather than jsonb.
  */
-export function readSubmissionDocument(
+function readSubmissionDocument(
   rawDocumentJson: string,
   schemaVersion: number,
 ): StoredTeardownDocument {

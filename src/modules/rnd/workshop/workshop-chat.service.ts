@@ -349,6 +349,3 @@ export async function listRecentMessagesOldestFirst(
         left.sentAt.getTime() - right.sentAt.getTime() || compareUtf8Bytes(left.id, right.id),
     );
 }
-
-/** Exported so the controller and the tests share one page-size contract. */
-export const CHAT_PAGE_SIZE = { default: DEFAULT_PAGE_SIZE, max: MAX_PAGE_SIZE } as const;

@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-export const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
+const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
 
 /**
  * THE TWO POLICIES A CASH STRAND MAY ADVERTISE (§4d, §7A).
@@ -30,11 +30,11 @@ export const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
  * `open_role_compensation_policy_pairing_ck` (migration 0019) refuses them at the column
  * level. Both, not either — a rule with no database behind it is a convention.
  */
-export const CASH_POLICIES = ["off_platform_payroll", "direct_transfer"] as const;
+const CASH_POLICIES = ["off_platform_payroll", "direct_transfer"] as const;
 
-export const MoneyInCentsSchema = z.number().int().min(0);
+const MoneyInCentsSchema = z.number().int().min(0);
 
-export const BasisPointsSchema = z.number().int().min(0).max(10_000);
+const BasisPointsSchema = z.number().int().min(0).max(10_000);
 
 /**
  * One strand per kind, each carrying only its own columns.
@@ -44,7 +44,7 @@ export const BasisPointsSchema = z.number().int().min(0).max(10_000);
  * way lets a founder advertise a mechanism that does not exist. The DB CHECK enforces the
  * same rule; this makes it a 422 with a field path instead of a 500.
  */
-export const CompensationStrandSchema = z.discriminatedUnion("kind", [
+const CompensationStrandSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("salary"),
@@ -74,7 +74,7 @@ export const CompensationStrandSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
-export const OpenRoleFieldsSchema = z.object({
+const OpenRoleFieldsSchema = z.object({
   roleTitle: z.string().trim().min(1).max(120),
   skills: z.array(z.string().trim().min(1).max(60)).max(30).optional(),
   commitment: z.enum(ROLE_COMMITMENTS),

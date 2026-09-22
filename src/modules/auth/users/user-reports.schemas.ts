@@ -8,7 +8,7 @@ import { z } from "zod";
  * identifiers. A "corrected" kebab-case value is a 422, not an ignored one.
  */
 
-export const UserReportReasonSchema = z.enum([
+const UserReportReasonSchema = z.enum([
   "impersonation",
   "abusive_profile_text",
   "misleading_links",

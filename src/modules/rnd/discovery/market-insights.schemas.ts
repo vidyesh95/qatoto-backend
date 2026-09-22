@@ -21,12 +21,10 @@ import {
   MARKET_INSIGHT_STAT_MAX_MILLI,
 } from "#src/modules/rnd/market-insight-stat.js";
 
-export const TREND_DIRECTIONS = ["up", "down", "flat"] as const;
+const TREND_DIRECTIONS = ["up", "down", "flat"] as const;
 
 /** Date-only, the §1 wire format. Matches `date(mode: "string")` on the column. */
-export const IsoDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
 
 /**
  * The stat quad, as a discriminated union that CARRIES TWO OF THE THREE CHECKS AS TYPES.
@@ -40,7 +38,7 @@ export const IsoDateSchema = z
  * with it: the union produces per-field errors a client can attach to an input, while the
  * refinement produces the cross-field one.
  */
-export const MarketInsightStatSchema = z
+const MarketInsightStatSchema = z
   .discriminatedUnion("statKind", [
     z
       .object({

@@ -20,7 +20,7 @@
  */
 
 /** The eighteen countries seeded in `src/db/seed-data.ts`, and nothing else. */
-export const COMTRADE_REPORTER_CODE_BY_ISO2: Readonly<Record<string, number>> = {
+const COMTRADE_REPORTER_CODE_BY_ISO2: Readonly<Record<string, number>> = {
   BD: 50, // Bangladesh
   BR: 76, // Brazil
   CO: 170, // Colombia

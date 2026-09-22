@@ -26,7 +26,7 @@ const PathwayAccentSchema = z.enum(["amber", "slate", "emerald", "sky", "rose"])
  * The slot an uploaded pathway image fills. Two named roles rather than a free string,
  * because each one maps to its own column triple on `store_pathway` (`0091`).
  */
-export const PathwayImageSlotSchema = z.enum(["hero", "card"]);
+const PathwayImageSlotSchema = z.enum(["hero", "card"]);
 
 export const PathwayImageParamsSchema = z
   .object({
@@ -179,13 +179,6 @@ export const SeedCartFromPathwaySchema = z
       .optional(),
   })
   .strict();
-
-export type CreatePathwayInput = z.infer<typeof CreatePathwaySchema>;
-export type UpdatePathwayInput = z.infer<typeof UpdatePathwaySchema>;
-export type ReplacePathwaySlotsInput = z.infer<typeof ReplacePathwaySlotsSchema>;
-export type ReplacePathwaySlotCandidatesInput = z.infer<typeof ReplacePathwaySlotCandidatesSchema>;
-export type ModeratePathwayInput = z.infer<typeof ModeratePathwaySchema>;
-export type SeedCartFromPathwayInput = z.infer<typeof SeedCartFromPathwaySchema>;
 
 export const EmptyObjectSchema = z.object({}).strict();
 

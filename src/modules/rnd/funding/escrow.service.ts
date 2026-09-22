@@ -1,27 +1,16 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import {
-  escrowAccount,
-  escrowJournalEntry,
-  escrowPosting,
-  projectChainHead,
-} from "#src/db/schema.js";
-import {
-  canonicalHashHex,
-  canonicalizeDocument,
-  type CanonicalValue,
-} from "#src/lib/canonical-hash.js";
+import { escrowAccount, escrowJournalEntry, escrowPosting } from "#src/db/schema.js";
+import { canonicalHashHex, type CanonicalValue } from "#src/lib/canonical-hash.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
 import {
   advanceEscrowChainHead,
   allocateEscrowChainSlot,
   appendAuditEntry,
-  ESCROW_GENESIS_PREVIOUS_HASH,
   type ProjectAuditEventKind,
 } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
-import type { Result } from "#src/types/index.js";
 
 /**
  * THE ESCROW LEDGER (R_AND_D_BACKEND_STRUCTURE.md §7).
@@ -70,13 +59,13 @@ export type EscrowJournalKind = (typeof escrowJournalEntry.$inferSelect)["kind"]
 export type EscrowEntrySettlement = (typeof escrowJournalEntry.$inferSelect)["settlement"];
 
 /** Bumping this changes future hashes without invalidating history (§4c). */
-export const ESCROW_HASH_VERSION = 1;
+const ESCROW_HASH_VERSION = 1;
 
 /**
  * The six accounts of §7, in a FIXED ORDER so provisioning is deterministic and two
  * concurrent first-writes cannot deadlock by inserting them in opposite orders.
  */
-export const ESCROW_ACCOUNT_KINDS: readonly EscrowAccountKind[] = [
+const ESCROW_ACCOUNT_KINDS: readonly EscrowAccountKind[] = [
   "escrow_held",
   "platform_fee",
   "provider_clearing",
@@ -108,7 +97,7 @@ export type EscrowError =
  * transactions racing a project's first pledge must BOTH end up with the full set, and the
  * loser of an upsert race gets nothing back from `RETURNING`.
  */
-export async function ensureEscrowAccounts(
+async function ensureEscrowAccounts(
   tx: DatabaseExecutor,
   projectId: string,
   currency: string,
@@ -536,7 +525,7 @@ export interface AccountBalance {
  *
  * SQL SUMS RAW INTEGERS AND DOES NO DIVISION (§4c rule 1).
  */
-export async function deriveAccountBalances(
+async function deriveAccountBalances(
   projectId: string,
   executor: DatabaseExecutor | typeof db = db,
 ): Promise<ReadonlyMap<EscrowAccountKind, AccountBalance>> {
@@ -601,50 +590,6 @@ export interface EscrowSummaryView {
   readonly asOfSequenceNumber: number;
 }
 
-/**
- * `GET …/escrow/summary` — Allocated / Released / Held from ACCOUNT BALANCES, never from
- * client arithmetic (§7).
- *
- * "Allocated" is derived as held + released + fee rather than stored: it is the total that
- * ever entered the pool, and computing it from the two halves means it cannot disagree
- * with them.
- */
-export async function getEscrowSummary(projectId: string): Promise<EscrowSummaryView> {
-  const [balances, [accountRow]] = await Promise.all([
-    deriveAccountBalances(projectId),
-    db
-      .select({
-        currency: escrowAccount.currency,
-        sequenceNumber: escrowAccount.balanceThroughSequenceNumber,
-      })
-      .from(escrowAccount)
-      .where(and(eq(escrowAccount.projectId, projectId), eq(escrowAccount.kind, "escrow_held"))),
-  ]);
-
-  const held = balances.get("escrow_held")?.settledInCents ?? 0n;
-  const released = balances.get("released_to_project")?.settledInCents ?? 0n;
-  const platformFee = balances.get("platform_fee")?.settledInCents ?? 0n;
-  const refunds = balances.get("refunds_payable")?.settledInCents ?? 0n;
-  const suspense = balances.get("reconciliation_suspense")?.settledInCents ?? 0n;
-  const clearing = balances.get("provider_clearing")?.settledInCents ?? 0n;
-  const inFlight = balances.get("escrow_held")?.pendingInCents ?? 0n;
-
-  return {
-    currency: accountRow?.currency ?? null,
-    allocatedInCents: (held + released + platformFee + refunds).toString(),
-    releasedInCents: released.toString(),
-    heldInCents: held.toString(),
-    platformFeeInCents: platformFee.toString(),
-    refundsPayableInCents: refunds.toString(),
-    reconciliationSuspenseInCents: suspense.toString(),
-    inFlightInCents: inFlight.toString(),
-    // The zero-sum identity over the WHOLE project, which is the aggregate form of the
-    // per-entry invariant. If this is ever false, every number above is suspect.
-    booksBalance: held + released + platformFee + refunds + suspense + clearing === 0n,
-    asOfSequenceNumber: accountRow?.sequenceNumber ?? 0,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
@@ -682,87 +627,6 @@ export interface EscrowLedgerEntryView {
   }[];
 }
 
-const DEFAULT_LEDGER_PAGE_SIZE = 50;
-const MAXIMUM_LEDGER_PAGE_SIZE = 200;
-
-/**
- * `GET …/escrow/ledger` — a page of the journal, ordered by `sequenceNumber` ASC, never by
- * `createdAt`: two rows share a millisecond and replica clocks skew.
- *
- * Returns EVERY hashed column plus the postings, so a client can canonicalize and verify
- * WITHOUT trusting this server's bytes (§9.9's anti-theatre rule, applied to §7's chain).
- */
-export async function listEscrowLedger(
-  projectId: string,
-  options: { readonly page?: number | undefined; readonly limit?: number | undefined } = {},
-): Promise<readonly EscrowLedgerEntryView[]> {
-  const limit = Math.min(options.limit ?? DEFAULT_LEDGER_PAGE_SIZE, MAXIMUM_LEDGER_PAGE_SIZE);
-  const page = Math.max(options.page ?? 1, 1);
-
-  const entries = await db
-    .select()
-    .from(escrowJournalEntry)
-    .where(eq(escrowJournalEntry.projectId, projectId))
-    .orderBy(asc(escrowJournalEntry.sequenceNumber))
-    .limit(limit)
-    .offset((page - 1) * limit);
-
-  if (entries.length === 0) {
-    return [];
-  }
-
-  const postings = await db
-    .select({
-      journalEntryId: escrowPosting.journalEntryId,
-      accountKind: escrowPosting.accountKind,
-      signedAmountInCents: escrowPosting.signedAmountInCents,
-      postingIndex: escrowPosting.postingIndex,
-    })
-    .from(escrowPosting)
-    .where(
-      inArray(
-        escrowPosting.journalEntryId,
-        entries.map((entry) => entry.id),
-      ),
-    )
-    .orderBy(asc(escrowPosting.journalEntryId), asc(escrowPosting.postingIndex));
-
-  return entries.map((entry) => {
-    const entryPostings = postings.filter((posting) => posting.journalEntryId === entry.id);
-    const poolMovement = entryPostings
-      .filter((posting) => posting.accountKind === "escrow_held")
-      .reduce((runningTotal, posting) => runningTotal + posting.signedAmountInCents, 0n);
-
-    return {
-      id: entry.id,
-      sequenceNumber: entry.sequenceNumber,
-      kind: entry.kind,
-      description: entry.description,
-      currency: entry.currency,
-      settlement: entry.settlement,
-      direction: poolMovement === 0n ? null : poolMovement > 0n ? "in" : "out",
-      // Magnitude only — the sign is already carried by `direction`, and shipping it twice
-      // invites a client to apply it twice.
-      amountInCents: (poolMovement < 0n ? -poolMovement : poolMovement).toString(),
-      occurredAt: entry.occurredAt,
-      linkedMilestoneId: entry.linkedMilestoneId,
-      linkedPledgeId: entry.linkedPledgeId,
-      linkedReleaseId: entry.linkedReleaseId,
-      reversesJournalEntryId: entry.reversesJournalEntryId,
-      entryHash: entry.entryHash,
-      previousEntryHash: entry.previousEntryHash,
-      hashVersion: entry.hashVersion,
-      postings: entryPostings.map((posting) => ({
-        accountKind: posting.accountKind,
-        // Every bigint crosses the wire as a decimal string: an amount past 2^53 loses
-        // precision the moment JSON.stringify touches it (§4b).
-        signedAmountInCents: posting.signedAmountInCents.toString(),
-        postingIndex: posting.postingIndex,
-      })),
-    };
-  });
-}
-
 export interface EscrowChainVerificationSummary {
   readonly entriesChecked: number;
   readonly firstSequence: number | null;
@@ -770,164 +634,6 @@ export interface EscrowChainVerificationSummary {
   readonly headEntryHash: string | null;
   /** The aggregate zero-sum identity, re-derived over every posting ever written. */
   readonly booksBalance: boolean;
-}
-
-/**
- * Re-walks the escrow chain and checks FOUR things per entry: the hash recomputes from its
- * own columns and postings, the link matches its predecessor, `sequenceNumber` has no gap,
- * and the postings still sum to zero.
- *
- * The gap check is the one that is easy to omit and impossible to do without: a DELETED row
- * leaves every surviving hash self-consistent, so a chain missing its middle verifies
- * perfectly unless someone counts.
- *
- * The zero-sum re-check is §7's own, and it is here rather than only in the nightly job
- * because a verification that says "the bytes are intact" while the money does not add up
- * answers a question nobody asked.
- *
- * A break is a `Result` failure the controller renders as **409 ESCROW_CHAIN_BROKEN**,
- * never `200 {valid:false}` — a broken ledger is an operational emergency and must page.
- */
-export async function verifyEscrowChain(
-  projectId: string,
-): Promise<Result<EscrowChainVerificationSummary, EscrowError>> {
-  const entries = await db
-    .select()
-    .from(escrowJournalEntry)
-    .where(eq(escrowJournalEntry.projectId, projectId))
-    .orderBy(asc(escrowJournalEntry.sequenceNumber));
-
-  const allPostings = await db
-    .select({
-      journalEntryId: escrowPosting.journalEntryId,
-      accountKind: escrowPosting.accountKind,
-      signedAmountInCents: escrowPosting.signedAmountInCents,
-      postingIndex: escrowPosting.postingIndex,
-    })
-    .from(escrowPosting)
-    .where(eq(escrowPosting.projectId, projectId));
-
-  const postingsByEntry = new Map<string, HashablePosting[]>();
-  for (const posting of allPostings) {
-    const bucket = postingsByEntry.get(posting.journalEntryId);
-    if (bucket) {
-      bucket.push(posting);
-    } else {
-      postingsByEntry.set(posting.journalEntryId, [posting]);
-    }
-  }
-
-  let expectedSequence = 1;
-  let expectedPreviousHash = ESCROW_GENESIS_PREVIOUS_HASH;
-  let runningTotal = 0n;
-
-  for (const entry of entries) {
-    if (entry.sequenceNumber !== expectedSequence) {
-      return {
-        success: false,
-        error: {
-          type: "ESCROW_CHAIN_BROKEN",
-          sequenceNumber: expectedSequence,
-          reason: "sequence-gap",
-        },
-      };
-    }
-
-    if (entry.previousEntryHash !== expectedPreviousHash) {
-      return {
-        success: false,
-        error: {
-          type: "ESCROW_CHAIN_BROKEN",
-          sequenceNumber: entry.sequenceNumber,
-          reason: "link-mismatch",
-        },
-      };
-    }
-
-    const entryPostings = postingsByEntry.get(entry.id) ?? [];
-    const entryTotal = entryPostings.reduce(
-      (total, posting) => total + posting.signedAmountInCents,
-      0n,
-    );
-    if (entryTotal !== 0n || entryPostings.length < 2) {
-      return {
-        success: false,
-        error: {
-          type: "ESCROW_CHAIN_BROKEN",
-          sequenceNumber: entry.sequenceNumber,
-          reason: "unbalanced-entry",
-        },
-      };
-    }
-    runningTotal += entryTotal;
-
-    const recomputed = canonicalHashHex(
-      buildEscrowHashDocument({
-        projectId: entry.projectId,
-        sequenceNumber: entry.sequenceNumber,
-        kind: entry.kind,
-        description: entry.description,
-        currency: entry.currency,
-        settlement: entry.settlement,
-        occurredAt: entry.occurredAt,
-        linkedMilestoneId: entry.linkedMilestoneId,
-        linkedPledgeId: entry.linkedPledgeId,
-        linkedReleaseId: entry.linkedReleaseId,
-        reversesJournalEntryId: entry.reversesJournalEntryId,
-        postings: entryPostings,
-        previousEntryHash: entry.previousEntryHash,
-        hashVersion: entry.hashVersion,
-      }),
-    );
-
-    if (recomputed !== entry.entryHash) {
-      return {
-        success: false,
-        error: {
-          type: "ESCROW_CHAIN_BROKEN",
-          sequenceNumber: entry.sequenceNumber,
-          reason: "hash-mismatch",
-        },
-      };
-    }
-
-    expectedPreviousHash = entry.entryHash;
-    expectedSequence += 1;
-  }
-
-  const [head] = await db
-    .select()
-    .from(projectChainHead)
-    .where(eq(projectChainHead.projectId, projectId));
-
-  // The head must agree with what was just walked. A head pointing at a hash no entry
-  // carries means a row was removed from the END, where the per-entry checks above see
-  // nothing wrong at all.
-  const walkedHead = entries.length === 0 ? null : expectedPreviousHash;
-  if ((head?.escrowHeadEntryHash ?? null) !== walkedHead) {
-    return {
-      success: false,
-      error: {
-        type: "ESCROW_CHAIN_BROKEN",
-        sequenceNumber: Math.max(expectedSequence - 1, 0),
-        reason: "link-mismatch",
-      },
-    };
-  }
-
-  const firstEntry = entries[0];
-  const lastEntry = entries.at(-1);
-
-  return {
-    success: true,
-    value: {
-      entriesChecked: entries.length,
-      firstSequence: firstEntry?.sequenceNumber ?? null,
-      lastSequence: lastEntry?.sequenceNumber ?? null,
-      headEntryHash: head?.escrowHeadEntryHash ?? null,
-      booksBalance: runningTotal === 0n,
-    },
-  };
 }
 
 export interface EscrowHashInputView {
@@ -941,60 +647,4 @@ export interface EscrowHashInputView {
   readonly canonicalBytes: string;
   readonly entryHash: string;
   readonly hashVersion: number;
-}
-
-/** `GET …/escrow/ledger/:entryId/hash-input` — the anti-theatre endpoint. */
-export async function buildEscrowHashInput(
-  projectId: string,
-  entryId: string,
-): Promise<Result<EscrowHashInputView, EscrowError>> {
-  const [entry] = await db
-    .select()
-    .from(escrowJournalEntry)
-    .where(
-      // BOTH columns: an entry id belonging to another project must be indistinguishable
-      // from a nonexistent one, or this becomes a cross-tenant probe.
-      and(eq(escrowJournalEntry.id, entryId), eq(escrowJournalEntry.projectId, projectId)),
-    );
-
-  if (!entry) {
-    return { success: false, error: { type: "ESCROW_ENTRY_NOT_FOUND", entryId } };
-  }
-
-  const postings = await db
-    .select({
-      accountKind: escrowPosting.accountKind,
-      signedAmountInCents: escrowPosting.signedAmountInCents,
-      postingIndex: escrowPosting.postingIndex,
-    })
-    .from(escrowPosting)
-    .where(eq(escrowPosting.journalEntryId, entry.id));
-
-  return {
-    success: true,
-    value: {
-      entryId: entry.id,
-      sequenceNumber: entry.sequenceNumber,
-      canonicalBytes: canonicalizeDocument(
-        buildEscrowHashDocument({
-          projectId: entry.projectId,
-          sequenceNumber: entry.sequenceNumber,
-          kind: entry.kind,
-          description: entry.description,
-          currency: entry.currency,
-          settlement: entry.settlement,
-          occurredAt: entry.occurredAt,
-          linkedMilestoneId: entry.linkedMilestoneId,
-          linkedPledgeId: entry.linkedPledgeId,
-          linkedReleaseId: entry.linkedReleaseId,
-          reversesJournalEntryId: entry.reversesJournalEntryId,
-          postings,
-          previousEntryHash: entry.previousEntryHash,
-          hashVersion: entry.hashVersion,
-        }),
-      ),
-      entryHash: entry.entryHash,
-      hashVersion: entry.hashVersion,
-    },
-  };
 }

@@ -53,7 +53,7 @@ export const MAX_SUBMITTED_FASTENERS = 48;
  * `teardown_submission_file_upload`, proving in one statement that the upload is this author's and
  * still unclaimed; the publish then copies the object key and the measured size onto the row.
  */
-export const SubmittedModelReferenceSchema = z
+const SubmittedModelReferenceSchema = z
   .object({ modelUploadId: z.uuid("An upload id is a UUID.") })
   .strict();
 
@@ -99,5 +99,3 @@ export const SubmittedAssemblySchema = z.discriminatedUnion("kind", [
 
 export const SubmittedAssemblyStepSchema = AssemblyStepSchema;
 export const SubmittedFastenerSchema = FastenerSchema;
-
-export type SubmittedTeardownAssembly = z.infer<typeof SubmittedAssemblySchema>;

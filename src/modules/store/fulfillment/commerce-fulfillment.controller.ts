@@ -27,7 +27,7 @@ import type { CommerceFulfillmentError } from "#src/modules/store/fulfillment/co
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
-export const CreateShipmentSchema = CreateShipmentWithLegsSchema;
+const CreateShipmentSchema = CreateShipmentWithLegsSchema;
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

@@ -19,23 +19,23 @@ import { z } from "zod";
  * own `commerce_category_slug_ck`. Kebab-case, because that is the one place kebab is a
  * genuine web convention — URL tokenizers treat `-` as a word break and `_` as a joiner.
  */
-export const CategorySlugSchema = z
+const CategorySlugSchema = z
   .string()
   .trim()
   .min(2)
   .max(100)
   .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "Use lowercase words separated by single hyphens.");
 
-export const CategoryNameSchema = z.string().trim().min(1).max(120);
+const CategoryNameSchema = z.string().trim().min(1).max(120);
 
 /**
  * The alternative wordings a shopper might search for. Bounded on both axes because the
  * column is a `text[]` with no cap of its own, and an unbounded array is an unbounded body.
  */
-export const SearchSynonymsSchema = z.array(z.string().trim().min(1).max(120)).max(20);
+const SearchSynonymsSchema = z.array(z.string().trim().min(1).max(120)).max(20);
 
 /** The states an admin may WRITE. `retired` is reachable here and via the retire route. */
-export const WritableCategoryStateSchema = z.enum(["draft", "active", "retired"]);
+const WritableCategoryStateSchema = z.enum(["draft", "active", "retired"]);
 
 /**
  * Multipart text parts arrive as STRINGS — multer does not type them, so the create body's
@@ -45,14 +45,14 @@ export const WritableCategoryStateSchema = z.enum(["draft", "active", "retired"]
  * multipart part cannot carry JSON without the server agreeing to parse it, and agreeing to
  * that on an untrusted part is how you end up with a JSON parser on a file upload route.
  */
-export const MultipartSearchSynonymsSchema = z.string().trim().max(2048).optional();
+const MultipartSearchSynonymsSchema = z.string().trim().max(2048).optional();
 
 /**
  * A parent id on a multipart part. The empty string is how a form says "no parent" — an
  * absent part and a cleared select look identical otherwise, and the difference between
  * "root" and "unchanged" matters on the patch below.
  */
-export const MultipartParentCategoryIdSchema = z.string().trim().max(200).optional();
+const MultipartParentCategoryIdSchema = z.string().trim().max(200).optional();
 
 export const CreateCommerceCategorySchema = z
   .object({
@@ -120,7 +120,7 @@ export const SubmitCommerceCategoryRequestSchema = z
  * Where each waiting listing should land. Optional on both verdicts and defaulted per arm —
  * see `decideCommerceCategoryRequest`.
  */
-export const ProductAssignmentsSchema = z
+const ProductAssignmentsSchema = z
   .array(
     z
       .object({

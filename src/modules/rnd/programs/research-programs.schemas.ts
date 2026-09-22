@@ -27,13 +27,13 @@ export const CursorQuerySchema = z.object({
 });
 
 /** `YYYY-MM-DD`, the §1 wire format. Never a `Date`, which a zone would shift. */
-export const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD");
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD");
 
 /**
  * Client-minted, once per attempt. 8–128 characters mirrors the DB CHECK, and the length
  * floor is what stops a caller from sending `"1"` and colliding with everyone else's `"1"`.
  */
-export const IdempotencyKeySchema = z.string().trim().min(8).max(128);
+const IdempotencyKeySchema = z.string().trim().min(8).max(128);
 
 /**
  * `status` is ABSENT, and that absence is the review gate. A user-minted program always
@@ -224,7 +224,7 @@ export const ListPostsQuerySchema = CursorQuerySchema.extend({
   track: z.enum(["informal_paper", "idea"]).default("idea"),
 }).strict();
 
-export const PARTICIPANT_ROLES = [
+const PARTICIPANT_ROLES = [
   "researcher",
   "founder_director",
   "venture_capitalist",
@@ -233,7 +233,7 @@ export const PARTICIPANT_ROLES = [
 ] as const;
 
 /** `snake_case`, because these are Postgres `pgEnum` labels sent verbatim (§ wire casing). */
-export const COMPENSATION_PREFERENCES = ["salary", "one_time", "equity"] as const;
+const COMPENSATION_PREFERENCES = ["salary", "one_time", "equity"] as const;
 
 export const JoinProgramSchema = z
   .object({

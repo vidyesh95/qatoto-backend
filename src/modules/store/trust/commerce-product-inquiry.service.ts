@@ -1,7 +1,7 @@
 import { and, asc, eq, gt, or, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { commerceProductInquiry, product } from "#src/db/schema.js";
+import { commerceProductInquiry } from "#src/db/schema.js";
 import {
   memberCanOperateBuyer,
   type CommerceOrganizationMemberRole,
@@ -280,14 +280,4 @@ export async function linkInquiryToRfq(
     )
     .returning({ id: commerceProductInquiry.id });
   return updated.length > 0;
-}
-
-/** Exported for the controller's eligibility check; keeps `product` imported once. */
-export async function loadInquirySellerOrganizationId(productId: string): Promise<string | null> {
-  const [row] = await db
-    .select({ sellerOrganizationId: product.sellerOrganizationId })
-    .from(product)
-    .where(eq(product.id, productId))
-    .limit(1);
-  return row?.sellerOrganizationId ?? null;
 }

@@ -39,7 +39,6 @@ import type { CommerceProviderFreightRateError } from "#src/modules/store/fulfil
  */
 
 export {
-  fieldRefusal,
   firstParam,
   optionalBody,
   respondUnauthenticated,
@@ -52,7 +51,7 @@ interface CommerceProviderFreightRateErrorResponse {
   readonly errors?: Readonly<Record<string, readonly string[]>>;
 }
 
-export function mapCommerceProviderFreightRateErrorToResponse(
+function mapCommerceProviderFreightRateErrorToResponse(
   error: CommerceProviderFreightRateError,
 ): CommerceProviderFreightRateErrorResponse {
   switch (error.type) {

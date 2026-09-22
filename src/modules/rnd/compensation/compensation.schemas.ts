@@ -20,13 +20,11 @@ import { z } from "zod";
  * `z.number()` would silently lose precision past 2^53 and, worse, would accept `120.5`
  * for a value that must be a whole number of cents.
  */
-export const CentsStringSchema = z
+const CentsStringSchema = z
   .string()
   .regex(/^\d{1,15}$/, "Must be a whole number of cents, as a string");
 
-export const IsoDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
 
 /**
  * THE AGREEMENT BODY. Exactly one basis — a flat monthly retainer OR an hourly rate.

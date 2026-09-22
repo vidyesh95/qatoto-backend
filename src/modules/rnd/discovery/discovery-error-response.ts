@@ -39,7 +39,6 @@ import type { SupplierError } from "#src/modules/rnd/suppliers/suppliers.service
 
 export {
   firstParam,
-  optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
@@ -74,7 +73,7 @@ export type DiscoveryDomainError =
  * Maps a discovery error to its HTTP shape. Does NOT touch `res` — a pure function, so it
  * is testable without a request, mirroring `mapProjectErrorToResponse`.
  */
-export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
+function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

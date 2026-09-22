@@ -41,7 +41,7 @@ export const VIEW_DWELL_GRACE_SECONDS = 5;
  * that a real buyer skimming a listing counts, and long enough that a crawler, a prefetch
  * and an accidental tap do not.
  */
-export const COUNTED_VIEW_MINIMUM_DWELL_SECONDS = 5;
+const COUNTED_VIEW_MINIMUM_DWELL_SECONDS = 5;
 
 export interface ViewDwellClampInput {
   /** The client's claim for total attention on this session so far. Hostile. */

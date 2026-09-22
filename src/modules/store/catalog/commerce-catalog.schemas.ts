@@ -9,7 +9,7 @@ import { z } from "zod";
  * Who asserted a relation. Read-only on the seller's write — a client cannot set it — but a
  * moderator's LIST may filter by it, which is the only reason it is expressible at all.
  */
-export const ProductRelationSourceKindSchema = z.enum([
+const ProductRelationSourceKindSchema = z.enum([
   "seller_declared",
   "moderator_curated",
   "derived_cooccurrence",
@@ -59,12 +59,6 @@ export const ProductIdParamsSchema = z
 export const RelationIdParamsSchema = z
   .object({ relationId: z.string().trim().min(1).max(200) })
   .strict();
-
-export const ProductSlugParamsSchema = z
-  .object({ productSlug: z.string().trim().min(1).max(200) })
-  .strict();
-
-export type ReplaceProductRelationsInput = z.infer<typeof ReplaceProductRelationsSchema>;
 
 export const EmptyObjectSchema = z.object({}).strict();
 

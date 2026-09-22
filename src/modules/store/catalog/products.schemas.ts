@@ -18,7 +18,7 @@ import { z } from "zod";
  * B2B volume-pricing tier. Prices are integer cents (server-authoritative — the
  * client never sends dollars); `minimumOrderQuantity` is at least 1.
  */
-export const PricingTierSchema = z.object({
+const PricingTierSchema = z.object({
   unitPriceInCents: z.number().int().min(0),
   minimumOrderQuantity: z.number().int().min(1),
   /**
@@ -43,7 +43,7 @@ export const PricingTierSchema = z.object({
  * So the create schema adds defaults on top of these shapes and the update schema does
  * not. Never derive a PATCH schema from a schema carrying `.default()`.
  */
-export const productFieldShapes = {
+const productFieldShapes = {
   title: z.string().trim().min(1).max(200),
   brand: z.string().trim().max(120).optional(),
   category: z
@@ -147,7 +147,7 @@ export const productFieldShapes = {
 };
 
 /** A1. One variation, with its own price, stock and optional MOQ and ladder. */
-export const ProductVariantSchema = z
+const ProductVariantSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     publicSlug: z
@@ -221,7 +221,7 @@ export const ReplaceProductHighlightsSchema = z
  * (CLAUDE.md §1.1). Money is integer cents; a future client posting dollars ("129.99")
  * fails the `.int()` check loudly rather than storing garbage.
  */
-export const ProductFieldsSchema = z
+const ProductFieldsSchema = z
   .object({
     ...productFieldShapes,
     condition: productFieldShapes.condition.default("new"),
@@ -237,7 +237,7 @@ export const ProductFieldsSchema = z
  * exceed `priceInCents`. A display invariant, but still checked server-side.
  * Applied on both create and (against the same-payload values) update.
  */
-export function compareAtPriceExceedsPrice(data: {
+function compareAtPriceExceedsPrice(data: {
   priceInCents?: number;
   compareAtPriceInCents?: number;
 }): boolean {
@@ -247,14 +247,12 @@ export function compareAtPriceExceedsPrice(data: {
   return data.compareAtPriceInCents > data.priceInCents;
 }
 
-export const compareAtRefinement = {
+const compareAtRefinement = {
   error: "Compare-at price must be greater than the price.",
   path: ["compareAtPriceInCents"],
 };
 
-// Exported so the defaults-vs-partial regression is testable without a request; the
-// discovery controllers export their schemas the same way.
-export function samplePolicyHasPrice(data: {
+function samplePolicyHasPrice(data: {
   samplePolicy?: "unavailable" | "paid" | "refundable";
   samplePriceInCents?: number;
 }): boolean {
@@ -272,7 +270,7 @@ export function samplePolicyHasPrice(data: {
  * naming the field, and again by `product_package_dimensions_ck` so a direct write
  * cannot store a half-measured package.
  */
-export function packageDimensionsComplete(data: {
+function packageDimensionsComplete(data: {
   packageLengthMm?: number;
   packageWidthMm?: number;
   packageHeightMm?: number;
@@ -283,10 +281,7 @@ export function packageDimensionsComplete(data: {
   return provided === 0 || provided === 3;
 }
 
-export function leadTimeRangeValid(data: {
-  leadTimeMinDays?: number;
-  leadTimeMaxDays?: number;
-}): boolean {
+function leadTimeRangeValid(data: { leadTimeMinDays?: number; leadTimeMaxDays?: number }): boolean {
   if (data.leadTimeMinDays === undefined && data.leadTimeMaxDays === undefined) {
     return true;
   }

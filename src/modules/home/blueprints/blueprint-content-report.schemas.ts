@@ -5,7 +5,7 @@ import { z } from "zod";
  * states the rule: a kebab or camel spelling on the wire is a DIFFERENT, ABSENT label, and the
  * mismatch shows up as a 422 nobody can act on rather than as a compile error.
  */
-export const BLUEPRINT_REPORT_REASONS = [
+const BLUEPRINT_REPORT_REASONS = [
   "rights_claim",
   "fabricated_measurements",
   "dangerous_procedure",
@@ -14,7 +14,7 @@ export const BLUEPRINT_REPORT_REASONS = [
   "other",
 ] as const;
 
-export const BLUEPRINT_REPORT_DETAIL_MAXIMUM_CHARACTERS = 2000;
+const BLUEPRINT_REPORT_DETAIL_MAXIMUM_CHARACTERS = 2000;
 
 /**
  * The body of `POST /blueprints/{teardowns,case-studies}/:slug/reports`.
@@ -36,8 +36,6 @@ export const CreateBlueprintReportSchema = z
       .nullable(),
   })
   .strict();
-export type CreateBlueprintReportInput = z.infer<typeof CreateBlueprintReportSchema>;
-
 /**
  * The moderator queue's paging controls.
  *
@@ -53,8 +51,6 @@ export const BlueprintReportQueueQuerySchema = z
     cursor: z.string().min(1).optional(),
   })
   .strip();
-export type BlueprintReportQueueQuery = z.infer<typeof BlueprintReportQueueQuerySchema>;
-
 /**
  * ⚠️ THE RESOLUTION NOTE IS REQUIRED, for the reason every moderation note on this surface is: a
  * dismissal is an answer to a person who took the trouble to report something, and a decision with
@@ -69,4 +65,3 @@ export const DismissBlueprintReportSchema = z
       .max(2000, "Keep the note under 2,000 characters."),
   })
   .strict();
-export type DismissBlueprintReportInput = z.infer<typeof DismissBlueprintReportSchema>;

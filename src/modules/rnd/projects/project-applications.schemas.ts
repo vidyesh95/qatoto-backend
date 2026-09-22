@@ -14,17 +14,11 @@
  */
 import { z } from "zod";
 
-export const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
+const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
 
-export const APPLICATION_STATUSES = [
-  "pending",
-  "accepted",
-  "declined",
-  "withdrawn",
-  "expired",
-] as const;
+const APPLICATION_STATUSES = ["pending", "accepted", "declined", "withdrawn", "expired"] as const;
 
-export const INVITE_STATUSES = ["pending", "accepted", "declined", "revoked", "expired"] as const;
+const INVITE_STATUSES = ["pending", "accepted", "declined", "revoked", "expired"] as const;
 
 export const CreateApplicationSchema = z
   .object({

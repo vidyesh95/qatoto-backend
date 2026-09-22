@@ -28,7 +28,7 @@ export interface PublicUser {
  * Columns that make up a {@link PublicUser}. Shared by every `.returning(...)`
  * so the read-back shape can't drift between mutations.
  */
-export const PUBLIC_USER_COLUMNS = {
+const PUBLIC_USER_COLUMNS = {
   id: user.id,
   name: user.name,
   email: user.email,

@@ -59,19 +59,19 @@ export const QuoteRevisionParamsSchema = z
   })
   .strict();
 
-export const CurrencyCodeSchema = z
+const CurrencyCodeSchema = z
   .string()
   .trim()
   .regex(/^[A-Z]{3}$/);
 
-export const CountryCodeSchema = z
+const CountryCodeSchema = z
   .string()
   .trim()
   .regex(/^[A-Z]{2}$/);
 
-export const NonNegativeCentsSchema = z.number().int().min(0);
+const NonNegativeCentsSchema = z.number().int().min(0);
 
-export const FreightQuoteDetailSchema = z
+const FreightQuoteDetailSchema = z
   .object({
     kind: z.enum(["freight_forwarder", "logistics_operator"]),
     transportModes: z
@@ -84,7 +84,7 @@ export const FreightQuoteDetailSchema = z
   })
   .strict();
 
-export const CustomsQuoteDetailSchema = z
+const CustomsQuoteDetailSchema = z
   .object({
     kind: z.literal("customs_broker"),
     jurisdictions: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -92,7 +92,7 @@ export const CustomsQuoteDetailSchema = z
   })
   .strict();
 
-export const InsuranceQuoteDetailSchema = z
+const InsuranceQuoteDetailSchema = z
   .object({
     kind: z.literal("insurance_provider"),
     coverageClasses: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -101,14 +101,14 @@ export const InsuranceQuoteDetailSchema = z
   })
   .strict();
 
-export const InspectionQuoteDetailSchema = z
+const InspectionQuoteDetailSchema = z
   .object({
     kind: z.literal("inspection_agency"),
     includedStages: z.array(z.string().trim().min(1).max(80)).max(20),
   })
   .strict();
 
-export const TestingQuoteDetailSchema = z
+const TestingQuoteDetailSchema = z
   .object({
     kind: z.literal("testing_certification_lab"),
     standards: z.array(z.string().trim().min(1).max(120)).max(50),
@@ -116,7 +116,7 @@ export const TestingQuoteDetailSchema = z
   })
   .strict();
 
-export const MarketingQuoteDetailSchema = z
+const MarketingQuoteDetailSchema = z
   .object({
     kind: z.literal("marketing_agency"),
     channels: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -124,7 +124,7 @@ export const MarketingQuoteDetailSchema = z
   })
   .strict();
 
-export const WarehouseQuoteDetailSchema = z
+const WarehouseQuoteDetailSchema = z
   .object({
     kind: z.literal("warehouse_provider"),
     storageTypes: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -133,7 +133,7 @@ export const WarehouseQuoteDetailSchema = z
   })
   .strict();
 
-export const FxQuoteDetailSchema = z
+const FxQuoteDetailSchema = z
   .object({
     kind: z.literal("foreign_exchange_facilitator"),
     currencyPair: z
@@ -148,7 +148,7 @@ export const FxQuoteDetailSchema = z
   })
   .strict();
 
-export const QuoteServiceDetailSchema = z
+const QuoteServiceDetailSchema = z
   .discriminatedUnion("kind", [
     FreightQuoteDetailSchema,
     CustomsQuoteDetailSchema,
@@ -185,7 +185,7 @@ export const QuoteServiceDetailSchema = z
     }
   });
 
-export const QuoteDeliverablePlanSchema = z
+const QuoteDeliverablePlanSchema = z
   .array(
     z
       .object({
@@ -212,7 +212,7 @@ export const QuoteDeliverablePlanSchema = z
     }
   });
 
-export const QuoteProductLineSchema = z
+const QuoteProductLineSchema = z
   .object({
     rfqProductLineId: z.string().trim().min(1).max(200),
     quantity: z.number().int().positive(),
@@ -225,7 +225,7 @@ export const QuoteProductLineSchema = z
   })
   .strict();
 
-export const QuoteServiceLineSchema = z
+const QuoteServiceLineSchema = z
   .object({
     rfqServiceLineId: z.string().trim().min(1).max(200),
     feeInCents: NonNegativeCentsSchema,

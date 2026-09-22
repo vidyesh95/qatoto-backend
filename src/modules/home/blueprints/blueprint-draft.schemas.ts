@@ -64,8 +64,6 @@ export const CreateBlueprintDraftSchema = z
     documentSchemaVersion: z.number().int().positive(),
   })
   .strict();
-export type CreateBlueprintDraftInput = z.infer<typeof CreateBlueprintDraftSchema>;
-
 /**
  * ⚠️ `revision` IS REQUIRED ON EVERY WRITE, and that is what makes autosave safe. A client sends
  * back the revision it loaded; the UPDATE guards on it. Without it, two tabs saving one draft means
@@ -80,10 +78,7 @@ export const ReplaceBlueprintDraftSchema = z
     revision: z.number().int().positive(),
   })
   .strict();
-export type ReplaceBlueprintDraftInput = z.infer<typeof ReplaceBlueprintDraftSchema>;
-
 /** `.strip()` rather than `.strict()`, matching every other query schema: a stray `utm_source`. */
 export const BlueprintDraftListQuerySchema = z
   .object({ arm: z.enum(["teardown", "showcase_launch", "case_study"]).optional() })
   .strip();
-export type BlueprintDraftListQuery = z.infer<typeof BlueprintDraftListQuerySchema>;

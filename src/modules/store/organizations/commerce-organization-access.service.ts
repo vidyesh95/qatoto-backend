@@ -61,12 +61,6 @@ export function memberCanOperateCounterparty(memberRole: CommerceOrganizationMem
   return COUNTERPARTY_MEMBER_ROLES.includes(memberRole);
 }
 
-export function memberCanUpdateOrganizationVisibility(
-  memberRole: CommerceOrganizationMemberRole,
-): boolean {
-  return memberRole === "owner" || memberRole === "administrator";
-}
-
 export type ActiveBuyerCommerceOrganizationAccessError =
   | { type: "ACTIVE_BUYER_ORGANIZATION_REQUIRED" }
   | { type: "ACTIVE_BUYER_MEMBERSHIP_REQUIRED" };

@@ -42,7 +42,7 @@ export type CompensationDomainError =
   | CompensationPeriodError
   | CompensationPaymentError;
 
-export function mapCompensationErrorToResponse(error: CompensationDomainError): {
+function mapCompensationErrorToResponse(error: CompensationDomainError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

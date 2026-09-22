@@ -14,14 +14,14 @@
  */
 import { z } from "zod";
 
-export const TALENT_AVAILABILITIES = ["open_to_work", "open_to_offers", "unavailable"] as const;
+const TALENT_AVAILABILITIES = ["open_to_work", "open_to_offers", "unavailable"] as const;
 
-export const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
+const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
 
-export const TALENT_SORTS = ["recent", "effort"] as const;
+const TALENT_SORTS = ["recent", "effort"] as const;
 
 /** Bounds every money field well inside int4 while still allowing a large ask. */
-export const MAXIMUM_MONEY_IN_CENTS = 2_000_000_000;
+const MAXIMUM_MONEY_IN_CENTS = 2_000_000_000;
 
 /**
  * The applicant-side mirror of §5's CompensationStrandSchema — a DISCRIMINATED UNION on
@@ -33,7 +33,7 @@ export const MAXIMUM_MONEY_IN_CENTS = 2_000_000_000;
  * is absent too: an ASK does not get to name a payout mechanism. That belongs to the OFFER
  * side, because the escrow engine honours offers, not wishes.
  */
-export const TalentCompensationAskSchema = z.discriminatedUnion("kind", [
+const TalentCompensationAskSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("salary"),
@@ -83,8 +83,6 @@ export const TalentProfileSchema = z
     compensationAsks: z.array(TalentCompensationAskSchema).max(3).default([]),
   })
   .strict();
-
-export type TalentProfileInput = z.infer<typeof TalentProfileSchema>;
 
 export const ListTalentQuerySchema = z
   .object({

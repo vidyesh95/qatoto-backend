@@ -10,7 +10,7 @@ import type { Response } from "express";
 
 import type { CommerceCategoryAttributeError } from "#src/modules/store/catalog/commerce-category-attributes.service.js";
 
-export function mapCategoryAttributeErrorToResponse(error: CommerceCategoryAttributeError): {
+function mapCategoryAttributeErrorToResponse(error: CommerceCategoryAttributeError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

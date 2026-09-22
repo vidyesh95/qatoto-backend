@@ -20,7 +20,7 @@ import { config } from "#src/config/index.js";
  * developer reads a terminal, a log aggregator parses a stream.
  */
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface LogFields {
   readonly [key: string]: unknown;

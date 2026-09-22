@@ -58,16 +58,16 @@ export const IMPORT_COMMODITY_KINDS = [
   "other_manufactured",
 ] as const;
 
-export const TRADE_FLOW_KINDS = ["import", "export"] as const;
+const TRADE_FLOW_KINDS = ["import", "export"] as const;
 
-export const DOMESTIC_SUBSTITUTE_KINDS = [
+const DOMESTIC_SUBSTITUTE_KINDS = [
   "direct_material_substitute",
   "alternative_material",
   "domestic_component",
   "process_change",
 ] as const;
 
-export const DOMESTIC_SUBSTITUTE_MATURITIES = [
+const DOMESTIC_SUBSTITUTE_MATURITIES = [
   "lab_scale",
   "pilot_scale",
   "commercial",

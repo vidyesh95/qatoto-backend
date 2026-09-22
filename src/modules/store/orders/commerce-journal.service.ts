@@ -32,8 +32,8 @@ export type CommerceJournalKind = (typeof commerceJournalEntry.$inferSelect)["ki
 export type CommerceJournalEntrySettlement =
   (typeof commerceJournalEntry.$inferSelect)["settlement"];
 
-export const COMMERCE_JOURNAL_HASH_VERSION = 1;
-export const COMMERCE_JOURNAL_GENESIS_PREVIOUS_HASH = "genesis";
+const COMMERCE_JOURNAL_HASH_VERSION = 1;
+const COMMERCE_JOURNAL_GENESIS_PREVIOUS_HASH = "genesis";
 
 /**
  * The pre-Phase-14 account set. Retained under its original name because it is exactly the
@@ -152,7 +152,7 @@ interface HashableLine {
 /**
  * Creates the order's six accounts if they do not exist, and returns them by kind.
  */
-export async function ensureCommerceJournalAccounts(
+async function ensureCommerceJournalAccounts(
   tx: DatabaseExecutor,
   orderId: string,
   currency: string,

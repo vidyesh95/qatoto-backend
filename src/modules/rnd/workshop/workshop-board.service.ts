@@ -3,7 +3,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { projectMember, workshopBoardColumn, workshopTask } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { initialRanks, rankBetween } from "#src/modules/rnd/lexorank.js";
+import { rankBetween } from "#src/modules/rnd/lexorank.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -103,7 +103,7 @@ export interface MoveTaskInput {
 }
 
 /** The whole board in render order: columns by position, tasks by rank. */
-export async function getBoard(projectId: string): Promise<readonly WorkshopBoardColumnView[]> {
+async function getBoard(projectId: string): Promise<readonly WorkshopBoardColumnView[]> {
   const columns = await db
     .select({
       id: workshopBoardColumn.id,
@@ -673,10 +673,3 @@ export async function ensureDefaultBoard(
 
   return getBoard(projectId);
 }
-
-/**
- * Exported for the seed path and for tests: `initialRanks` is the only other place a rank
- * is minted, and re-exporting it here keeps every rank in this domain traceable to
- * src/modules/rnd/lexorank.ts.
- */
-export { initialRanks };

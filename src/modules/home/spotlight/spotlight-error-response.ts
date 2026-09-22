@@ -19,7 +19,7 @@ export {
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
 
-export function mapSpotlightErrorToResponse(error: SpotlightError): {
+function mapSpotlightErrorToResponse(error: SpotlightError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

@@ -61,9 +61,7 @@ export type ObjectStorageError =
   | { type: "DELETE_FAILED"; cause: string };
 
 /** How long a download link lives. Long enough to click, short enough not to circulate. */
-export const PAPER_DOWNLOAD_URL_TTL_SECONDS = 300;
-export const PRIVATE_COMMERCE_DOCUMENT_URL_TTL_SECONDS = 300;
-
+const PAPER_DOWNLOAD_URL_TTL_SECONDS = 300;
 /**
  * Five minutes, matching its two siblings above rather than being tuned longer.
  *
@@ -74,7 +72,7 @@ export const PRIVATE_COMMERCE_DOCUMENT_URL_TTL_SECONDS = 300;
  * long enough to start a 25 MB download on a poor connection and short enough that a link pasted
  * into a group chat is dead before it is read.
  */
-export const VIDEO_DOCUMENT_URL_TTL_SECONDS = 300;
+const VIDEO_DOCUMENT_URL_TTL_SECONDS = 300;
 
 /**
  * §21.3. Five minutes, and for exactly the reason the video document above gives.
@@ -86,7 +84,7 @@ export const VIDEO_DOCUMENT_URL_TTL_SECONDS = 300;
  * presigned URL is a bearer capability. ⚠️ Do not tune this longer for convenience: a generous TTL
  * turns "this listing was unpublished" into "this link still works for an hour".
  */
-export const PRODUCT_DOCUMENT_URL_TTL_SECONDS = 300;
+const PRODUCT_DOCUMENT_URL_TTL_SECONDS = 300;
 
 /**
  * 300 seconds, matching every other private download on this platform.
@@ -97,7 +95,7 @@ export const PRODUCT_DOCUMENT_URL_TTL_SECONDS = 300;
  * for a leaked URL to be worth passing around. The route re-checks the READABLE gate on every
  * request, so a short TTL costs a redirect, not a failure.
  */
-export const TEARDOWN_FILE_URL_TTL_SECONDS = 300;
+const TEARDOWN_FILE_URL_TTL_SECONDS = 300;
 /**
  * A subject-access archive's DOWNLOAD LINK. Same five minutes as its neighbours, and for a
  * sharper reason: this object is every piece of personal data we hold about one person, so
@@ -108,7 +106,7 @@ export const TEARDOWN_FILE_URL_TTL_SECONDS = 300;
  * them would either leave a PII dump in the bucket for a week's worth of link, or expire
  * the export itself every five minutes.
  */
-export const DATA_EXPORT_URL_TTL_SECONDS = 300;
+const DATA_EXPORT_URL_TTL_SECONDS = 300;
 
 interface ConfiguredStorage {
   readonly client: S3Client;
@@ -166,7 +164,7 @@ export function paperObjectKey(programId: string, contentSha256: string): string
   return `${PAPER_KEY_PREFIX}/${programId}/papers/${contentSha256}.pdf`;
 }
 
-export function commerceDocumentObjectKey(input: {
+function commerceDocumentObjectKey(input: {
   readonly organizationId: string;
   readonly documentId: string;
   readonly contentSha256: string;
@@ -189,7 +187,7 @@ export function commerceDocumentObjectKey(input: {
  * CHECK constrains it to 64 hex characters — encoding a value that cannot contain a separator would
  * imply the CHECK were not there.
  */
-export function videoDocumentObjectKey(videoId: string, contentSha256: string): string {
+function videoDocumentObjectKey(videoId: string, contentSha256: string): string {
   return [
     VIDEO_DOCUMENT_KEY_PREFIX,
     encodeURIComponent(videoId),
@@ -206,7 +204,7 @@ export function videoDocumentObjectKey(videoId: string, contentSha256: string): 
  * key. The product id is encoded because it is a path segment built from a value this function
  * does not own.
  */
-export function productDocumentObjectKey(productId: string, contentSha256: string): string {
+function productDocumentObjectKey(productId: string, contentSha256: string): string {
   return [
     PRODUCT_DOCUMENT_KEY_PREFIX,
     encodeURIComponent(productId),
@@ -630,12 +628,6 @@ export async function presignPaperDownload(
   return presignPrivateObjectDownload(objectKey, PAPER_DOWNLOAD_URL_TTL_SECONDS);
 }
 
-export async function presignPrivateCommerceDocumentDownload(
-  objectKey: string,
-): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
-  return presignPrivateObjectDownload(objectKey, PRIVATE_COMMERCE_DOCUMENT_URL_TTL_SECONDS);
-}
-
 /** Fetches ciphertext for an authorized server-side decrypt-and-stream response. */
 export async function downloadPrivateCommerceDocument(
   objectKey: string,
@@ -750,7 +742,7 @@ export function isObjectStorageConfigured(): boolean {
 // ---------------------------------------------------------------------------
 
 /** Where one export's archive lives. Segment-encoded like `commerceDocumentObjectKey`. */
-export function dataExportObjectKey(input: {
+function dataExportObjectKey(input: {
   readonly userId: string;
   readonly requestId: string;
 }): string {

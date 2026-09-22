@@ -55,10 +55,10 @@ import type { Result } from "#src/types/index.js";
  */
 
 /** A category needs this many qualified orders in 30 days before a percentile means anything. */
-export const CATEGORY_PERCENTILE_MINIMUM_ORDERS = 30;
+const CATEGORY_PERCENTILE_MINIMUM_ORDERS = 30;
 
 /** Rows kept per category in the live ranking state. */
-export const MAXIMUM_RANKED_PRODUCTS_PER_CATEGORY = 100;
+const MAXIMUM_RANKED_PRODUCTS_PER_CATEGORY = 100;
 
 /**
  * Refinement 2's calendar gate, enforced rather than documented.
@@ -68,8 +68,8 @@ export const MAXIMUM_RANKED_PRODUCTS_PER_CATEGORY = 100;
  * `score_algorithm_version = 0`, which every read path refuses — a logged refusal rather
  * than a silent bad ranking, and the reason risk 2 in the plan exists.
  */
-export const MINIMUM_CONFIRMED_HISTORY_DAYS = 14;
-export const PRE_GATE_ALGORITHM_VERSION = 0;
+const MINIMUM_CONFIRMED_HISTORY_DAYS = 14;
+const PRE_GATE_ALGORITHM_VERSION = 0;
 
 const MILLISECONDS_PER_DAY = 86_400_000;
 

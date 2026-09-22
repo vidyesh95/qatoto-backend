@@ -131,7 +131,7 @@ export function assertCardAcceptsBreakWrites(
   return null;
 }
 
-export function projectBreak(row: FreightRateBreakRow): AdminFreightRateBreak {
+function projectBreak(row: FreightRateBreakRow): AdminFreightRateBreak {
   return {
     id: row.id,
     position: row.position,

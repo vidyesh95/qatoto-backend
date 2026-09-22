@@ -158,7 +158,7 @@ export function optionalBody(req: Request): unknown {
  * Maps a domain error to its HTTP shape. Does NOT touch `res` — mirrors
  * `mapProductErrorToResponse` so both are testable as pure functions.
  */
-export function mapProjectErrorToResponse(error: ProjectDomainError): {
+function mapProjectErrorToResponse(error: ProjectDomainError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

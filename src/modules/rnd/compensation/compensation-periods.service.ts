@@ -89,7 +89,7 @@ import type { Result } from "#src/types/index.js";
  */
 
 /** Bumping this changes future statement hashes without invalidating history (§4c). */
-export const STATEMENT_HASH_ALGORITHM_VERSION = "sha256-jcs-v1";
+const STATEMENT_HASH_ALGORITHM_VERSION = "sha256-jcs-v1";
 
 /** The typed phrase `POST …/compensation-periods/:id/finalize` requires. */
 export const FINALIZE_ACKNOWLEDGEMENT = "FINALIZE";
@@ -335,12 +335,6 @@ async function findNewestPeriod(projectId: string): Promise<PeriodRow | null> {
   return row ?? null;
 }
 
-/** The open period whose window contains `asOf` — the one still accruing. */
-export async function findAccruingPeriod(projectId: string, asOf: Date): Promise<PeriodRow | null> {
-  const open = await listOpenPeriods(projectId);
-  return open.find((period) => !hasPeriodClosed(toBounds(period), asOf)) ?? null;
-}
-
 // ---------------------------------------------------------------------------
 // Opening a period
 // ---------------------------------------------------------------------------
@@ -357,7 +351,7 @@ export async function findAccruingPeriod(projectId: string, asOf: Date): Promise
  * period that won, because two callers both wanting "the open period to exist" is agreement
  * rather than conflict.
  */
-export async function openPeriod(
+async function openPeriod(
   tx: DatabaseExecutor,
   projectId: string,
   bounds: PeriodBounds,

@@ -13,7 +13,7 @@ import { z } from "zod";
  */
 
 /** The comment body's bounds MIRROR `*_comment_body_ck`, so the parse and the CHECK agree. */
-export const BLUEPRINT_COMMENT_BODY_MAXIMUM_CHARACTERS = 2000;
+const BLUEPRINT_COMMENT_BODY_MAXIMUM_CHARACTERS = 2000;
 
 export const CreateBlueprintCommentSchema = z
   .object({
@@ -39,8 +39,6 @@ export const CreateBlueprintCommentSchema = z
     parentCommentId: z.string().min(1).max(64).nullable(),
   })
   .strict();
-export type CreateBlueprintCommentInput = z.infer<typeof CreateBlueprintCommentSchema>;
-
 export const UpdateBlueprintCommentSchema = z
   .object({
     body: z
@@ -53,8 +51,6 @@ export const UpdateBlueprintCommentSchema = z
       ),
   })
   .strict();
-export type UpdateBlueprintCommentInput = z.infer<typeof UpdateBlueprintCommentSchema>;
-
 /**
  * The comment thread's paging controls.
  *
@@ -73,8 +69,6 @@ export const ListBlueprintCommentsQuerySchema = z
     parentCommentId: z.string().min(1).optional(),
   })
   .strip();
-export type ListBlueprintCommentsQuery = z.infer<typeof ListBlueprintCommentsQuerySchema>;
-
 /**
  * The batched viewer-state read.
  *
@@ -106,4 +100,3 @@ export const BlueprintViewerStateQuerySchema = z
     caseStudies: SlugListSchema,
   })
   .strip();
-export type BlueprintViewerStateQuery = z.infer<typeof BlueprintViewerStateQuerySchema>;

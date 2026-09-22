@@ -456,8 +456,6 @@ const envSchema = z.object({
 });
 
 export const config = envSchema.parse(process.env);
-export type Config = z.infer<typeof envSchema>;
-
 // Every table in src/db/schema.ts uses plain `timestamp` (not `timestamptz`), which
 // node-postgres parses in the SERVER PROCESS's local zone. The schema therefore
 // already depends silently on the process running in UTC — this assertion makes that

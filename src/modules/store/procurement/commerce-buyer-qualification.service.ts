@@ -270,10 +270,10 @@ export async function evaluateBuyerQualification(
  * The domain part of an email, lowercased, or `null` if the address does not have exactly
  * one `@` with content on both sides.
  *
- * Exported for tests. Parsing rather than trusting: a malformed address must produce no
+ * Parsing rather than trusting: a malformed address must produce no
  * lookup at all, not a lookup for a garbage key that could be planted in the domain table.
  */
-export function extractEmailDomain(email: string): string | null {
+function extractEmailDomain(email: string): string | null {
   const parts = email.trim().toLowerCase().split("@");
   if (parts.length !== 2) return null;
 

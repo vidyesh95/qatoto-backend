@@ -51,7 +51,7 @@ import {
  * a §10-specific number: the two are the same question — "are these two short texts about
  * the same thing" — and two thresholds would be two definitions of similar that drift.
  */
-export const BRANCH_OVERLAP_THRESHOLD_BASIS_POINTS = TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS;
+const BRANCH_OVERLAP_THRESHOLD_BASIS_POINTS = TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS;
 
 /**
  * How many overlapping neighbours make a branch `contested`.
@@ -61,7 +61,7 @@ export const BRANCH_OVERLAP_THRESHOLD_BASIS_POINTS = TEXT_SIMILARITY_THRESHOLD_B
  * than duplicated work. Two or more independent groups converging on one question is the
  * pattern worth flagging, and §10 specifies this number.
  */
-export const CONTESTED_OVERLAP_THRESHOLD = 2;
+const CONTESTED_OVERLAP_THRESHOLD = 2;
 
 /** One branch's inputs, gathered before any signal is decided. */
 interface BranchSignalInput {

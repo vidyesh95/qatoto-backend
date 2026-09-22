@@ -44,12 +44,6 @@ import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type SettlementAgreementRow = typeof commerceSettlementAgreement.$inferSelect;
-export type SettlementRail =
-  | "internal_custody"
-  | "direct_offline"
-  | "direct_processor"
-  | "external_escrow";
-
 export type CommerceSettlementError =
   | { type: "NOT_FOUND" }
   | { type: "FORBIDDEN" }
@@ -127,10 +121,7 @@ export interface ProviderEligibilityQuery {
  * "serves nowhere" — a provider row with no coverage recorded yet should not silently
  * disappear from every list while looking configured.
  */
-export function isProviderEligible(
-  provider: ActiveProvider,
-  query: ProviderEligibilityQuery,
-): boolean {
+function isProviderEligible(provider: ActiveProvider, query: ProviderEligibilityQuery): boolean {
   const coversCountry = (countryCode: string): boolean =>
     provider.supportedCountryCodes.length === 0 ||
     provider.supportedCountryCodes.includes(countryCode);

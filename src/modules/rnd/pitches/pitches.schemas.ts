@@ -36,7 +36,7 @@ export const PitchPageQuerySchema = z.object({
  * Client-minted, once per attempt. 8–128 matches the DB CHECK, and the length floor is
  * what stops a caller sending `"1"` and colliding with everyone else's `"1"`.
  */
-export const IdempotencyKeySchema = z.string().trim().min(8).max(128);
+const IdempotencyKeySchema = z.string().trim().min(8).max(128);
 
 /**
  * A URL as it arrives. NOT `z.url()` — the parser in `src/lib/external-url.ts` is the check

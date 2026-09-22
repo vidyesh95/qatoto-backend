@@ -37,7 +37,7 @@ import type { Result } from "#src/types/index.js";
  */
 
 /** Bumping this changes future hashes without invalidating history (§4c). */
-export const AUDIT_HASH_ALGORITHM_VERSION = "sha256-jcs-v1";
+const AUDIT_HASH_ALGORITHM_VERSION = "sha256-jcs-v1";
 
 export type ProjectAuditEventKind = (typeof projectAuditEntry.$inferSelect)["eventKind"];
 
@@ -84,7 +84,7 @@ export interface AuditEntryRecord {
  * across the platform. Deterministic within a project, so the trail still reads as one
  * consistent actor.
  */
-export function pseudonymousActorLabel(projectId: string, actorUserId: string | null): string {
+function pseudonymousActorLabel(projectId: string, actorUserId: string | null): string {
   if (actorUserId === null) {
     return "system";
   }

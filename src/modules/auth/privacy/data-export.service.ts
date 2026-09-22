@@ -45,7 +45,7 @@ import type { Result } from "#src/types/index.js";
  */
 
 /** How long a built archive survives before the reaper deletes it. */
-export const DATA_EXPORT_RETENTION_DAYS = 7;
+const DATA_EXPORT_RETENTION_DAYS = 7;
 
 const MILLISECONDS_PER_DAY = 86_400_000;
 
@@ -311,7 +311,7 @@ export async function assembleDataExport(requestId: string): Promise<void> {
  * sits in either, `data_export_request_active_uidx` refuses every new request from that
  * user with a 409.
  */
-export async function markDataExportFailed(requestId: string, reason: string): Promise<void> {
+async function markDataExportFailed(requestId: string, reason: string): Promise<void> {
   await db
     .update(dataExportRequest)
     .set({ state: "failed", failureReason: reason.slice(0, 2000) })

@@ -53,7 +53,7 @@ import type { Result } from "#src/types/index.js";
  */
 
 /** Razorpay rejects orders below one rupee (100 paise). */
-export const RAZORPAY_MINIMUM_AMOUNT_IN_MINOR_UNITS = 100;
+const RAZORPAY_MINIMUM_AMOUNT_IN_MINOR_UNITS = 100;
 
 /**
  * Razorpay caps `receipt` at 40 characters, and our transfer idempotency keys are longer
@@ -522,15 +522,4 @@ export function verifyRazorpayWebhookSignature(
     .update(input.rawBody)
     .digest("hex");
   return compareHexDigests(expectedDigest, input.signatureHeader);
-}
-
-/** Exposed for tests and the smoke page; Razorpay signs on its own side in real traffic. */
-export function signRazorpayCheckoutPayment(
-  razorpayOrderId: string,
-  razorpayPaymentId: string,
-  keySecret: string,
-): string {
-  return createHmac("sha256", keySecret)
-    .update(`${razorpayOrderId}|${razorpayPaymentId}`)
-    .digest("hex");
 }

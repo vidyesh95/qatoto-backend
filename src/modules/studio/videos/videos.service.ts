@@ -1010,7 +1010,7 @@ function dedupe(values: readonly string[]): readonly string[] {
 type TransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** One recruiting blurb as the wire sends it. `openRoleId` is optional and verified. */
-export interface VideoOpenRoleInput {
+interface VideoOpenRoleInput {
   readonly roleTitle: string;
   readonly roleDescription?: string;
   readonly openRoleId?: string;

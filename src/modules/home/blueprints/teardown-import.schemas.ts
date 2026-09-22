@@ -245,7 +245,7 @@ export const NonZeroVectorSchema = ThreeComponentVectorSchema.refine(
   { message: "A direction vector may not be the zero vector." },
 );
 
-export const ModelFileSchema = z
+const ModelFileSchema = z
   .object({ url: AssetUrlSchema, byteSize: z.number().int().positive() })
   .strict();
 
@@ -264,11 +264,11 @@ export const PartBaseShape = {
   calloutText: z.string().min(1).max(400).nullable(),
 };
 
-export const CompositePartSchema = z
+const CompositePartSchema = z
   .object({ ...PartBaseShape, nodeName: z.string().min(1).max(120) })
   .strict();
 
-export const IndividualPartSchema = z
+const IndividualPartSchema = z
   .object({
     ...PartBaseShape,
     model: ModelFileSchema,
@@ -282,7 +282,7 @@ export const IndividualPartSchema = z
   })
   .strict();
 
-export const AssemblySchema = z.discriminatedUnion("kind", [
+const AssemblySchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("composite"),
@@ -300,7 +300,7 @@ export const AssemblySchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
-export const RepairabilityCriterionSchema = z
+const RepairabilityCriterionSchema = z
   .object({ scoreOutOfTen: z.number().int().min(0).max(10), note: z.string().min(1).max(400) })
   .strict();
 
@@ -379,7 +379,7 @@ export const ProvenanceSchema = z
  * no `.extend()` — so a schema that needs a different field set has to compose from the object, and
  * the object has to exist separately for that to be possible.
  */
-export const TeardownImportDocumentShape = z
+const TeardownImportDocumentShape = z
   .object({
     id: z.string().min(1).max(120),
     slug: z

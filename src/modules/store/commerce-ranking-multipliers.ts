@@ -25,7 +25,7 @@ export const NEUTRAL_MULTIPLIER_BASIS_POINTS = 10_000;
 /**
  * Concentration above which the penalty begins. The specification's figure.
  */
-export const SUBNET_CONCENTRATION_THRESHOLD_BASIS_POINTS = 5_000;
+const SUBNET_CONCENTRATION_THRESHOLD_BASIS_POINTS = 5_000;
 
 /**
  * How many hashed observations before the ratio is believable.
@@ -42,7 +42,7 @@ export const SUBNET_CONCENTRATION_THRESHOLD_BASIS_POINTS = 5_000;
  * data points. Do NOT lower this floor to make the guard fire again; the whole point of the
  * threshold is that a small sample cannot tell a procurement team from a farm.
  */
-export const SUBNET_MINIMUM_SAMPLE = 20;
+const SUBNET_MINIMUM_SAMPLE = 20;
 
 /**
  * THE PENALTY FLOOR, AND IT IS A DELIBERATE DEPARTURE FROM THE SPECIFICATION.
@@ -135,7 +135,7 @@ export function computeSubnetConcentrationPenalty(
  * ------------------------------------------------------------------------- */
 
 /** The specification's `min_value_weight`. */
-export const MINIMUM_ORDER_VALUE_MULTIPLIER_BASIS_POINTS = 1_000;
+const MINIMUM_ORDER_VALUE_MULTIPLIER_BASIS_POINTS = 1_000;
 
 /**
  * Caps a single enormous order from carrying a product on its own. Without it, one
@@ -143,7 +143,7 @@ export const MINIMUM_ORDER_VALUE_MULTIPLIER_BASIS_POINTS = 1_000;
  * neutral — except the multiplier is already capped at neutral, so what this actually
  * bounds is the ratio before clamping, keeping the arithmetic honest at the top end.
  */
-export const ORDER_VALUE_OUTLIER_CAP_BASIS_POINTS = 30_000;
+const ORDER_VALUE_OUTLIER_CAP_BASIS_POINTS = 30_000;
 
 export interface OrderValueMultiplierInput {
   /** Mean value of this product's qualified orders in W2, in cents. */
@@ -225,7 +225,7 @@ export interface NegativeRatePenaltyInput {
  * Below this, a rate is an anecdote. Three cancellations out of four orders is a bad week,
  * not a pattern, and the whole catalog would be penalised in its first month without it.
  */
-export const NEGATIVE_SIGNAL_MINIMUM_SAMPLE = 10;
+const NEGATIVE_SIGNAL_MINIMUM_SAMPLE = 10;
 
 /**
  * A penalty only for rates ABOVE the category's own p90, tiered by how far above.

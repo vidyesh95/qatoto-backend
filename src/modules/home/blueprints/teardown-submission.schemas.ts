@@ -288,7 +288,7 @@ export type TeardownSubmissionInput = z.infer<typeof TeardownSubmissionSchema>;
 export const TeardownSubmissionDocumentSchema = TeardownSubmissionSchema;
 export type TeardownSubmissionDocument = TeardownSubmissionInput;
 
-export const TEARDOWN_MODERATOR_NOTE_MAXIMUM_CHARACTERS = 2000;
+const TEARDOWN_MODERATOR_NOTE_MAXIMUM_CHARACTERS = 2000;
 
 /** The review queue pages; it offers no filter. Mirrors `CaseStudyCursorPageQuerySchema`. */
 export const TeardownReviewQueueQuerySchema = z
@@ -368,4 +368,3 @@ export type TeardownModerationDecisionInput = z.infer<typeof TeardownModerationD
 export const TeardownUploadFormatSchema = z
   .object({ format: z.enum(TEARDOWN_UPLOAD_FORMATS) })
   .strict();
-export type TeardownUploadFormatInput = z.infer<typeof TeardownUploadFormatSchema>;

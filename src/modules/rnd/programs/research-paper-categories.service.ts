@@ -121,7 +121,7 @@ export async function createResearchPaperCategory(
 }
 
 /** Resolves one row, whatever its status. The status read `decidePaperCategory` decides on. */
-export async function findPaperCategoryById(
+async function findPaperCategoryById(
   categoryId: string,
 ): Promise<ResearchPaperCategoryView | null> {
   const [row] = await db
@@ -139,7 +139,7 @@ export async function findPaperCategoryById(
  * silently overwriting who was accountable for the first decision. The capability check
  * is the CALLER's job and must have already happened — see `platform-role.service.ts`.
  */
-export async function applyPaperCategoryDecision(input: {
+async function applyPaperCategoryDecision(input: {
   readonly categoryId: string;
   readonly nextStatus: Extract<ResearchPaperCategoryStatus, "approved" | "rejected">;
 }): Promise<ResearchPaperCategoryView | null> {

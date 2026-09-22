@@ -266,11 +266,11 @@ export type ModerateShowcaseLaunchInput = z.infer<typeof ModerateShowcaseLaunchS
  * The public feed's two orders. Byte-matches the frontend's `SHOWCASE_SORTS`, because these are wire
  * values a query string carries.
  */
-export const SHOWCASE_FEED_SORTS = ["newest", "top"] as const;
-export const DEFAULT_SHOWCASE_FEED_SORT = "newest";
+const SHOWCASE_FEED_SORTS = ["newest", "top"] as const;
+const DEFAULT_SHOWCASE_FEED_SORT = "newest";
 
 /** Byte-matches the frontend's `SHOWCASE_PAGE_LIMIT`, so an unpaged request renders one full page. */
-export const SHOWCASE_FEED_DEFAULT_LIMIT = 6;
+const SHOWCASE_FEED_DEFAULT_LIMIT = 6;
 
 /**
  * The public showcase feed's query.

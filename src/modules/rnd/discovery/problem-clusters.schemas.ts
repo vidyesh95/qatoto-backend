@@ -14,11 +14,11 @@
  */
 import { z } from "zod";
 
-export const PROBLEM_CLUSTER_SORTS = ["opportunity", "recent", "reporters"] as const;
+const PROBLEM_CLUSTER_SORTS = ["opportunity", "recent", "reporters"] as const;
 
-export const MAXIMUM_LATITUDE_MICRODEGREES = 90_000_000;
+const MAXIMUM_LATITUDE_MICRODEGREES = 90_000_000;
 
-export const MAXIMUM_LONGITUDE_MICRODEGREES = 180_000_000;
+const MAXIMUM_LONGITUDE_MICRODEGREES = 180_000_000;
 
 export const ListProblemClustersQuerySchema = z
   .object({
@@ -166,5 +166,3 @@ export const ListMyProblemReportsQuerySchema = z
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })
   .strict();
-
-export type CreateProblemReportInput = z.infer<typeof CreateProblemReportSchema>;

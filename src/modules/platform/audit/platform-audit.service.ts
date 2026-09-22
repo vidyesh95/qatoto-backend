@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gte, lte } from "drizzle-orm";
+import { and, asc, count, eq, gte } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { platformAuditEntry, platformChainHead, user } from "#src/db/schema.js";
@@ -40,7 +40,7 @@ import type { Result } from "#src/types/index.js";
  * `pnpm db:verify-platform-audit-constraints` proves it against real rows.
  */
 
-export const PLATFORM_AUDIT_HASH_ALGORITHM_VERSION = "sha256-jcs-v1";
+const PLATFORM_AUDIT_HASH_ALGORITHM_VERSION = "sha256-jcs-v1";
 
 /** The one head row. Pinned by a CHECK; a second row would be a second chain. */
 const CHAIN_HEAD_ID = "global";
@@ -472,21 +472,4 @@ async function requireModerationAudit(
 ): Promise<Result<true, PlatformAccessError>> {
   const allowed = await requirePlatformCapability(actorUserId, MODERATION_AUDIT_CAPABILITY);
   return allowed.success ? { success: true, value: true } : allowed;
-}
-
-/** Exported for the constraint verifier, which walks a range rather than the whole log. */
-export async function countPlatformAuditEntriesInRange(
-  fromSequence: number,
-  toSequence: number,
-): Promise<number> {
-  const [row] = await db
-    .select({ total: count() })
-    .from(platformAuditEntry)
-    .where(
-      and(
-        gte(platformAuditEntry.sequenceNumber, fromSequence),
-        lte(platformAuditEntry.sequenceNumber, toSequence),
-      ),
-    );
-  return row?.total ?? 0;
 }

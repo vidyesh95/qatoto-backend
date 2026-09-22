@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-export const CommerceOrganizationIdSchema = z.string().trim().min(1).max(200);
+const CommerceOrganizationIdSchema = z.string().trim().min(1).max(200);
 
 export const OrganizationIdSchema = z
   .object({ organizationId: CommerceOrganizationIdSchema })
@@ -40,7 +40,7 @@ export const EmptyObjectSchema = z.object({}).strict();
 
 export const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
 
-export const OrganizationTypeSchema = z.enum([
+const OrganizationTypeSchema = z.enum([
   "company",
   "sole_proprietor",
   "cooperative",
@@ -48,7 +48,7 @@ export const OrganizationTypeSchema = z.enum([
   "nonprofit",
 ]);
 
-export const MemberRoleSchema = z.enum([
+const MemberRoleSchema = z.enum([
   "administrator",
   "buyer",
   "seller",
@@ -63,7 +63,7 @@ export const MemberRoleSchema = z.enum([
  * with the pgEnum or a newly added kind is rejected at the boundary and nobody can
  * create one — which is exactly how `delivery` would have gone unusable in Phase 11.
  */
-export const AddressKindSchema = z.enum([
+const AddressKindSchema = z.enum([
   "billing",
   "registered",
   "warehouse",
@@ -72,7 +72,7 @@ export const AddressKindSchema = z.enum([
   "delivery",
 ]);
 
-export const nullableHttpsUrl = z
+const nullableHttpsUrl = z
   .url()
   .refine((url) => url.startsWith("https://"))
   .nullable();
@@ -144,7 +144,7 @@ export const UpdateCommerceOrganizationMemberSchema = z
     "Change a member role and state in separate requests so each transition is audited.",
   );
 
-export const AddressFieldsSchema = z.object({
+const AddressFieldsSchema = z.object({
   addressKind: AddressKindSchema,
   label: z.string().trim().min(1).max(100).nullable().optional(),
   countryCode: z.string().regex(/^[A-Z]{2}$/),

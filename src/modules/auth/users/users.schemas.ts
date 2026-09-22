@@ -20,7 +20,7 @@ import { z } from "zod";
  * the value must START with a letter/mark so it can't be pure punctuation.
  * Unicode-aware (`\p{L}\p{M}`) so non-Latin names are accepted.
  */
-export const FullNameSchema = z
+const FullNameSchema = z
   .string()
   .trim()
   .min(1, "Name is required.")
@@ -44,7 +44,7 @@ export const UpdateMyProfileSchema = z.object({ fullName: FullNameSchema }).stri
  * do it — that would store text of length zero and fail the CHECK — so the client sends `null` and
  * this schema says so.
  */
-export const ChannelBioSchema = z
+const ChannelBioSchema = z
   .string()
   .trim()
   .min(20, "A description needs at least 20 characters.")
@@ -58,7 +58,7 @@ export const ChannelBioSchema = z
  * control — it is what keeps a `javascript:` scheme off a public anchor — and this is the message
  * that tells somebody why their `http://` link was refused instead of handing them a 23514.
  */
-export const ProfileLinkSchema = z
+const ProfileLinkSchema = z
   .object({
     label: z.string().trim().min(1, "A link needs a label.").max(60),
     url: z

@@ -43,7 +43,6 @@ import type { CommerceCategoryError } from "#src/modules/store/catalog/commerce-
 
 export {
   firstParam,
-  optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
@@ -52,7 +51,7 @@ export {
  * Maps a commerce-category error to its HTTP shape. Does NOT touch `res` — a pure function,
  * so it is testable without a request, mirroring every other mapper here.
  */
-export function mapCommerceCategoryErrorToResponse(error: CommerceCategoryError): {
+function mapCommerceCategoryErrorToResponse(error: CommerceCategoryError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

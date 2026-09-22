@@ -17,7 +17,7 @@ import { MAX_BLUEPRINT_HERO_SLIDES } from "#src/modules/home/blueprints/blueprin
  * promotional carousel's 200 because this one is `line-clamp-2` in a 328px card, and a
  * title that cannot fit is a title nobody reads.
  */
-export const BlueprintHeroTitleSchema = z.string().trim().min(1).max(160);
+const BlueprintHeroTitleSchema = z.string().trim().min(1).max(160);
 
 /**
  * The link's SHAPE only — length and emptiness.
@@ -28,7 +28,7 @@ export const BlueprintHeroTitleSchema = z.string().trim().min(1).max(160);
  * place the open-redirect logic exists. Duplicating it in a `.refine()` would create a
  * second copy to keep in sync, and the copy that drifted would be the security-relevant one.
  */
-export const BlueprintHeroDestinationPathSchema = z.string().trim().min(1).max(512);
+const BlueprintHeroDestinationPathSchema = z.string().trim().min(1).max(512);
 
 /**
  * A schedule bound on the wire: an ISO 8601 string, parsed into a `Date` by the handler.
@@ -37,7 +37,7 @@ export const BlueprintHeroDestinationPathSchema = z.string().trim().min(1).max(5
  * OpenAPI emitter, so `convertBodySchema` throws on it and the route silently loses its
  * published body — `openapi-rnd-bodies.test.ts` fails the build for exactly that.
  */
-export const BlueprintHeroScheduleBoundSchema = z.iso.datetime();
+const BlueprintHeroScheduleBoundSchema = z.iso.datetime();
 
 /**
  * Multipart text parts arrive as STRINGS — multer does not type them.
@@ -47,7 +47,7 @@ export const BlueprintHeroScheduleBoundSchema = z.iso.datetime();
  * `.transform()` either — unrepresentable to the OpenAPI emitter for the same reason a
  * date is.
  */
-export const BlueprintHeroMultipartBooleanSchema = z.enum(["true", "false"]);
+const BlueprintHeroMultipartBooleanSchema = z.enum(["true", "false"]);
 
 export const CreateBlueprintHeroSlideSchema = z
   .object({

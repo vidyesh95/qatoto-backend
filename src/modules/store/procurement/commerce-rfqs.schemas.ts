@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-export const ProviderKindSchema = z.enum([
+const ProviderKindSchema = z.enum([
   "freight_forwarder",
   "logistics_operator",
   "customs_broker",
@@ -26,13 +26,13 @@ export const ProviderKindSchema = z.enum([
   "foreign_exchange_facilitator",
 ]);
 
-export const TransportModeSchema = z.enum(["air", "sea", "land", "rail", "multimodal"]);
+const TransportModeSchema = z.enum(["air", "sea", "land", "rail", "multimodal"]);
 
-export const CountryCodeSchema = z.string().regex(/^[A-Z]{2}$/);
+const CountryCodeSchema = z.string().regex(/^[A-Z]{2}$/);
 
-export const CurrencyCodeSchema = z.string().regex(/^[A-Z]{3}$/);
+const CurrencyCodeSchema = z.string().regex(/^[A-Z]{3}$/);
 
-export const FreightRequirementFields = {
+const FreightRequirementFields = {
   transportModes: z.array(TransportModeSchema).min(1).max(5),
   originCountryCode: CountryCodeSchema.nullable().optional(),
   destinationCountryCode: CountryCodeSchema.nullable().optional(),
@@ -41,21 +41,21 @@ export const FreightRequirementFields = {
   cargoDescription: z.string().trim().max(4000).nullable().optional(),
 } as const;
 
-export const FreightForwarderRequirementDetailSchema = z
+const FreightForwarderRequirementDetailSchema = z
   .object({
     providerKind: z.literal("freight_forwarder"),
     ...FreightRequirementFields,
   })
   .strict();
 
-export const LogisticsOperatorRequirementDetailSchema = z
+const LogisticsOperatorRequirementDetailSchema = z
   .object({
     providerKind: z.literal("logistics_operator"),
     ...FreightRequirementFields,
   })
   .strict();
 
-export const CustomsRequirementDetailSchema = z
+const CustomsRequirementDetailSchema = z
   .object({
     providerKind: z.literal("customs_broker"),
     jurisdictions: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -65,7 +65,7 @@ export const CustomsRequirementDetailSchema = z
   })
   .strict();
 
-export const InsuranceRequirementDetailSchema = z
+const InsuranceRequirementDetailSchema = z
   .object({
     providerKind: z.literal("insurance_provider"),
     cargoCoverageClasses: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -74,7 +74,7 @@ export const InsuranceRequirementDetailSchema = z
   })
   .strict();
 
-export const InspectionRequirementDetailSchema = z
+const InspectionRequirementDetailSchema = z
   .object({
     providerKind: z.literal("inspection_agency"),
     preProduction: z.boolean().optional(),
@@ -84,7 +84,7 @@ export const InspectionRequirementDetailSchema = z
   })
   .strict();
 
-export const TestingRequirementDetailSchema = z
+const TestingRequirementDetailSchema = z
   .object({
     providerKind: z.literal("testing_certification_lab"),
     standards: z.array(z.string().trim().min(1).max(120)).max(50),
@@ -92,7 +92,7 @@ export const TestingRequirementDetailSchema = z
   })
   .strict();
 
-export const MarketingRequirementDetailSchema = z
+const MarketingRequirementDetailSchema = z
   .object({
     providerKind: z.literal("marketing_agency"),
     channels: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -101,7 +101,7 @@ export const MarketingRequirementDetailSchema = z
   })
   .strict();
 
-export const WarehouseRequirementDetailSchema = z
+const WarehouseRequirementDetailSchema = z
   .object({
     providerKind: z.literal("warehouse_provider"),
     storageTypes: z.array(z.string().trim().min(1).max(80)).max(50),
@@ -111,7 +111,7 @@ export const WarehouseRequirementDetailSchema = z
   })
   .strict();
 
-export const ForeignExchangeRequirementDetailSchema = z
+const ForeignExchangeRequirementDetailSchema = z
   .object({
     providerKind: z.literal("foreign_exchange_facilitator"),
     currencyPairs: z.array(z.string().trim().min(1).max(20)).max(100),
@@ -121,7 +121,7 @@ export const ForeignExchangeRequirementDetailSchema = z
   })
   .strict();
 
-export const RequirementDetailSchema = z.discriminatedUnion("providerKind", [
+const RequirementDetailSchema = z.discriminatedUnion("providerKind", [
   FreightForwarderRequirementDetailSchema,
   LogisticsOperatorRequirementDetailSchema,
   CustomsRequirementDetailSchema,
@@ -133,7 +133,7 @@ export const RequirementDetailSchema = z.discriminatedUnion("providerKind", [
   ForeignExchangeRequirementDetailSchema,
 ]);
 
-export const ProductLineSchema = z
+const ProductLineSchema = z
   .object({
     productId: z.string().trim().min(1).max(200).optional(),
     categoryId: z.string().trim().min(1).max(200).optional(),
@@ -145,7 +145,7 @@ export const ProductLineSchema = z
   })
   .strict();
 
-export const ServiceLineSchema = z
+const ServiceLineSchema = z
   .object({
     providerKind: ProviderKindSchema,
     serviceOfferingId: z.string().trim().min(1).max(200).optional(),

@@ -25,7 +25,7 @@ import type { Result } from "#src/types/index.js";
  * decision and deliberately generous: a wizard that autosaves is expected to hold one draft per
  * thing a person is working on, not one per session.
  */
-export const MAX_BLUEPRINT_DRAFTS_PER_AUTHOR = 25;
+const MAX_BLUEPRINT_DRAFTS_PER_AUTHOR = 25;
 
 export type BlueprintDraftError =
   /** ⚠️ ONE ANSWER for "no such draft" and "somebody else's draft" — see the error mapper. */

@@ -80,7 +80,7 @@ export interface CommercePaymentProviderAdapter {
  * Deterministic fake adapter. Provider refs are derived from OUR idempotency keys so a
  * retried worker call returns the same reference and never looks like a second charge.
  */
-export class FakeCommercePaymentProviderAdapter implements CommercePaymentProviderAdapter {
+class FakeCommercePaymentProviderAdapter implements CommercePaymentProviderAdapter {
   readonly providerName = "fake" as const;
 
   async createPaymentIntent(

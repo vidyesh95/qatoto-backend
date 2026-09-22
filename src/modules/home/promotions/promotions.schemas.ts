@@ -16,7 +16,7 @@ import { z } from "zod";
 
 import { MAX_PROMOTIONAL_SLIDES } from "#src/modules/home/promotions/promotions.service.js";
 
-export const DestinationKindSchema = z.enum(["internal_path", "external_url"]);
+const DestinationKindSchema = z.enum(["internal_path", "external_url"]);
 
 /**
  * The destination value's SHAPE only — length and emptiness.
@@ -27,9 +27,9 @@ export const DestinationKindSchema = z.enum(["internal_path", "external_url"]);
  * open-redirect logic exists. Duplicating it in a `.refine()` would create a second
  * copy to keep in sync, and the copy that drifted would be the security-relevant one.
  */
-export const DestinationValueSchema = z.string().trim().min(1).max(2048);
+const DestinationValueSchema = z.string().trim().min(1).max(2048);
 
-export const AltTextSchema = z.string().trim().min(1).max(200);
+const AltTextSchema = z.string().trim().min(1).max(200);
 
 /**
  * A schedule bound on the wire: an ISO 8601 string, parsed into a `Date` by the handler.
@@ -40,7 +40,7 @@ export const AltTextSchema = z.string().trim().min(1).max(200);
  * `convertBodySchema` throws on it and the route silently loses its published body —
  * `openapi-rnd-bodies.test.ts` fails the build for exactly that.
  */
-export const ScheduleBoundSchema = z.iso.datetime();
+const ScheduleBoundSchema = z.iso.datetime();
 
 /**
  * Multipart text parts arrive as STRINGS — multer does not type them, so `isActive` is the
@@ -51,7 +51,7 @@ export const ScheduleBoundSchema = z.iso.datetime();
  * `.transform()` either — a transform is unrepresentable to the OpenAPI emitter for the
  * same reason a date is.
  */
-export const MultipartBooleanSchema = z.enum(["true", "false"]);
+const MultipartBooleanSchema = z.enum(["true", "false"]);
 
 export const CreatePromotionalSlideSchema = z
   .object({

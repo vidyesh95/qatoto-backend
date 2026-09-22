@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, or, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, gte, isNotNull, isNull, lt, or, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "#src/db/index.js";
@@ -813,53 +813,4 @@ export async function listProductCompanions(
       items,
     })),
   };
-}
-
-/**
- * Spare-part lookup from a set of products the buyer already owns — the fifth
- * surface §15.3 promised one table would serve. Reads the graph in reverse: what
- * are the spare parts and consumables FOR these products.
- */
-export async function listSparePartsForProducts(
-  productIds: readonly string[],
-): Promise<readonly ProductCompanionProjection[]> {
-  if (productIds.length === 0) {
-    return [];
-  }
-  const relationRows = await db
-    .select({
-      fromProductId: commerceProductRelation.fromProductId,
-      relationKind: commerceProductRelation.relationKind,
-      sourceKind: commerceProductRelation.sourceKind,
-      rank: commerceProductRelation.rank,
-    })
-    .from(commerceProductRelation)
-    .where(
-      and(
-        inArray(commerceProductRelation.toProductId, [...productIds]),
-        inArray(commerceProductRelation.relationKind, ["spare_part_of", "consumable_for"]),
-        // Same suppression as the companions read: a refused claim reaches no buyer surface.
-        isNull(commerceProductRelation.dismissedAt),
-      ),
-    )
-    .orderBy(asc(commerceProductRelation.rank), asc(commerceProductRelation.id));
-
-  const cards = await resolveEligibleProductCardsByIds([
-    ...new Set(relationRows.map((relation) => relation.fromProductId)),
-  ]);
-  const cardById = new Map(cards.map((card) => [card.id, card]));
-
-  return relationRows.flatMap((relation) => {
-    const card = cardById.get(relation.fromProductId);
-    return card === undefined
-      ? []
-      : [
-          {
-            relationKind: relation.relationKind,
-            sourceKind: relation.sourceKind,
-            rank: relation.rank,
-            product: card,
-          },
-        ];
-  });
 }

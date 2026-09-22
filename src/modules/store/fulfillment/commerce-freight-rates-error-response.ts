@@ -31,7 +31,6 @@ import type { CommerceFreightRateError } from "#src/modules/store/fulfillment/co
  */
 
 export {
-  fieldRefusal,
   firstParam,
   optionalBody,
   respondUnauthenticated,
@@ -44,7 +43,7 @@ interface CommerceFreightRateErrorResponse {
   readonly errors?: Readonly<Record<string, readonly string[]>>;
 }
 
-export function mapCommerceFreightRateErrorToResponse(
+function mapCommerceFreightRateErrorToResponse(
   error: CommerceFreightRateError,
 ): CommerceFreightRateErrorResponse {
   switch (error.type) {

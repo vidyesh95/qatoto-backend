@@ -2566,7 +2566,7 @@ const PRODUCT_MODEL_VIEW_COLUMNS = {
 } as const;
 
 /** A47. The listing's model, or null. The public projection selects its own columns in its fan-out. */
-export async function findProductModel(productId: string): Promise<ProductModelView | null> {
+async function findProductModel(productId: string): Promise<ProductModelView | null> {
   const [row] = await db
     .select(PRODUCT_MODEL_VIEW_COLUMNS)
     .from(commerceProductModel)
@@ -2599,9 +2599,7 @@ function sanitizeStoredFileName(rawFileName: string, fallbackFileName: string): 
 }
 
 /** §21.3. A listing's documents, in attach order. Shared by the owner read and the public one. */
-export async function listProductDocuments(
-  productId: string,
-): Promise<readonly ProductDocumentView[]> {
+async function listProductDocuments(productId: string): Promise<readonly ProductDocumentView[]> {
   return db
     .select({
       id: commerceProductDocument.id,

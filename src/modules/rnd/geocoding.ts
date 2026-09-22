@@ -51,7 +51,7 @@ export interface GeocodeResolution {
  * one row and therefore one provider call. Applied at BOTH write and read, so a lookup
  * can never miss a row it should have hit.
  */
-export function normalizeGeocodeQuery(rawQuery: string): string {
+function normalizeGeocodeQuery(rawQuery: string): string {
   return rawQuery.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
 }
 

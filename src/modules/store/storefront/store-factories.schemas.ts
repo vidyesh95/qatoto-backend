@@ -12,7 +12,7 @@ import { z } from "zod";
  * Enum values are snake_case on the wire in both directions; query KEYS are camelCase.
  */
 
-export const FACTORY_CAPABILITY_KINDS = [
+const FACTORY_CAPABILITY_KINDS = [
   "oem",
   "odm",
   "customization",
@@ -25,7 +25,7 @@ export const FACTORY_CAPABILITY_KINDS = [
   "assembly",
 ] as const;
 
-export const FACTORY_CERTIFICATION_CODES = [
+const FACTORY_CERTIFICATION_CODES = [
   "iso_9001",
   "iso_14001",
   "bsci",
@@ -36,8 +36,8 @@ export const FACTORY_CERTIFICATION_CODES = [
   "fda_registered",
 ] as const;
 
-export const FactoryCapabilityKindSchema = z.enum(FACTORY_CAPABILITY_KINDS);
-export const FactoryCertificationCodeSchema = z.enum(FACTORY_CERTIFICATION_CODES);
+const FactoryCapabilityKindSchema = z.enum(FACTORY_CAPABILITY_KINDS);
+const FactoryCertificationCodeSchema = z.enum(FACTORY_CERTIFICATION_CODES);
 
 export const ListFactoriesQuerySchema = z
   .object({
@@ -59,8 +59,6 @@ export const ListFactoriesQuerySchema = z
     cursor: z.string().trim().min(1).max(500).optional(),
   })
   .strict();
-
-export type ListFactoriesQuery = z.infer<typeof ListFactoriesQuerySchema>;
 
 export const FactorySlugParamsSchema = z
   .object({
@@ -124,8 +122,6 @@ export const CreateManufacturingInquirySchema = z
     }
   });
 
-export type CreateManufacturingInquiryInput = z.infer<typeof CreateManufacturingInquirySchema>;
-
 export const InquiryIdParamsSchema = z
   .object({
     inquiryId: z.string().trim().min(1).max(200),
@@ -139,8 +135,6 @@ export const ListManufacturingInquiriesQuerySchema = z
     cursor: z.string().trim().min(1).max(500).optional(),
   })
   .strict();
-
-export type ListManufacturingInquiriesQuery = z.infer<typeof ListManufacturingInquiriesQuerySchema>;
 
 // ---------------------------------------------------------------------------
 // Seller-owned writes (§16.3)
@@ -243,8 +237,6 @@ export const ReplaceFactoryTermsSchema = z
       });
     }
   });
-
-export type ReplaceFactoryTermsInput = z.infer<typeof ReplaceFactoryTermsSchema>;
 
 // ---------------------------------------------------------------------------
 // Staff site audits (§16.2, conflict 3)

@@ -46,12 +46,6 @@ export interface EngagementRequestContext {
   readonly occurredAt?: Date;
 }
 
-/**
- * The only way a public engagement write fails: the product is not publicly eligible,
- * which is indistinguishable from "does not exist" on purpose (§11 anti-enumeration).
- */
-export type CommerceProductEngagementError = { type: "NOT_FOUND" };
-
 export interface ProductViewerEngagement {
   readonly hasLiked: boolean;
   readonly hasBookmarked: boolean;

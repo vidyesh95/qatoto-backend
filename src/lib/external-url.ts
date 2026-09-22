@@ -41,7 +41,7 @@ import type { Result } from "#src/types/index.js";
  * `pitch_external_urls_ck`. Both CHECKs are the backstop for this function, not a second
  * opinion — keep the three in step.
  */
-export const MAX_EXTERNAL_URL_LENGTH = 2048;
+const MAX_EXTERNAL_URL_LENGTH = 2048;
 
 export type ExternalUrlError =
   | { type: "EXTERNAL_URL_EMPTY" }

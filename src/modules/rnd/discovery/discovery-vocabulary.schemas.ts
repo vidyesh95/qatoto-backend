@@ -14,14 +14,14 @@
  */
 import { z } from "zod";
 
-export const SlugSchema = z
+const SlugSchema = z
   .string()
   .trim()
   .min(1)
   .max(80)
   .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "Must be a lowercase, hyphen-separated slug");
 
-export const DisplayLabelSchema = z.string().trim().min(1).max(80);
+const DisplayLabelSchema = z.string().trim().min(1).max(80);
 
 export const CreateDiscoverySkillSchema = z
   .object({

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { and, count, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, lt, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { researchPaperCategory, researchProgramPaper, user } from "#src/db/schema.js";
@@ -152,7 +152,7 @@ interface RawPaperRow {
  * `https://doi.org/10.1234/ABC`, `doi:10.1234/abc` and `10.1234/abc` are ONE paper. Without
  * this the dedup index sees three, which is the entire failure it exists to prevent.
  */
-export function normalizeDoi(rawDoi: string): string {
+function normalizeDoi(rawDoi: string): string {
   return rawDoi
     .trim()
     .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "")
@@ -567,33 +567,4 @@ export async function countProgramPapersByStatus(
     );
 
   return row?.total ?? 0;
-}
-
-/**
- * How many APPROVED papers sit on each branch of a program, for `recompute-branch-signals`.
- *
- * One grouped query rather than one per branch: the job runs over every branch of every
- * published program, and an N+1 there is N+1 across the whole platform.
- */
-export async function countApprovedPapersByBranch(
-  programId: string,
-): Promise<ReadonlyMap<string, number>> {
-  const rows = await db
-    .select({
-      branchId: researchProgramPaper.branchId,
-      paperCount: sql<number>`COUNT(*)::int`,
-    })
-    .from(researchProgramPaper)
-    .where(
-      and(
-        eq(researchProgramPaper.programId, programId),
-        eq(researchProgramPaper.moderationStatus, "approved"),
-        sql`${researchProgramPaper.branchId} IS NOT NULL`,
-      ),
-    )
-    .groupBy(researchProgramPaper.branchId);
-
-  return new Map(
-    rows.flatMap((row) => (row.branchId === null ? [] : [[row.branchId, row.paperCount] as const])),
-  );
 }

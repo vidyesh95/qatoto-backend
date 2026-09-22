@@ -62,8 +62,6 @@ const LISTED_MODERATION_STATES = ["published", "flagged"] as const;
 
 export type BlueprintEngagementArm = "showcase" | "teardown" | "case_study";
 
-export type BlueprintEngagementGateError = { readonly type: "BLUEPRINT_CONTENT_NOT_FOUND" };
-
 /**
  * Resolves a public slug to the row's id under the ENGAGEABLE gate.
  *
@@ -177,15 +175,3 @@ export async function resolveViewableBlueprint(
     }
   }
 }
-
-/**
- * The two predicates, exported so a test can prove they DISAGREE.
- *
- * `blueprints.routes.teardowns.test.ts` already carries a test whose only job is to fail if the two
- * teardown read gates ever agree. The same hazard applies here and the same guard answers it.
- */
-export const ENGAGEMENT_GATE_STATES = {
-  engageable: ENGAGEABLE_MODERATION_STATES,
-  teardownViewable: TEARDOWN_VIEWABLE_MODERATION_STATES,
-  listed: LISTED_MODERATION_STATES,
-} as const;

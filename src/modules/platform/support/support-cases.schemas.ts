@@ -11,7 +11,7 @@ import { z } from "zod";
  * refusal that names the field; the constraint is the one that cannot be bypassed.
  */
 
-export const SupportCaseCategorySchema = z.enum([
+const SupportCaseCategorySchema = z.enum([
   "payment_problem",
   "order_problem",
   "account_problem",
@@ -20,7 +20,7 @@ export const SupportCaseCategorySchema = z.enum([
   "other",
 ]);
 
-export const SupportCaseStateSchema = z.enum(["open", "awaiting_user", "resolved", "closed"]);
+const SupportCaseStateSchema = z.enum(["open", "awaiting_user", "resolved", "closed"]);
 
 export const SupportCaseIdParamsSchema = z
   .object({ caseId: z.string().trim().min(1).max(200) })

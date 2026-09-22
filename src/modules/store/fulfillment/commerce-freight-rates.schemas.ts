@@ -30,7 +30,7 @@ const IdentifierSchema = z.string().trim().min(1).max(200);
  * Mirrors `commerce_shipment_leg_mode`. NOT a second enum — §19.2 forbids one, and this
  * tuple is the wire's spelling of the enum the database already owns.
  */
-export const FREIGHT_MODES = ["air", "sea", "land", "rail"] as const;
+const FREIGHT_MODES = ["air", "sea", "land", "rail"] as const;
 export const FreightModeSchema = z.enum(FREIGHT_MODES);
 export type FreightMode = (typeof FREIGHT_MODES)[number];
 
@@ -42,7 +42,7 @@ export type FreightMode = (typeof FREIGHT_MODES)[number];
  * projection's `state` already returns. A camelCase alias would be a third spelling of one
  * concept and would have to be translated in both directions forever.
  */
-export const FREIGHT_RATE_CARD_STATES = ["active", "superseded", "withdrawn"] as const;
+const FREIGHT_RATE_CARD_STATES = ["active", "superseded", "withdrawn"] as const;
 export const FreightRateCardStateSchema = z.enum(FREIGHT_RATE_CARD_STATES);
 export type FreightRateCardState = (typeof FREIGHT_RATE_CARD_STATES)[number];
 
@@ -78,8 +78,6 @@ export const ListFreightRateCardsQuerySchema = z
     cursor: PageCursorSchema,
   })
   .strict();
-export type ListFreightRateCardsQuery = z.infer<typeof ListFreightRateCardsQuerySchema>;
-
 /**
  * The literal that asks for the rows scoped to ANY origin / ANY commodity — the ones stored
  * as NULL (§19.3).
@@ -127,8 +125,6 @@ export const ListCustomsDwellEstimatesQuerySchema = z
     cursor: PageCursorSchema,
   })
   .strict();
-export type ListCustomsDwellEstimatesQuery = z.infer<typeof ListCustomsDwellEstimatesQuerySchema>;
-
 /**
  * One weight/volume band.
  *
@@ -139,7 +135,7 @@ export type ListCustomsDwellEstimatesQuery = z.infer<typeof ListCustomsDwellEsti
  * `unitPriceInCents` is CENTS PER KILOGRAM of chargeable weight; the two `min*` fields are
  * the band's FLOOR, not its denominator.
  */
-export const FreightRateBreakSchema = z
+const FreightRateBreakSchema = z
   .object({
     minBillableWeightGrams: z.number().int().min(0).max(100_000_000),
     minVolumeCubicCm: z.number().int().min(0).max(1_000_000_000),
@@ -155,8 +151,6 @@ export const FreightRateBreakSchema = z
     message: "transitDaysMax must be greater than or equal to transitDaysMin.",
     path: ["transitDaysMax"],
   });
-export type FreightRateBreakBody = z.infer<typeof FreightRateBreakSchema>;
-
 /**
  * BOUNDED ON BOTH AXES, and both bounds are load-bearing rather than decoration: an
  * unbounded array is an unbounded body, which is what `json-body-budget.test.ts` exists to
@@ -197,8 +191,6 @@ export const CreateFreightRateCardSchema = z
     breaks: FreightRateBreakListSchema,
   })
   .strict();
-export type CreateFreightRateCardBody = z.infer<typeof CreateFreightRateCardSchema>;
-
 /**
  * A DISCRIMINATED UNION, not an optional-field bag (CLAUDE.md §3.2). The two intents are
  * different acts with different audit kinds, and `{ validUntil, state }` together has no
@@ -221,12 +213,8 @@ export const UpdateFreightRateCardSchema = z.discriminatedUnion("intent", [
     })
     .strict(),
 ]);
-export type UpdateFreightRateCardBody = z.infer<typeof UpdateFreightRateCardSchema>;
-
 /** POST /:rateCardId/breaks — append ONE band at the next position. */
 export const AppendFreightRateBreakSchema = FreightRateBreakSchema;
-export type AppendFreightRateBreakBody = z.infer<typeof AppendFreightRateBreakSchema>;
-
 /**
  * PATCH /:rateCardId/breaks — a WHOLE-SET replace, never a per-band edit.
  *
@@ -236,8 +224,6 @@ export type AppendFreightRateBreakBody = z.infer<typeof AppendFreightRateBreakSc
 export const ReplaceFreightRateBreaksSchema = z
   .object({ breaks: FreightRateBreakListSchema })
   .strict();
-export type ReplaceFreightRateBreaksBody = z.infer<typeof ReplaceFreightRateBreaksSchema>;
-
 /**
  * `originCountryCode: null` = ANY ORIGIN, `commodityScopeCategoryId: null` = ANY COMMODITY
  * (§19.3). Both are EXPLICIT nulls rather than absences, so the console cannot turn a
@@ -264,11 +250,8 @@ export const CreateCustomsDwellEstimateSchema = z
       "A domestic lane has no customs leg — that is an absent component, not a zero-day one.",
     path: ["originCountryCode"],
   });
-export type CreateCustomsDwellEstimateBody = z.infer<typeof CreateCustomsDwellEstimateSchema>;
-
 /**
  * The dwell table has no `state`, so retiring one IS closing its window. Narrowing only, for
  * the card's reason: these days feed a buyer's arrival window.
  */
 export const UpdateCustomsDwellEstimateSchema = z.object({ validUntil: z.iso.datetime() }).strict();
-export type UpdateCustomsDwellEstimateBody = z.infer<typeof UpdateCustomsDwellEstimateSchema>;

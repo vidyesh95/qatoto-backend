@@ -79,7 +79,7 @@ interface ScoredDemandCell extends DemandCellInputs {
  * bytes, and they disagree on astral-plane characters — a ranking that disagrees with the
  * database's own ordering is a ranking nobody can paginate.
  */
-export function rankDemandCells(cells: readonly ScoredDemandCell[]): readonly ScoredDemandCell[] {
+function rankDemandCells(cells: readonly ScoredDemandCell[]): readonly ScoredDemandCell[] {
   return cells.toSorted((left, right) => {
     if (left.demandScorePoints !== right.demandScorePoints) {
       return right.demandScorePoints - left.demandScorePoints;

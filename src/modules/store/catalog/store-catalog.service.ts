@@ -829,9 +829,7 @@ async function buildCategoryTrail(categoryId: string): Promise<readonly StoreCat
  * Active category id plus every active descendant. Used so parent browse pages and
  * facets include products assigned to leaf categories under the requested node.
  */
-export async function listActiveCategorySubtreeIds(
-  rootCategoryId: string,
-): Promise<readonly string[]> {
+async function listActiveCategorySubtreeIds(rootCategoryId: string): Promise<readonly string[]> {
   const result = await db.execute<{ id: string }>(sql`
     WITH RECURSIVE category_subtree AS (
       SELECT id

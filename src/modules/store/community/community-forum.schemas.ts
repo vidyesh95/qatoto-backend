@@ -9,7 +9,7 @@ import { z } from "zod";
  * concluding the queue is empty.
  */
 
-export const FORUM_BOARDS = [
+const FORUM_BOARDS = [
   "sourcing",
   "logistics_and_customs",
   "compliance_and_certification",
@@ -19,9 +19,9 @@ export const FORUM_BOARDS = [
 ] as const;
 
 /** The three a public read may return. `pending_review` is deliberately absent. */
-export const PUBLIC_FORUM_THREAD_STATES = ["open", "answered", "locked"] as const;
+const PUBLIC_FORUM_THREAD_STATES = ["open", "answered", "locked"] as const;
 
-export const ForumBoardSchema = z.enum(FORUM_BOARDS);
+const ForumBoardSchema = z.enum(FORUM_BOARDS);
 
 export const ListForumThreadsQuerySchema = z
   .object({
@@ -109,7 +109,7 @@ export const ListMyForumThreadsQuerySchema = z
 // Reporting and moderation (§17.4)
 // ---------------------------------------------------------------------------
 
-export const CommunityContentTargetKindSchema = z.enum(["forum_thread", "forum_reply"]);
+const CommunityContentTargetKindSchema = z.enum(["forum_thread", "forum_reply"]);
 
 export const CreateCommunityReportSchema = z
   .object({
@@ -186,6 +186,3 @@ export const CommunityReportIdParamsSchema = z
     reportId: z.string().trim().min(1).max(200),
   })
   .strict();
-
-export type CreateForumThreadInput = z.infer<typeof CreateForumThreadSchema>;
-export type ListForumThreadsQuery = z.infer<typeof ListForumThreadsQuerySchema>;

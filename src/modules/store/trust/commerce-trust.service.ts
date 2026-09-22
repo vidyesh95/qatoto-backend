@@ -707,7 +707,7 @@ async function nextDisputeEventSequence(
   return highest?.sequence === null || highest?.sequence === undefined ? 0 : highest.sequence + 1;
 }
 
-export function isDisputeParty(
+function isDisputeParty(
   dispute: { readonly buyerOrganizationId: string; readonly counterpartyOrganizationId: string },
   organizationId: string,
 ): boolean {

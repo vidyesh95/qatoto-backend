@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const BLUEPRINT_MODERATION_REASON_NOTE_MAXIMUM_CHARACTERS = 2000;
+const BLUEPRINT_MODERATION_REASON_NOTE_MAXIMUM_CHARACTERS = 2000;
 
 const ReasonNoteSchema = z
   .string()
@@ -62,4 +62,3 @@ export const BlueprintModerationCommandSchema = z.discriminatedUnion("verb", [
     .object({ verb: z.literal("restore"), reasonNote: ReasonNoteSchema, reportId: ReportIdSchema })
     .strict(),
 ]);
-export type BlueprintModerationCommand = z.infer<typeof BlueprintModerationCommandSchema>;

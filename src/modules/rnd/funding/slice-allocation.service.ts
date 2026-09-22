@@ -30,7 +30,7 @@ import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membe
  */
 
 /** §9.8's window. A MINIMUM, never a maximum — a late sweep is always the safe direction. */
-export const DISPUTE_WINDOW_HOURS = 24;
+const DISPUTE_WINDOW_HOURS = 24;
 
 type DatabaseExecutor = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -515,22 +515,4 @@ export async function findAllocationProposalView(
     .limit(1);
 
   return row ? { ...row, proposedSliceNumerator: row.proposedSliceNumerator.toString() } : null;
-}
-
-/** One proposal, scoped to its project so an id from elsewhere reads as absent. */
-export async function findProposal(
-  projectId: string,
-  proposalId: string,
-): Promise<typeof sliceAllocationProposal.$inferSelect | null> {
-  const [row] = await db
-    .select()
-    .from(sliceAllocationProposal)
-    .where(
-      and(
-        eq(sliceAllocationProposal.id, proposalId),
-        eq(sliceAllocationProposal.projectId, projectId),
-      ),
-    );
-
-  return row ?? null;
 }

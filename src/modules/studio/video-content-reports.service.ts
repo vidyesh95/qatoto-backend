@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { user, video, videoContentReport, videoModerationAction } from "#src/db/schema.js";
@@ -664,19 +664,4 @@ export async function listMyVideoReports(
     .limit(MY_REPORTS_LIMIT);
 
   return rows;
-}
-
-/** How many reports are waiting, for the admin console's queue badge. */
-export async function countOpenVideoReports(
-  moderatorUserId: string,
-): Promise<Result<{ readonly openCount: number }, VideoContentReportError>> {
-  const moderator = await requireVideoModerator(moderatorUserId);
-  if (!moderator.success) return { success: false, error: moderator.error };
-
-  const [row] = await db
-    .select({ value: count() })
-    .from(videoContentReport)
-    .where(eq(videoContentReport.status, "open"));
-
-  return { success: true, value: { openCount: row?.value ?? 0 } };
 }

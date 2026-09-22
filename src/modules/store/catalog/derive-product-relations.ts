@@ -163,7 +163,7 @@ async function loadCoOccurringPairs(): Promise<readonly CoOccurringPair[]> {
  * strongest few. Rank 0 is the strongest signal, matching what the companions read and
  * the pathway slot both expect.
  */
-export function rankPairsPerProduct(
+function rankPairsPerProduct(
   pairs: readonly CoOccurringPair[],
 ): readonly (CoOccurringPair & { readonly rank: number })[] {
   const pairsByFromProductId = new Map<string, CoOccurringPair[]>();

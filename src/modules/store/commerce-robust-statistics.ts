@@ -22,10 +22,10 @@
  * that a weekly buying rhythm — which B2B procurement absolutely has — is inside the window
  * rather than being mistaken for a trend.
  */
-export const MINIMUM_BASELINE_SAMPLE = 14;
+const MINIMUM_BASELINE_SAMPLE = 14;
 
 /** The multiplier on the robust spread. Two is the specification's figure. */
-export const SPIKE_DEVIATION_MULTIPLIER = 2;
+const SPIKE_DEVIATION_MULTIPLIER = 2;
 
 /**
  * Scales the median absolute deviation so it estimates the same quantity a standard
@@ -35,7 +35,7 @@ export const SPIKE_DEVIATION_MULTIPLIER = 2;
 const MAD_TO_STANDARD_DEVIATION_SCALE = 1.4826;
 
 /** The median of a sample, or `null` when the sample is empty. */
-export function medianOf(values: readonly number[]): number | null {
+function medianOf(values: readonly number[]): number | null {
   if (values.length === 0) return null;
 
   const sorted = [...values].toSorted((left, right) => left - right);
@@ -53,7 +53,7 @@ export function medianOf(values: readonly number[]): number | null {
  * The median absolute deviation — the median of each observation's distance from the
  * median. `null` on an empty sample.
  */
-export function medianAbsoluteDeviationOf(values: readonly number[]): number | null {
+function medianAbsoluteDeviationOf(values: readonly number[]): number | null {
   const median = medianOf(values);
   if (median === null) return null;
 

@@ -13,15 +13,15 @@ import { z } from "zod";
  * the database's own `commerce_category_attribute_key_ck`; kebab-case here would be a 422 from
  * the CHECK after passing Zod, which is the worst place to disagree.
  */
-export const AttributeKeySchema = z
+const AttributeKeySchema = z
   .string()
   .trim()
   .min(1)
   .max(64)
   .regex(/^[a-z0-9]+(_[a-z0-9]+)*$/, "Use lowercase words separated by single underscores.");
 
-export const AttributeLabelSchema = z.string().trim().min(1).max(120);
-export const AttributeValueKindSchema = z.enum(["enum", "number", "text"]);
+const AttributeLabelSchema = z.string().trim().min(1).max(120);
+const AttributeValueKindSchema = z.enum(["enum", "number", "text"]);
 
 /**
  * The allowed answers for an `enum` attribute.
@@ -29,7 +29,7 @@ export const AttributeValueKindSchema = z.enum(["enum", "number", "text"]);
  * Bounded at 60: a chip row longer than that is not a filter a person uses, and an unbounded
  * array is an unbounded body — the same argument `ReorderCommerceCategoriesSchema` makes.
  */
-export const AttributeChoicesSchema = z
+const AttributeChoicesSchema = z
   .array(
     z
       .object({

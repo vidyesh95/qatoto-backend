@@ -7,7 +7,6 @@ import {
   allocateLedgerSequenceNumber,
 } from "#src/modules/rnd/projects/project-audit.service.js";
 import { computeSlicesAwarded } from "#src/modules/rnd/slice-math.js";
-import type { Result } from "#src/types/index.js";
 
 /**
  * THE LEDGER (R_AND_D_BACKEND_STRUCTURE.md §9.1 enforcement 1, §9.3).
@@ -159,100 +158,6 @@ export async function writeLedgerEntry(
 }
 
 export type LedgerError = { type: "LEDGER_ENTRY_NOT_FOUND"; entryId: string };
-
-/**
- * Appends a REVERSAL — the only correction mechanism this domain has (§9.1).
- *
- * Not an UPDATE, not a DELETE: the original entry stays exactly as written and a second
- * entry carries the negated numerator. An auditor reading the ledger sees both the mistake
- * and its correction, which is the whole point.
- */
-export async function writeReversalEntry(
-  tx: DatabaseExecutor,
-  input: {
-    readonly projectId: string;
-    readonly reversalOfEntryId: string;
-    readonly actorUserId: string | null;
-    readonly actorRoleSnapshot: string;
-    readonly reason: string;
-    readonly occurredAt: Date;
-  },
-): Promise<Result<LedgerEntryRecord, LedgerError>> {
-  const [original] = await tx
-    .select()
-    .from(sliceLedgerEntry)
-    .where(
-      and(
-        eq(sliceLedgerEntry.id, input.reversalOfEntryId),
-        eq(sliceLedgerEntry.projectId, input.projectId),
-      ),
-    );
-
-  if (!original) {
-    return {
-      success: false,
-      error: { type: "LEDGER_ENTRY_NOT_FOUND", entryId: input.reversalOfEntryId },
-    };
-  }
-
-  const reversedNumerator = -original.sliceNumerator;
-  const slicesAwarded = computeSlicesAwarded(reversedNumerator);
-  const sequenceNumber = await allocateLedgerSequenceNumber(tx, input.projectId);
-
-  const [inserted] = await tx
-    .insert(sliceLedgerEntry)
-    .values({
-      projectId: input.projectId,
-      sequenceNumber,
-      memberId: original.memberId,
-      entryKind: "reversal",
-      contributionKind: original.contributionKind,
-      claimId: original.claimId,
-      // Deliberately NOT the original's proposalId: the partial unique index allows one
-      // entry per proposal, and a reversal is a second entry about the same settlement.
-      proposalId: null,
-      sliceNumerator: reversedNumerator,
-      slicesAwarded,
-      fairMarketRateId: original.fairMarketRateId,
-      unpaidRateCentsPerHour: original.unpaidRateCentsPerHour,
-      // Negated too, so the reversal's own inputs read as the mirror of what it undoes
-      // rather than as a second positive contribution.
-      effortMinutes: original.effortMinutes === null ? null : -original.effortMinutes,
-      cashInCents: original.cashInCents === null ? null : -original.cashInCents,
-      reversalOfEntryId: original.id,
-      occurredAt: input.occurredAt,
-    })
-    .returning({ id: sliceLedgerEntry.id });
-
-  if (!inserted) {
-    throw new Error("writeReversalEntry: insert returned no row");
-  }
-
-  await appendAuditEntry(tx, {
-    projectId: input.projectId,
-    eventKind: "slices_reversed",
-    actorUserId: input.actorUserId,
-    actorRoleSnapshot: input.actorRoleSnapshot,
-    actionLabel: "Reversed a ledger entry",
-    targetLabel: `ledger entry ${sequenceNumber}`,
-    detailNote: input.reason,
-    payload: {
-      ledgerEntryId: inserted.id,
-      ledgerSequenceNumber: BigInt(sequenceNumber),
-      reversalOfEntryId: original.id,
-      reversalOfSequenceNumber: BigInt(original.sequenceNumber),
-      memberId: original.memberId,
-      sliceNumerator: reversedNumerator,
-      slicesAwarded: BigInt(slicesAwarded),
-    },
-    occurredAt: input.occurredAt,
-  });
-
-  return {
-    success: true,
-    value: { id: inserted.id, sequenceNumber, slicesAwarded, sliceNumerator: reversedNumerator },
-  };
-}
 
 export interface MemberSliceTotal {
   readonly memberId: string;

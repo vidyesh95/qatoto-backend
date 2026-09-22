@@ -36,7 +36,7 @@ export type PitchDomainError =
   | PitchOutcomeError
   | PlatformAccessError;
 
-export function mapPitchErrorToResponse(error: PitchDomainError): {
+function mapPitchErrorToResponse(error: PitchDomainError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

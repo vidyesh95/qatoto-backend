@@ -297,7 +297,7 @@ async function findReceiptByIdempotencyKey(
 }
 
 /** One receipt with its forensic checks, scoped to its project. */
-export async function findReceipt(
+async function findReceipt(
   projectId: string,
   receiptId: string,
 ): Promise<PhysicalReceiptView | null> {

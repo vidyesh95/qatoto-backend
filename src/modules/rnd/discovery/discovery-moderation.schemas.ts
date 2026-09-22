@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-export const CATEGORY_PIN_ICON_KEYS = [
+const CATEGORY_PIN_ICON_KEYS = [
   "water",
   "energy",
   "health",

@@ -1,10 +1,9 @@
-import { and, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNotNull, ne, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
   marketInsight,
   marketInsightProjectLink,
-  openRoleCompensation,
   problemCluster,
   problemClusterProjectLink,
   projectMember,
@@ -71,7 +70,7 @@ export type ResearchProjectError =
  * strips to empty); the caller then falls back to a generated slug rather than
  * producing "" and colliding with every other such project.
  */
-export function slugifyProjectName(name: string): string | null {
+function slugifyProjectName(name: string): string | null {
   const asciiFolded = name
     .normalize("NFD")
     // Strip combining marks left by NFD, so é → e rather than é → e + U+0301.
@@ -1174,42 +1173,4 @@ export async function removeProjectCover(
     .where(eq(researchProject.id, projectId));
 
   return { success: true, value: { deleted: true } };
-}
-
-/**
- * Roles a project advertises, with their compensation strands.
- * `OpenRole.projectName` is NOT stored — it joins from research_project.name (§5).
- */
-export async function listProjectOpenRolesWithCompensation(projectId: string): Promise<
-  ReadonlyArray<
-    typeof projectOpenRole.$inferSelect & {
-      readonly compensation: readonly (typeof openRoleCompensation.$inferSelect)[];
-    }
-  >
-> {
-  const roles = await db
-    .select()
-    .from(projectOpenRole)
-    .where(eq(projectOpenRole.projectId, projectId))
-    .orderBy(projectOpenRole.createdAt, projectOpenRole.id);
-
-  if (roles.length === 0) {
-    return [];
-  }
-
-  const strands = await db
-    .select()
-    .from(openRoleCompensation)
-    .where(
-      inArray(
-        openRoleCompensation.openRoleId,
-        roles.map((role) => role.id),
-      ),
-    )
-    .orderBy(openRoleCompensation.kind);
-
-  return roles.map((role) => ({
-    ...role,
-    compensation: strands.filter((strand) => strand.openRoleId === role.id),
-  }));
 }

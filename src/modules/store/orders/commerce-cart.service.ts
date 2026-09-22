@@ -137,7 +137,7 @@ async function appendAuditOrThrow(
  * Loads or creates the one cart a buyer organization owns, without a row lock.
  * Safe for read paths; mutation paths must go through `getOrCreateCartForUpdate` instead.
  */
-export async function getOrCreateCart(buyerOrganizationId: string): Promise<CartRow> {
+async function getOrCreateCart(buyerOrganizationId: string): Promise<CartRow> {
   const [existing] = await db
     .select()
     .from(commerceCart)

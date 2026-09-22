@@ -9,7 +9,7 @@ import { z } from "zod";
  * id has no referential integrity and the queue could not join to show a reviewer what
  * was reported.
  */
-export const CommerceContentTargetKindSchema = z.enum([
+const CommerceContentTargetKindSchema = z.enum([
   "product",
   "review",
   "question",

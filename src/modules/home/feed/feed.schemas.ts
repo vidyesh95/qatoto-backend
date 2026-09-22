@@ -21,7 +21,7 @@ import { RANK_SEED_LENGTH } from "#src/modules/home/rank-seed.js";
 export const WatchVideoIdParamSchema = z.object({ videoId: z.uuid() }).strict();
 
 /** The chip and tile slugs are kebab-case, server-generated, and validated at creation. */
-export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
  * `GET /feed/videos` — §5.1's query contract.

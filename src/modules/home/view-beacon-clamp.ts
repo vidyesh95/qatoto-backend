@@ -47,7 +47,7 @@ export const COUNTED_VIEW_MINIMUM_WATCHED_SECONDS = 10;
  * ...30% of the video, whichever comes first. The second clause is what stops a
  * 12-second clip being uncountable: finishing it is unambiguously a view.
  */
-export const COUNTED_VIEW_MINIMUM_COMPLETION_BASIS_POINTS = 3_000;
+const COUNTED_VIEW_MINIMUM_COMPLETION_BASIS_POINTS = 3_000;
 
 /** 100%, in basis points. Completion is stored as bp so it never becomes a float. */
 export const MAXIMUM_COMPLETION_BASIS_POINTS = 10_000;

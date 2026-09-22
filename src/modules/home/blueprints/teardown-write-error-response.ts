@@ -26,12 +26,6 @@ import type { TeardownSubmitError } from "#src/modules/home/blueprints/teardown-
 
 export type TeardownWriteError = TeardownSubmitError | TeardownModerationError;
 
-export {
-  firstParam,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/modules/home/blueprints/blueprint-error-response.js";
-
 /**
  * ⚠️ THE ONE PLACE A STORED ROW'S TITLE IS ECHOED, AND IT IS CONTRACT-MANDATED.
  *

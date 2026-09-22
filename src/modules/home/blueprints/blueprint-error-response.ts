@@ -28,7 +28,6 @@ import type { PromotionalDestinationError } from "#src/modules/home/promotions/p
 
 export {
   firstParam,
-  optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
@@ -61,7 +60,7 @@ const DESTINATION_REJECTION_MESSAGES: Readonly<
  * Maps a blueprint hero slide error to its HTTP shape. Does NOT touch `res` — a pure
  * function, so it is testable without a request, mirroring every other mapper here.
  */
-export function mapBlueprintHeroSlideErrorToResponse(error: BlueprintHeroSlideError): {
+function mapBlueprintHeroSlideErrorToResponse(error: BlueprintHeroSlideError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

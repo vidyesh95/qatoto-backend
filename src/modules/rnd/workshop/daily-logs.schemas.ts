@@ -14,9 +14,7 @@
  */
 import { z } from "zod";
 
-export const IsoDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
 
 /**
  * `youtubeUrl` is NOT wrapped in `z.url()`.
@@ -26,7 +24,7 @@ export const IsoDateSchema = z
  * the browser showed a green checkmark. The parse that matters happens in the service,
  * against a hostname allowlist.
  */
-export const YoutubeUrlSchema = z.string().trim().min(1).max(2_048);
+const YoutubeUrlSchema = z.string().trim().min(1).max(2_048);
 
 export const CreateDailyLogSchema = z
   .object({

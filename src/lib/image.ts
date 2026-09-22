@@ -124,9 +124,6 @@ export interface NormalizedImage {
   readonly height: number;
 }
 
-/** Back-compat alias for the avatar caller. */
-export type NormalizedAvatar = NormalizedImage;
-
 /** Output codec for the re-encoded buffer. */
 export type ImageOutputFormat = "webp" | "avif";
 

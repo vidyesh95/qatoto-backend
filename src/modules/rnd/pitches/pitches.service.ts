@@ -190,7 +190,7 @@ function toPitchView(
  * AUTO-SUFFIXES ON COLLISION (`-2`, `-3`), matching `research_project.slug` and
  * `research_program.slug`. Two ventures may legitimately pitch under similar names.
  */
-export function slugifyPitchTitle(title: string): string {
+function slugifyPitchTitle(title: string): string {
   return title
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")

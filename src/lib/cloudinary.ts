@@ -281,11 +281,6 @@ function reviewMediaPublicId(reviewId: string, mediaId: string): string {
   return `${REVIEW_FOLDER}/${reviewId}/${mediaId}`;
 }
 
-/** The folder prefix holding all of a review's photo assets. */
-function reviewFolderPrefix(reviewId: string): string {
-  return `${REVIEW_FOLDER}/${reviewId}/`;
-}
-
 /**
  * Upload one review photo from an already-validated/re-encoded buffer. The buffer
  * MUST have been through `validateAndNormalizeImage` first (CLAUDE.md §1.1) — that is
@@ -383,10 +378,6 @@ function organizationMediaPublicId(organizationId: string, mediaId: string): str
   return `${ORGANIZATION_MEDIA_FOLDER}/${organizationId}/${mediaId}`;
 }
 
-function organizationMediaFolderPrefix(organizationId: string): string {
-  return `${ORGANIZATION_MEDIA_FOLDER}/${organizationId}/`;
-}
-
 /**
  * Upload one company photo from an already-validated/re-encoded buffer.
  *
@@ -475,60 +466,6 @@ export async function deleteOrganizationMedia(
   }
 }
 
-/** Destroy every company photo under an organization's folder. */
-export async function deleteAllOrganizationMedia(
-  organizationId: string,
-): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
-  if (!ensureConfigured()) {
-    return { success: false, error: { type: "NOT_CONFIGURED" } };
-  }
-
-  try {
-    await cloudinary.api.delete_resources_by_prefix(organizationMediaFolderPrefix(organizationId), {
-      resource_type: "image",
-      invalidate: true,
-    });
-    return { success: true, value: { deleted: true } };
-  } catch (deleteError) {
-    return {
-      success: false,
-      error: {
-        type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
-      },
-    };
-  }
-}
-
-/**
- * Destroy every asset under a review's folder. Used if a review is ever hard-deleted;
- * `commerce_review_media` cascades, so the rows go with it and these assets would
- * otherwise be orphaned.
- */
-export async function deleteAllReviewMedia(
-  reviewId: string,
-): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
-  if (!ensureConfigured()) {
-    return { success: false, error: { type: "NOT_CONFIGURED" } };
-  }
-
-  try {
-    await cloudinary.api.delete_resources_by_prefix(reviewFolderPrefix(reviewId), {
-      resource_type: "image",
-      invalidate: true,
-    });
-    return { success: true, value: { deleted: true } };
-  } catch (deleteError) {
-    return {
-      success: false,
-      error: {
-        type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
-      },
-    };
-  }
-}
-
 /**
  * R&D project covers. ONE asset per project, overwritten in place — the same shape as
  * avatars rather than product images, because a project has exactly one cover and a
@@ -537,7 +474,7 @@ export async function deleteAllReviewMedia(
 const RESEARCH_PROJECT_FOLDER = "qatoto/research-projects";
 
 /** The stable, deterministic public id for a project's cover. */
-export function projectCoverPublicId(projectId: string): string {
+function projectCoverPublicId(projectId: string): string {
   return `${RESEARCH_PROJECT_FOLDER}/${projectId}/cover`;
 }
 
@@ -639,7 +576,7 @@ export async function deleteProjectCover(
 const VIDEO_THUMBNAIL_FOLDER = "qatoto/video-thumbnails";
 
 /** The stable, deterministic public id for a video's custom thumbnail. */
-export function videoThumbnailPublicId(videoId: string): string {
+function videoThumbnailPublicId(videoId: string): string {
   return `${VIDEO_THUMBNAIL_FOLDER}/${videoId}/thumbnail`;
 }
 
@@ -734,7 +671,7 @@ export async function deleteVideoThumbnail(
 const PHYSICAL_RECEIPT_FOLDER = "qatoto/proof-of-effort/receipts";
 
 /** The stable public id a receipt's bytes always live at, within its project. */
-export function physicalReceiptPublicId(projectId: string, contentSha256: string): string {
+function physicalReceiptPublicId(projectId: string, contentSha256: string): string {
   return `${PHYSICAL_RECEIPT_FOLDER}/${projectId}/${contentSha256}`;
 }
 
@@ -838,7 +775,7 @@ export async function uploadPhysicalReceipt(
 const PROMOTIONAL_SLIDE_FOLDER = "qatoto/promotional-slides";
 
 /** The stable, deterministic public id a slide's image always lives at. */
-export function promotionalSlideImagePublicId(slideId: string): string {
+function promotionalSlideImagePublicId(slideId: string): string {
   return `${PROMOTIONAL_SLIDE_FOLDER}/${slideId}`;
 }
 
@@ -942,7 +879,7 @@ export async function deletePromotionalSlideImage(
 const BLUEPRINT_HERO_SLIDE_FOLDER = "qatoto/anime-hero-slides";
 
 /** The stable, deterministic public id a Blueprints hero slide's image always lives at. */
-export function blueprintHeroSlideImagePublicId(slideId: string): string {
+function blueprintHeroSlideImagePublicId(slideId: string): string {
   return `${BLUEPRINT_HERO_SLIDE_FOLDER}/${slideId}`;
 }
 
@@ -1238,7 +1175,7 @@ export async function listShowcaseImageAssets(
 const CONTENT_CATEGORY_FOLDER = "qatoto/content-categories";
 
 /** The stable, deterministic public id a category's tile image always lives at. */
-export function contentCategoryImagePublicId(categoryId: string): string {
+function contentCategoryImagePublicId(categoryId: string): string {
   return `${CONTENT_CATEGORY_FOLDER}/${categoryId}`;
 }
 
@@ -1286,34 +1223,6 @@ export async function uploadContentCategoryImage(
       error: {
         type: "UPLOAD_FAILED",
         cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
-      },
-    };
-  }
-}
-
-/**
- * Delete a category's tile image. Treated as success when the asset is already gone — the
- * desired end state is reached either way.
- */
-export async function deleteContentCategoryImage(
-  categoryId: string,
-): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
-  if (!ensureConfigured()) {
-    return { success: false, error: { type: "NOT_CONFIGURED" } };
-  }
-
-  try {
-    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
-      contentCategoryImagePublicId(categoryId),
-      { invalidate: true },
-    );
-    return { success: true, value: { deleted: destroyResult.result === "ok" } };
-  } catch (deleteError) {
-    return {
-      success: false,
-      error: {
-        type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
       },
     };
   }
@@ -1428,22 +1337,22 @@ const ORGANIZATION_STAKEHOLDER_FOLDER = "qatoto/commerce-stakeholders";
 const ORGANIZATION_LOGO_FOLDER = "qatoto/commerce-organization-logos";
 const STORE_PATHWAY_FOLDER = "qatoto/store-pathways";
 
-export function productHighlightImagePublicId(productId: string, highlightId: string): string {
+function productHighlightImagePublicId(productId: string, highlightId: string): string {
   return `${PRODUCT_HIGHLIGHT_FOLDER}/${productId}/${highlightId}`;
 }
 
-export function organizationStakeholderPhotoPublicId(
+function organizationStakeholderPhotoPublicId(
   organizationId: string,
   stakeholderId: string,
 ): string {
   return `${ORGANIZATION_STAKEHOLDER_FOLDER}/${organizationId}/${stakeholderId}`;
 }
 
-export function organizationLogoPublicId(organizationId: string): string {
+function organizationLogoPublicId(organizationId: string): string {
   return `${ORGANIZATION_LOGO_FOLDER}/${organizationId}`;
 }
 
-export function storePathwayImagePublicId(pathwayId: string, imageSlot: "hero" | "card"): string {
+function storePathwayImagePublicId(pathwayId: string, imageSlot: "hero" | "card"): string {
   return `${STORE_PATHWAY_FOLDER}/${pathwayId}/${imageSlot}`;
 }
 
@@ -1582,7 +1491,7 @@ export async function deleteStorePathwayImage(
 const COMMERCE_CATEGORY_FOLDER = "qatoto/commerce-categories";
 
 /** The stable public id a category's tile image always lives at. */
-export function commerceCategoryImagePublicId(categoryId: string): string {
+function commerceCategoryImagePublicId(categoryId: string): string {
   return `${COMMERCE_CATEGORY_FOLDER}/${categoryId}`;
 }
 
@@ -1597,16 +1506,6 @@ export async function uploadCommerceCategoryImage(
   imageBuffer: Buffer,
 ): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
   return uploadHostedImageAsset(commerceCategoryImagePublicId(categoryId), imageBuffer);
-}
-
-/**
- * Drop a category's tile. Already-absent counts as success — the desired end state is
- * reached either way.
- */
-export async function deleteCommerceCategoryImage(
-  categoryId: string,
-): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
-  return destroyHostedImageAsset(commerceCategoryImagePublicId(categoryId));
 }
 
 /**
@@ -1638,7 +1537,7 @@ export async function deleteCommerceCategoryImage(
 const PRODUCT_MODEL_FOLDER = "qatoto/commerce-product-models";
 
 /** The stable, deterministic public id a listing's model always lives at. */
-export function productModelPublicId(productId: string): string {
+function productModelPublicId(productId: string): string {
   return `${PRODUCT_MODEL_FOLDER}/${productId}/model.glb`;
 }
 

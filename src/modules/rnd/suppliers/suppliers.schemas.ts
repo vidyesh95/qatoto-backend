@@ -14,21 +14,21 @@
  */
 import { z } from "zod";
 
-export const SlugSchema = z
+const SlugSchema = z
   .string()
   .trim()
   .min(1)
   .max(80)
   .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "Must be a lowercase, hyphen-separated slug");
 
-export const SUPPLIER_VERIFICATION_STATES = [
+const SUPPLIER_VERIFICATION_STATES = [
   "unverified",
   "documents_pending",
   "verified",
   "suspended",
 ] as const;
 
-export const SUPPLIER_CONTACT_POLICIES = ["via_platform", "direct_email", "no_contact"] as const;
+const SUPPLIER_CONTACT_POLICIES = ["via_platform", "direct_email", "no_contact"] as const;
 
 /**
  * `capability` accepts one value or several, and several means AND.
@@ -92,7 +92,7 @@ export const LaunchReadyProjectsQuerySchema = z
   })
   .strict();
 
-export const ENGAGEMENT_STATUSES = ["considering", "contacted", "contracted", "ended"] as const;
+const ENGAGEMENT_STATUSES = ["considering", "contacted", "contracted", "ended"] as const;
 
 /**
  * `verificationState` is ABSENT here and that is the §6 rule, not an oversight: a project

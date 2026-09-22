@@ -47,12 +47,8 @@ import {
   pointsForAtMostLadder,
   type ScoreLadderRung,
 } from "#src/lib/score-ladder.js";
-import {
-  applyMultipliers,
-  type AppliedMultipliers,
-} from "#src/modules/store/commerce-ranking-multipliers.js";
 
-export const COMMERCE_TRENDING_MAXIMUM_POINTS = 100;
+const COMMERCE_TRENDING_MAXIMUM_POINTS = 100;
 
 /**
  * The formula's version, stored on every row it produces.
@@ -96,7 +92,7 @@ assertBudgetsSumTo(
  * those 5 immediately. The gap between 5 and 15 becomes something a seller can earn by
  * shipping on time, rather than a penalty for having recently arrived.
  */
-export const SELLER_TRUST_SPLIT = {
+const SELLER_TRUST_SPLIT = {
   measuredPerformance: 10,
   verifiedStanding: 5,
 } as const;
@@ -354,14 +350,6 @@ export function scoreCommerceTrendingCandidate(
       totalPoints,
     },
   };
-}
-
-/** Convenience: base score through the multipliers, for callers holding both. */
-export function finalCommerceTrendingScore(
-  breakdown: CommerceTrendingComponentBreakdown,
-  multipliers: AppliedMultipliers,
-): number {
-  return applyMultipliers(breakdown.totalPoints, multipliers);
 }
 
 /**

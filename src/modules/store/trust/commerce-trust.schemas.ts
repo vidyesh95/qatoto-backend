@@ -11,7 +11,7 @@ import { z } from "zod";
  * cannot see; `createReview` refuses it as UNSUPPORTED_SCORE_AXIS under the lock it
  * already holds on the completion row.
  */
-export const ReviewScoresSchema = z
+const ReviewScoresSchema = z
   .object({
     service: z.number().int().min(1).max(5),
     shipping: z.number().int().min(1).max(5),
@@ -51,8 +51,6 @@ export const EditOwnReviewSchema = z
   })
   .strict();
 
-export type EditOwnReviewInput = z.infer<typeof EditOwnReviewSchema>;
-
 export const ReviewIdParamsSchema = z
   .object({
     reviewId: z.string().trim().min(1).max(200),
@@ -76,8 +74,6 @@ export const ReviewMediaParamsSchema = z
  * caller learns its request was misunderstood instead of assuming it worked.
  */
 export const AttachReviewPhotoFieldsSchema = z.object({}).strict();
-
-export type AttachReviewPhotoFieldsInput = z.infer<typeof AttachReviewPhotoFieldsSchema>;
 
 /**
  * A review video is a YouTube LINK, not an upload. This codebase has no first-party
@@ -152,8 +148,6 @@ export const AddDisputeNoteSchema = z
     note: z.string().trim().min(1).max(4000),
   })
   .strict();
-
-export type AddDisputeNoteInput = z.infer<typeof AddDisputeNoteSchema>;
 
 export const ListDisputesQuerySchema = z
   .object({

@@ -19,7 +19,7 @@ import { z } from "zod";
  * both directions; `z.enum([...]).safeParse("child-safety")` fails, and the wire-casing rule
  * in CLAUDE.md exists because someone will try.
  */
-export const VideoReportReasonSchema = z.enum([
+const VideoReportReasonSchema = z.enum([
   "sexual_content",
   "violence",
   "hateful_or_abusive",

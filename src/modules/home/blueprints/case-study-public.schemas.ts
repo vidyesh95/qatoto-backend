@@ -3,7 +3,7 @@ import { z } from "zod";
 import { CASE_STUDY_DISCIPLINES } from "#src/modules/home/blueprints/case-study-submission.schemas.js";
 
 /** 10 fixtures at 6 per page is two pages, so the paging control renders. */
-export const CASE_STUDY_INDEX_DEFAULT_LIMIT = 6;
+const CASE_STUDY_INDEX_DEFAULT_LIMIT = 6;
 
 /**
  * `?discipline=` is the whole filter surface on this index — one typed facet, no sort and no tag
@@ -23,8 +23,6 @@ export const PublicCaseStudyIndexQuerySchema = z
     cursor: z.string().min(1).max(200).optional(),
   })
   .strip();
-
-export type PublicCaseStudyIndexQuery = z.infer<typeof PublicCaseStudyIndexQuerySchema>;
 
 /**
  * A case study's address, shaped exactly as `case_study_slug_ck` stores one.
@@ -48,7 +46,7 @@ export const CaseStudyCursorPageQuerySchema = z
   })
   .strip();
 
-export const CASE_STUDY_MODERATOR_NOTE_MAXIMUM_CHARACTERS = 2000;
+const CASE_STUDY_MODERATOR_NOTE_MAXIMUM_CHARACTERS = 2000;
 
 /**
  * A moderator's decision on one case study.

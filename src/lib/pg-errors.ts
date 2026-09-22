@@ -18,14 +18,11 @@
  */
 
 /** Unique constraint or exclusion violation. */
-export const PG_UNIQUE_VIOLATION = "23505";
+const PG_UNIQUE_VIOLATION = "23505";
 /** CHECK constraint violation. Always a programmer error in this codebase — see below. */
 export const PG_CHECK_VIOLATION = "23514";
 /** Foreign key violation, e.g. an onDelete: "restrict" parent that still has children. */
 export const PG_FOREIGN_KEY_VIOLATION = "23503";
-
-/** Custom SQLSTATE raised by the append-only triggers in migration 0010 (§4f). */
-export const QATOTO_APPEND_ONLY_VIOLATION = "QT001";
 
 /**
  * Reads a Postgres SQLSTATE out of an error, unwrapping drizzle's wrapper.

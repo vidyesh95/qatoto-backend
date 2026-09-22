@@ -14,9 +14,9 @@
  */
 import { z } from "zod";
 
-export const TASK_PRIORITIES = ["high", "medium", "low"] as const;
+const TASK_PRIORITIES = ["high", "medium", "low"] as const;
 
-export const FILE_KINDS = [
+const FILE_KINDS = [
   "document",
   "spreadsheet",
   "cad_model",
@@ -27,9 +27,7 @@ export const FILE_KINDS = [
 ] as const;
 
 /** Date-only, the §1 wire format. A `Date` here would carry a zone nobody agreed on. */
-export const IsoDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
 
 export const CreateColumnSchema = z.object({ title: z.string().trim().min(1).max(60) }).strict();
 
@@ -45,7 +43,7 @@ export const ReorderColumnsSchema = z
  * string for every card corrupts the board for the whole team. The server derives it from
  * `{ afterTaskId, beforeTaskId }` in the move endpoint.
  */
-export const TaskFieldsSchema = z.object({
+const TaskFieldsSchema = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().max(5_000).nullish(),
   assigneeMemberId: z.string().min(1).nullish(),

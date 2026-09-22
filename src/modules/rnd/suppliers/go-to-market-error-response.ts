@@ -32,7 +32,7 @@ import type { SupplierEngagementError } from "#src/modules/rnd/suppliers/supplie
  */
 export type GoToMarketDomainError = SupplierEngagementError;
 
-export function mapGoToMarketErrorToResponse(error: GoToMarketDomainError): {
+function mapGoToMarketErrorToResponse(error: GoToMarketDomainError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;

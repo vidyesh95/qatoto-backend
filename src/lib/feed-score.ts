@@ -66,7 +66,7 @@ assertBudgetsSumTo(
 export const COMPLETION_RAMP_FULL_WEIGHT_SAMPLES = 20;
 
 /** A video is "fresh" for its first three days. */
-export const FRESHNESS_WINDOW_HOURS = 72;
+const FRESHNESS_WINDOW_HOURS = 72;
 
 /** Mean completion, in basis points. */
 const COMPLETION_LADDER: readonly ScoreLadderRung[] = [

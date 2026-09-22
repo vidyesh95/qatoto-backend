@@ -12,9 +12,9 @@ import { z } from "zod";
  * makes the column a place to put anything rather than a record of what browser was used.
  */
 
-export const PlatformFeedbackCategorySchema = z.enum(["bug", "idea", "other"]);
+const PlatformFeedbackCategorySchema = z.enum(["bug", "idea", "other"]);
 
-export const PlatformFeedbackStatusSchema = z.enum(["new", "reviewed", "closed"]);
+const PlatformFeedbackStatusSchema = z.enum(["new", "reviewed", "closed"]);
 
 /** Matches `platform_feedback_message_ck` and `platform_feedback_page_path_ck`. */
 export const CreatePlatformFeedbackSchema = z
@@ -78,7 +78,3 @@ export const DecidePlatformFeedbackSchema = z
 
 /** A stray query key on the write is a 422 rather than an ignored parameter. */
 export const EmptyPlatformFeedbackQuerySchema = z.object({}).strict();
-
-export type CreatePlatformFeedbackInput = z.infer<typeof CreatePlatformFeedbackSchema>;
-export type PlatformFeedbackStatus = z.infer<typeof PlatformFeedbackStatusSchema>;
-export type DecidePlatformFeedbackInput = z.infer<typeof DecidePlatformFeedbackSchema>;

@@ -39,7 +39,6 @@ import type { VideoError } from "#src/modules/studio/videos/videos.service.js";
 
 export {
   firstParam,
-  optionalBody,
   respondFieldRefusal,
   respondUnauthenticated,
   respondValidationFailed,

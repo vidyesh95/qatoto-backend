@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { providerTransfer, providerWebhookEvent } from "#src/db/schema.js";
-import type { Result } from "#src/types/index.js";
 
 /**
  * THE LEDGER-ONLY PROVIDER ADAPTER (R_AND_D_BACKEND_STRUCTURE.md §7 amendment, Appendix
@@ -55,7 +54,7 @@ type DatabaseExecutor = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * entire failure mode idempotency keys exist for: the request timed out, we do not know
  * whether the money moved, and we have to be able to ask again without moving it twice.
  */
-export function mintIdempotencyKey(purpose: "pledge" | "payout"): string {
+function mintIdempotencyKey(purpose: "pledge" | "payout"): string {
   return `${purpose}_${randomUUID()}`;
 }
 
@@ -94,70 +93,6 @@ export async function createTransfer(
     throw new Error("createTransfer: insert returned no row");
   }
   return created;
-}
-
-/**
- * Hands the transfer to the adapter — the step a WORKER performs, never a request handler
- * (§7: "the provider call happens in a WORKER").
- *
- * Against the internal adapter this is a status flip and nothing else; against Stripe it
- * is the network call, and it is bounded and retried by the job runner rather than by an
- * Express worker holding a socket. Either way the row that records it already exists,
- * carrying our key.
- *
- * IDEMPOTENT BY CONSTRUCTION. A retried job finds the row already `submitted` and returns
- * it unchanged rather than submitting twice — §4e's "a job that cannot be safely re-run is
- * a bug", applied where re-running would cost money.
- */
-export async function submitTransfer(
-  transferId: string,
-): Promise<Result<ProviderTransferRow, ProviderTransferError>> {
-  const [existing] = await db
-    .select()
-    .from(providerTransfer)
-    .where(eq(providerTransfer.id, transferId));
-
-  if (!existing) {
-    return { success: false, error: { type: "TRANSFER_NOT_FOUND", transferId } };
-  }
-  // Already submitted: the retry is the no-op it is supposed to be.
-  if (existing.status === "submitted") {
-    return { success: true, value: existing };
-  }
-  if (existing.status !== "created") {
-    return {
-      success: false,
-      error: { type: "TRANSFER_NOT_SUBMITTABLE", status: existing.status },
-    };
-  }
-
-  const [submitted] = await db
-    .update(providerTransfer)
-    .set({
-      status: "submitted",
-      submittedAt: new Date(),
-      // The reference the adapter would have returned. Deterministic from OUR key rather
-      // than random, so a replay produces the same value and an operator reading two rows
-      // can tell a retry from a second transfer.
-      providerTransferRef: `internal_${existing.idempotencyKey}`,
-    })
-    .where(and(eq(providerTransfer.id, transferId), eq(providerTransfer.status, "created")))
-    .returning();
-
-  if (!submitted) {
-    // Another worker won the race between the SELECT and the UPDATE. Re-read rather than
-    // fail: the work is done, and by whom is not interesting.
-    const [current] = await db
-      .select()
-      .from(providerTransfer)
-      .where(eq(providerTransfer.id, transferId));
-    if (!current) {
-      return { success: false, error: { type: "TRANSFER_NOT_FOUND", transferId } };
-    }
-    return { success: true, value: current };
-  }
-
-  return { success: true, value: submitted };
 }
 
 /**
