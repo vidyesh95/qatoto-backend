@@ -35,7 +35,34 @@ const EXPECTED_TABLES: readonly string[] = [
   "commerce_organization_audit_entry",
 ];
 
+/**
+ * The browse taxonomy as migration 0098 left it. Add a root here when a migration adds one.
+ *
+ * THIS LIST USED TO NAME THE 0040 ROOTS — electronics, fashion, home_kitchen and the rest —
+ * which 0098 RETIRED. The check went on asserting that eight deliberately-retired categories
+ * were active, so it answered 0/8 for weeks: a true answer to a question the schema had
+ * stopped asking. Three later commits rewrote other checks in this file to track 0063, 0088
+ * and 0202 and left this one behind.
+ */
 const EXPECTED_ROOT_CATEGORY_IDS: readonly string[] = [
+  "commerce_category_clothes",
+  "commerce_category_furniture",
+  "commerce_category_accessories",
+  "commerce_category_beauty",
+  "commerce_category_shoes",
+  "commerce_category_bags",
+  "commerce_category_machinery",
+  "commerce_category_jewelry",
+];
+
+/**
+ * The 0040 roots, kept by name because "they are gone" is itself a guarantee worth holding.
+ *
+ * Reactivating one would split the catalog across two root sets — the old ids are still
+ * referenced by `legacyCategoryId()` in products.service.ts, so a revived `electronics`
+ * would start accepting listings again through a path nothing else expects to work.
+ */
+const RETIRED_ROOT_CATEGORY_IDS: readonly string[] = [
   "commerce_category_electronics",
   "commerce_category_fashion",
   "commerce_category_home_kitchen",
@@ -45,6 +72,14 @@ const EXPECTED_ROOT_CATEGORY_IDS: readonly string[] = [
   "commerce_category_sports_outdoors",
   "commerce_category_beauty_personal_care",
 ];
+
+/**
+ * Where a listing waits while its requested category is reviewed. `products.service.ts`
+ * hardcodes this id as a constant rather than looking it up, on the strength of 0098
+ * seeding it — so if the row ever went missing the pending-request path would write a
+ * dangling `category_id`.
+ */
+const MISC_CATEGORY_ID = "commerce_category_misc";
 
 const EXPECTED_TRIGGERS: readonly string[] = [
   "commerce_category_reject_cycle",
@@ -126,6 +161,33 @@ async function verifyCatalogAndBackfill(): Promise<readonly CheckOutcome[]> {
     detail: `${String(rootCategoryCount)}/${String(EXPECTED_ROOT_CATEGORY_IDS.length)}`,
   });
 
+  const retiredRootCategoryCount = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM commerce_category
+      WHERE id = ANY($1)
+        AND state = 'retired'`,
+    [RETIRED_ROOT_CATEGORY_IDS],
+  );
+  outcomes.push({
+    label: "the superseded 0040 roots are still retired",
+    passed: retiredRootCategoryCount === RETIRED_ROOT_CATEGORY_IDS.length,
+    detail: `${String(retiredRootCategoryCount)}/${String(RETIRED_ROOT_CATEGORY_IDS.length)}`,
+  });
+
+  const miscCategoryCount = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM commerce_category
+      WHERE id = $1
+        AND parent_category_id IS NULL
+        AND state = 'active'`,
+    [MISC_CATEGORY_ID],
+  );
+  outcomes.push({
+    label: "the misc fallback category is present and active",
+    passed: miscCategoryCount === 1,
+    detail: `${String(miscCategoryCount)} row(s) — products.service.ts hardcodes this id`,
+  });
+
   const unmigratedProductCount = await countQuery(
     `SELECT count(*) AS row_count
        FROM product
@@ -146,39 +208,30 @@ async function verifyCatalogAndBackfill(): Promise<readonly CheckOutcome[]> {
    * no longer needs to be: the derivation was verified against every row immediately before
    * the drop (17 products, 0 diverging), and there is now no second source to disagree with.
    *
-   * The category mapping below survives, but SCOPED TO BACKFILLED PRODUCTS — and it was
-   * silently wrong before, hidden behind the missing-column error this check was already
-   * failing with.
+   * WHAT REPLACED THE LEGACY MAPPING CHECK, AND WHY IT HAD TO GO. This used to assert that a
+   * backfilled product's `category_id` equalled the root derived from its legacy `category`
+   * enum, via a CASE over the eight 0040 roots. That assertion cannot fail any more, in two
+   * independent ways: 0098 repointed every such row to `misc` and made `product.category`
+   * NULLABLE, so the CASE yields NULL and `category_id <> NULL` is NULL rather than true; and
+   * no `commerce_org_legacy_%` organization holds a product at all now. A check that counts
+   * over an empty set and compares against NULL is not a guarantee, it is a green line.
    *
-   * It asserts `category_id` equals the ROOT derived from the legacy enum, which was true of
-   * every product Phase 0 backfilled and is false of every product created since. Phase 1
-   * requires an active LEAF category, so a product legitimately sits below a root; and a
-   * product in a category tree that does not descend from any of the eight legacy roots at
-   * all — every dev-seed listing, for instance — carries an enum value with no relationship
-   * to its real category. 14 of 17 products were "mismatched" and all 14 were correct.
-   *
-   * Scoped by organization prefix, the same way the sole-proprietor check below is: only the
-   * organizations the Phase 0 backfill minted hold products whose mapping this can assert.
+   * The invariant 0098 actually established is the one asserted here: a retired category
+   * holds no listings. `resolveCategorySelection` refuses a non-active category on write
+   * (`CATEGORY_NOT_ACTIVE_LEAF`), so a row in a retired category means either a direct
+   * database edit or a future migration that retired a category without repointing what was
+   * in it — which is exactly the mistake 0098 took care to avoid.
    */
-  const incorrectlyMappedProductCount = await countQuery(
+  const productsInRetiredCategoryCount = await countQuery(
     `SELECT count(*) AS row_count
        FROM product
-      WHERE seller_organization_id LIKE 'commerce_org_legacy_%'
-        AND category_id <> CASE category
-              WHEN 'electronics' THEN 'commerce_category_electronics'
-              WHEN 'fashion' THEN 'commerce_category_fashion'
-              WHEN 'home_kitchen' THEN 'commerce_category_home_kitchen'
-              WHEN 'anime_collectibles' THEN 'commerce_category_anime_collectibles'
-              WHEN 'digital_goods' THEN 'commerce_category_digital_goods'
-              WHEN 'books_media' THEN 'commerce_category_books_media'
-              WHEN 'sports_outdoors' THEN 'commerce_category_sports_outdoors'
-              WHEN 'beauty_personal_care' THEN 'commerce_category_beauty_personal_care'
-            END`,
+       JOIN commerce_category ON commerce_category.id = product.category_id
+      WHERE commerce_category.state = 'retired'`,
   );
   outcomes.push({
-    label: "legacy product mappings are deterministic",
-    passed: incorrectlyMappedProductCount === 0,
-    detail: `${String(incorrectlyMappedProductCount)} mismatched product(s)`,
+    label: "no listing sits in a retired category",
+    passed: productsInRetiredCategoryCount === 0,
+    detail: `${String(productsInRetiredCategoryCount)} product(s) in a retired category`,
   });
 
   /**
