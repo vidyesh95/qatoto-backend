@@ -280,80 +280,14 @@ export async function allocateLedgerSequenceNumber(
   return next;
 }
 
-/** The literal §7 spells for an escrow chain's first predecessor. */
-export const ESCROW_GENESIS_PREVIOUS_HASH = "genesis";
-
-export interface EscrowChainSlot {
-  readonly sequenceNumber: number;
-  /** The predecessor's hash, or the literal "genesis" at sequence 1 (§7). */
-  readonly previousEntryHash: string;
-}
-
-/**
- * Allocates the next ESCROW journal sequence number under the same lock (§7).
- *
- * THE THIRD COUNTER ON ONE ROW. §7 specifies `SELECT … FOR UPDATE on the project's last
- * entry` for this, which would be a second serialization point — and every §7 money event
- * appends an escrow entry AND an audit entry in one transaction, so that writer would hold
- * two locks. Two locks taken in an order someone eventually gets backwards is a deadlock
- * waiting for load, which is the reason the ledger counter already lives here.
- *
- * Returns the predecessor hash as well as the number, because the caller cannot compute
- * its own entry hash without it and re-reading the head outside the lock would race.
- */
-export async function allocateEscrowChainSlot(
-  tx: DatabaseExecutor,
-  projectId: string,
-): Promise<EscrowChainSlot> {
-  const head = await lockChainHead(tx, projectId);
-  const sequenceNumber = head.lastEscrowSequenceNumber + 1;
-  const previousEntryHash = head.escrowHeadEntryHash;
-
-  // Sequence 1 is genesis and has no predecessor; every later one must have exactly one.
-  // The CHECK constraint says the same thing, but failing here names the caller.
-  if ((sequenceNumber === 1) !== (previousEntryHash === null)) {
-    throw new Error(
-      `allocateEscrowChainSlot: chain head for ${projectId} is inconsistent — sequence ${sequenceNumber} with ${previousEntryHash === null ? "no" : "a"} previous hash`,
-    );
-  }
-
-  return {
-    sequenceNumber,
-    previousEntryHash: previousEntryHash ?? ESCROW_GENESIS_PREVIOUS_HASH,
-  };
-}
-
-/**
- * Moves the escrow head to the entry just written. MUST run in the same transaction as
- * {@link allocateEscrowChainSlot}, while the head row is still locked.
- *
- * Separate from the allocator rather than folded into it because the hash does not exist
- * until the entry is composed, and a head updated before the insert would point at a row
- * that may never land.
- */
-export async function advanceEscrowChainHead(
-  tx: DatabaseExecutor,
-  projectId: string,
-  slot: { readonly sequenceNumber: number; readonly entryHash: string; readonly entryId: string },
-): Promise<void> {
-  await tx
-    .update(projectChainHead)
-    .set({
-      lastEscrowSequenceNumber: slot.sequenceNumber,
-      escrowHeadEntryHash: slot.entryHash,
-      escrowHeadEntryId: slot.entryId,
-    })
-    .where(eq(projectChainHead.projectId, projectId));
-}
-
 /** The literal §7A spells for a statement chain's first predecessor. */
 export const STATEMENT_GENESIS_PREVIOUS_HASH = "genesis";
 
 /**
  * Allocates the next COMPENSATION PERIOD sequence number under the same lock (§7A.3).
  *
- * THE FOURTH COUNTER ON ONE ROW, for the reason {@link allocateEscrowChainSlot} already
- * gives: a writer that opens a period AND appends an audit entry in one transaction —
+ * ANOTHER COUNTER ON THE SAME ROW, and for the same reason the ledger counter lives here:
+ * a writer that opens a period AND appends an audit entry in one transaction —
  * which every §7A lifecycle event does — would otherwise take two locks, and two locks
  * taken in an order someone eventually gets backwards is a deadlock waiting for load.
  *

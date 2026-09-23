@@ -647,33 +647,6 @@ export const fundingRoundWriteLimiter = createLimiter({
 });
 
 /**
- * POST …/escrow-releases, …/approve, …/reject — the four-eyes surface (§7).
- *
- * The lowest bound in this file. A release request is a payout request; an approval is a
- * payout. Neither is a thing anyone does in a loop, and both append to the ledger.
- * A low ceiling here also blunts the obvious grief: request, get rejected, request again.
- */
-export const escrowReleaseLimiter = createLimiter({
-  namespace: "escrowRelease",
-  windowMs: FIFTEEN_MINUTES_MS,
-  limit: 10,
-});
-
-/**
- * POST /provider-transfers/:transferId/settle · /fail — staff only, and still bounded.
- *
- * The caller already holds `audit_escrow`, so this is not an anti-abuse bound: it is a
- * blast-radius bound. Settlement is the ONE path that moves `raisedAmountInCents`, and a
- * compromised or scripted auditor session should not be able to walk the whole pending
- * queue in a second.
- */
-export const escrowSettlementLimiter = createLimiter({
-  namespace: "escrowSettlement",
-  windowMs: ONE_MINUTE_MS,
-  limit: 60,
-});
-
-/**
  * POST …/members/:id/compensation-agreement · …/accept (§7A.2).
  *
  * A negotiation, not a loop. A founder proposing pay for a ten-person team in one sitting
@@ -689,8 +662,7 @@ export const compensationAgreementLimiter = createLimiter({
 /**
  * POST …/compensation-periods/:id/finalize · /countersign · /supersede (§7A.5).
  *
- * The lowest bound in this file, and for the same reason `escrowReleaseLimiter` was:
- * these are the acts that decide what someone is owed, and none of them is a thing anyone
+ * The lowest bound in this file: these are the acts that decide what someone is owed, and none of them is a thing anyone
  * does in a loop. Finalizing is once a month per project. A low ceiling also blunts the
  * obvious grief — supersede, supersede, supersede — which would otherwise let one account
  * fill a project's audit chain with reversals.
