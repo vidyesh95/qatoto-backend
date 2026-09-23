@@ -379,19 +379,18 @@ const CHECKS: readonly Check[] = [
       // A lane no real card can occupy, so the probe cannot collide with live data.
       const origin = "ZZ";
       const destination = "ZY";
+      const insertCard = (id: string, validFromDays: number) => sql`
+        INSERT INTO commerce_freight_rate_card
+          (id, provider_organization_id, origin_country_code, destination_country_code,
+           mode, currency, valid_from, source_forwarder_name,
+           volumetric_divisor_cm3_per_kg, state)
+        VALUES (${id}, ${providerOrganizationId}, ${origin}, ${destination},
+                'sea'::commerce_shipment_leg_mode, 'USD',
+                now() + (${validFromDays} * interval '1 day'), 'Verify Probe', 1000, 'active')`;
 
       let failure = "";
       try {
         await db.transaction(async (transaction) => {
-          const insertCard = (id: string, validFromDays: number) => sql`
-            INSERT INTO commerce_freight_rate_card
-              (id, provider_organization_id, origin_country_code, destination_country_code,
-               mode, currency, valid_from, source_forwarder_name,
-               volumetric_divisor_cm3_per_kg, state)
-            VALUES (${id}, ${providerOrganizationId}, ${origin}, ${destination},
-                    'sea'::commerce_shipment_leg_mode, 'USD',
-                    now() + (${validFromDays} * interval '1 day'), 'Verify Probe', 1000, 'active')`;
-
           await transaction.execute(insertCard(lane.incumbent, 1));
 
           // 1. Park, which frees the partial unique index and satisfies the lifecycle CHECK.

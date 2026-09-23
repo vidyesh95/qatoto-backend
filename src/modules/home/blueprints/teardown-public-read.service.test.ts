@@ -469,6 +469,17 @@ function facetQuery(): CapturedQuery | undefined {
   return databaseState.queries.find((query) => query.selectedColumns.includes("value"));
 }
 
+/*
+ * A semi-join shows up as a SUBQUERY the service built, which the stub sees as its own
+ * `select().from()` — so counting the queries against a child table is a direct reading of
+ * whether `EXISTS` was used, without depending on how drizzle lays out a condition tree.
+ */
+function semiJoinCount(tableName: string): number {
+  return databaseState.queries.filter(
+    (query) => query.tableName === tableName && query.selectedColumns.includes("present"),
+  ).length;
+}
+
 async function importService(): Promise<typeof import("#src/modules/home/blueprints/teardown-public-read.service.js")> {
   return import("#src/modules/home/blueprints/teardown-public-read.service.js");
 }
@@ -908,17 +919,6 @@ describe("the index's filters and paging", () => {
   /** Three predicates over the data, never three stored booleans nobody keeps true. */
   it("turns each media filter into its own predicate", async () => {
     const { listPublicTeardowns } = await importService();
-
-    /*
-     * A semi-join shows up as a SUBQUERY the service built, which the stub sees as its own
-     * `select().from()` — so counting the queries against a child table is a direct reading of
-     * whether `EXISTS` was used, without depending on how drizzle lays out a condition tree.
-     */
-    function semiJoinCount(tableName: string): number {
-      return databaseState.queries.filter(
-        (query) => query.tableName === tableName && query.selectedColumns.includes("present"),
-      ).length;
-    }
 
     await listPublicTeardowns({ ...NO_FILTERS, media: "assembly" });
     const assemblySemiJoins = semiJoinCount("teardown_assembly");

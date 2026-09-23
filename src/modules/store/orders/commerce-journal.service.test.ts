@@ -191,16 +191,16 @@ describe("memorandum account classification", () => {
   });
 });
 
+const balancesOf = (
+  entries: readonly (readonly [CommerceJournalAccountKind, bigint])[],
+): ReadonlyMap<CommerceJournalAccountKind, bigint> => new Map(entries);
+
 /**
  * `funding + custody + released + refunded = 0`, per order, on every rail. The live-data
  * counterpart is `scripts/verify-store-phase-14-constraints.ts`; the hourly one is
  * `reconcileCommercePayments`, which feeds this function `deriveCommerceJournalBalances`.
  */
 describe("findMemoIdentityImbalance", () => {
-  const balancesOf = (
-    entries: readonly (readonly [CommerceJournalAccountKind, bigint])[],
-  ): ReadonlyMap<CommerceJournalAccountKind, bigint> => new Map(entries);
-
   it("holds for a processor settlement, which funds and releases with no custody hop", () => {
     expect(
       findMemoIdentityImbalance(

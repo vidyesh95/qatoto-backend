@@ -50,6 +50,12 @@ function buildAppendInput(payload: AuditAppendInput["payload"]): AuditAppendInpu
   };
 }
 
+async function appendAuditPayload(payload: AuditAppendInput["payload"]) {
+  return db.transaction(async (transaction) =>
+    appendCommerceOrganizationAuditEntry(transaction, buildAppendInput(payload)),
+  );
+}
+
 describe("commerce organization audit payload guard", () => {
   beforeEach(() => {
     insertedRowsRef.rows.length = 0;
@@ -122,14 +128,8 @@ describe("A13 seller profile audit payload shapes", () => {
     insertedRowsRef.rows.length = 0;
   });
 
-  async function append(payload: AuditAppendInput["payload"]) {
-    return db.transaction(async (transaction) =>
-      appendCommerceOrganizationAuditEntry(transaction, buildAppendInput(payload)),
-    );
-  }
-
   it("accepts the seller-profile update payload", async () => {
-    const appended = await append({
+    const appended = await appendAuditPayload({
       changedFields: ["businessType", "factoryCount", "yearFounded"],
     });
     expect(appended).toEqual({
@@ -139,7 +139,7 @@ describe("A13 seller profile audit payload shapes", () => {
   });
 
   it("accepts the company-media payload", async () => {
-    const appended = await append({
+    const appended = await appendAuditPayload({
       mediaId: "8f1c6f2e-0000-4000-8000-000000000001",
       mediaKind: "factory",
       position: "0",
@@ -156,11 +156,11 @@ describe("A13 seller profile audit payload shapes", () => {
    * payload keys are exactly these two.
    */
   it("refuses the media payload keys a Cloudinary upload invites", async () => {
-    await expect(append({ filename: "factory-floor.jpg" })).resolves.toEqual({
+    await expect(appendAuditPayload({ filename: "factory-floor.jpg" })).resolves.toEqual({
       success: false,
       error: { type: "UNSAFE_PAYLOAD", fieldPath: "$.filename" },
     });
-    await expect(append({ objectStorageKey: "qatoto/commerce-organizations/x" })).resolves.toEqual({
+    await expect(appendAuditPayload({ objectStorageKey: "qatoto/commerce-organizations/x" })).resolves.toEqual({
       success: false,
       error: { type: "UNSAFE_PAYLOAD", fieldPath: "$.objectStorageKey" },
     });
@@ -168,11 +168,11 @@ describe("A13 seller profile audit payload shapes", () => {
   });
 
   it("accepts the site-access, stakeholder and capability payloads", async () => {
-    await expect(append({ rowCount: "4" })).resolves.toEqual({
+    await expect(appendAuditPayload({ rowCount: "4" })).resolves.toEqual({
       success: true,
       value: { auditEntryId: "audit_1" },
     });
-    await expect(append({ capabilityKinds: ["oem", "sample_production"] })).resolves.toEqual({
+    await expect(appendAuditPayload({ capabilityKinds: ["oem", "sample_production"] })).resolves.toEqual({
       success: true,
       value: { auditEntryId: "audit_1" },
     });
@@ -185,7 +185,7 @@ describe("A13 seller profile audit payload shapes", () => {
    * that "the guard allows it" is not mistaken for "it belongs there".
    */
   it("documents that the guard would have allowed stakeholder names", async () => {
-    await expect(append({ fullName: "A. Patel" })).resolves.toEqual({
+    await expect(appendAuditPayload({ fullName: "A. Patel" })).resolves.toEqual({
       success: true,
       value: { auditEntryId: "audit_1" },
     });
@@ -193,7 +193,7 @@ describe("A13 seller profile audit payload shapes", () => {
 
   it("accepts the certification payloads", async () => {
     await expect(
-      append({
+      appendAuditPayload({
         certificationId: "8f1c6f2e-0000-4000-8000-000000000002",
         standardName: "ISO 9001:2015",
         evidenceDocumentId: "8f1c6f2e-0000-4000-8000-000000000003",
@@ -201,7 +201,7 @@ describe("A13 seller profile audit payload shapes", () => {
     ).resolves.toEqual({ success: true, value: { auditEntryId: "audit_1" } });
 
     await expect(
-      append({
+      appendAuditPayload({
         certificationId: "8f1c6f2e-0000-4000-8000-000000000002",
         standardName: "ISO 9001:2015",
         decision: "rejected",
@@ -216,7 +216,7 @@ describe("A13 seller profile audit payload shapes", () => {
    * carries neither, so this pins the boundary rather than the choice.
    */
   it("refuses a certification payload naming a registration number", async () => {
-    await expect(append({ registrationNumber: "U74999MH2009PTC000000" })).resolves.toEqual({
+    await expect(appendAuditPayload({ registrationNumber: "U74999MH2009PTC000000" })).resolves.toEqual({
       success: false,
       error: { type: "UNSAFE_PAYLOAD", fieldPath: "$.registrationNumber" },
     });

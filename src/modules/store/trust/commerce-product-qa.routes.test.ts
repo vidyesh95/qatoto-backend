@@ -16,36 +16,38 @@ vi.mock("#src/lib/auth.js", async () => (await import("#src/test-support/auth-mo
 const ORGANIZATION_ID = "commerce_org_voter";
 const MEMBER_ID = "member-voter";
 
-vi.mock("#src/modules/store/organizations/require-active-commerce-organization.js", () => {
-  const attach = (req: Request, _res: Response, next: NextFunction): void => {
-    req.commerceOrganization = {
-      organizationId: ORGANIZATION_ID,
-      memberId: MEMBER_ID,
-      memberRole: "buyer",
-      tradeState: "active",
-    };
-    next();
+// Function declarations, not const arrows: `vi.mock` is hoisted above them, and a declaration
+// is initialized before any statement runs, so the factory can never see it in its TDZ.
+function attachCommerceOrganization(req: Request, _res: Response, next: NextFunction): void {
+  req.commerceOrganization = {
+    organizationId: ORGANIZATION_ID,
+    memberId: MEMBER_ID,
+    memberRole: "buyer",
+    tradeState: "active",
   };
-  // Phase 21 (§14). A SEPARATE property from `commerceOrganization`, deliberately, so a
-  // handler cannot read an unactivated workspace as a trading one.
-  const attachWorkspace = (req: Request, _res: Response, next: NextFunction): void => {
-    req.buyerCommerceWorkspace = {
-      organizationId: ORGANIZATION_ID,
-      memberId: MEMBER_ID,
-      memberRole: "buyer",
-      tradeState: "active",
-    };
-    next();
+  next();
+}
+
+// Phase 21 (§14). A SEPARATE property from `commerceOrganization`, deliberately, so a
+// handler cannot read an unactivated workspace as a trading one.
+function attachBuyerCommerceWorkspace(req: Request, _res: Response, next: NextFunction): void {
+  req.buyerCommerceWorkspace = {
+    organizationId: ORGANIZATION_ID,
+    memberId: MEMBER_ID,
+    memberRole: "buyer",
+    tradeState: "active",
   };
-  return {
-    attachOptionalSellerCommerceOrganization: attach,
-    requireActiveCommerceOrganization: attach,
-    requireActiveBuyerCommerceOrganization: attach,
-    requireActiveProviderCommerceOrganization: attach,
-    requireActiveSellerCommerceOrganization: attach,
-    requireProvisionedBuyerCommerceWorkspace: attachWorkspace,
-  };
-});
+  next();
+}
+
+vi.mock("#src/modules/store/organizations/require-active-commerce-organization.js", () => ({
+  attachOptionalSellerCommerceOrganization: attachCommerceOrganization,
+  requireActiveCommerceOrganization: attachCommerceOrganization,
+  requireActiveBuyerCommerceOrganization: attachCommerceOrganization,
+  requireActiveProviderCommerceOrganization: attachCommerceOrganization,
+  requireActiveSellerCommerceOrganization: attachCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace: attachBuyerCommerceWorkspace,
+}));
 
 const qaStubs = vi.hoisted(() => ({
   setAnswerHelpfulVote: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
