@@ -29,7 +29,7 @@ interface CheckOutcome {
   readonly detail: string;
 }
 
-/** The custom SQLSTATE `qatoto_reject_mutation()` raises (migration 0010). */
+/** What `qatoto_reject_mutation()` raises since migration 0202 (it was `QT001` before). */
 const APPEND_ONLY_SQLSTATE = "P0001";
 const CHECK_VIOLATION_SQLSTATE = "23514";
 const UNIQUE_VIOLATION_SQLSTATE = "23505";
@@ -129,17 +129,46 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
       ];
     }
 
-    // A genesis entry to probe against. Sequence 1 with no predecessor, which is the one
-    // shape `platform_audit_entry_link_ck` permits.
+    /**
+     * The fixture is appended to the chain as it actually stands, not assumed onto an
+     * empty table.
+     *
+     * THIS USED TO HARDCODE SEQUENCE 1 WITH A NULL PREDECESSOR — the genesis shape, and
+     * the only shape `platform_audit_entry_link_ck` permits at sequence 1. That row is
+     * insertable exactly once in a database's life, so on any platform with audit history
+     * the setup collided with `platform_audit_entry_sequence_unq` before a single
+     * guarantee had been probed, and the whole run aborted reporting nothing. This script
+     * is meant to gate a deploy; a deploy gate that cannot run on a populated database
+     * gates nothing.
+     *
+     * Unlike the escrow verifier, which mints a fresh project and rides a
+     * `(project_id, sequence_number)` index, this chain is global — one sequence for the
+     * whole platform — so there is no fixture scope that avoids the collision. Reading the
+     * head is the only honest answer.
+     */
+    const headResult = await client.query<{ max_seq: number; head_hash: string | null }>(
+      `SELECT coalesce(max(sequence_number), 0)::int AS max_seq,
+              (SELECT entry_hash FROM platform_audit_entry
+                ORDER BY sequence_number DESC LIMIT 1) AS head_hash
+         FROM platform_audit_entry`,
+    );
+    const maxSequenceNumber = headResult.rows[0]?.max_seq ?? 0;
+    const fixtureSequenceNumber = maxSequenceNumber + 1;
+    /** Null only for a genuinely empty chain, which is what `link_ck` demands there. */
+    const fixturePreviousHash =
+      maxSequenceNumber === 0 ? null : (headResult.rows[0]?.head_hash ?? null);
+    /** Past the fixture, so no existing row can collide and steal a probe's SQLSTATE. */
+    const unusedSequenceNumber = maxSequenceNumber + 2;
+
     await client.query(
       `INSERT INTO platform_audit_entry
          (id, sequence_number, event_kind, actor_user_id, actor_role_snapshot,
           action_label, target_label, detail_note, payload_json, occurred_at,
           previous_entry_hash, entry_hash, hash_algorithm_version)
-       VALUES ('verify-platform-audit', 1, 'taxonomy_category_approved', $1, 'moderator',
-               'Approved a category', 'category probe', '', '{}', now(), NULL, $2,
+       VALUES ('verify-platform-audit', $3, 'taxonomy_category_approved', $1, 'moderator',
+               'Approved a category', 'category probe', '', '{}', now(), $4, $2,
                'sha256-jcs-v1')`,
-      [actorUserId, SIXTY_FOUR_ZEROS],
+      [actorUserId, SIXTY_FOUR_ZEROS, fixtureSequenceNumber, fixturePreviousHash],
     );
 
     await expectRejection(
@@ -174,10 +203,13 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
              (id, sequence_number, event_kind, actor_user_id, actor_role_snapshot,
               action_label, target_label, payload_json, occurred_at,
               previous_entry_hash, entry_hash, hash_algorithm_version)
-           VALUES ('verify-platform-audit-2', 2, 'supplier_created', $1, 'moderator',
+           VALUES ('verify-platform-audit-2', $3, 'supplier_created', $1, 'moderator',
                    'Created a supplier', 'supplier probe', '{}', now(), NULL, $2,
                    'sha256-jcs-v1')`,
-          [actorUserId, SIXTY_FOUR_ZEROS],
+          // A sequence no row holds, so `link_ck` is the ONLY constraint that can refuse
+          // this. With a colliding number the unique index might answer first and the
+          // probe would pass without ever testing the genesis rule.
+          [actorUserId, SIXTY_FOUR_ZEROS, unusedSequenceNumber],
         ),
     );
 
@@ -192,10 +224,12 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
              (id, sequence_number, event_kind, actor_user_id, actor_role_snapshot,
               action_label, target_label, payload_json, occurred_at,
               previous_entry_hash, entry_hash, hash_algorithm_version)
-           VALUES ('verify-platform-audit-dup', 1, 'supplier_updated', $1, 'moderator',
-                   'Updated a supplier', 'supplier probe', '{}', now(), NULL, $2,
+           VALUES ('verify-platform-audit-dup', $3, 'supplier_updated', $1, 'moderator',
+                   'Updated a supplier', 'supplier probe', '{}', now(), $4, $2,
                    'sha256-jcs-v1')`,
-          [actorUserId, SIXTY_FOUR_ZEROS],
+          // The fixture's own sequence, with a predecessor shaped to satisfy `link_ck`,
+          // so the unique index is the only thing left to refuse it.
+          [actorUserId, SIXTY_FOUR_ZEROS, fixtureSequenceNumber, fixturePreviousHash],
         ),
     );
 
@@ -210,10 +244,12 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
              (id, sequence_number, event_kind, actor_user_id, actor_role_snapshot,
               action_label, target_label, payload_json, occurred_at,
               previous_entry_hash, entry_hash, hash_algorithm_version)
-           VALUES ('verify-platform-audit-hash', 2, 'supplier_updated', $1, 'moderator',
+           VALUES ('verify-platform-audit-hash', $3, 'supplier_updated', $1, 'moderator',
                    'Updated a supplier', 'supplier probe', '{}', now(), $2, 'NOT-A-HASH',
                    'sha256-jcs-v1')`,
-          [actorUserId, SIXTY_FOUR_ZEROS],
+          // Unused sequence and a well-formed predecessor: the hash format is the only
+          // thing wrong with this row.
+          [actorUserId, SIXTY_FOUR_ZEROS, unusedSequenceNumber],
         ),
     );
 
@@ -227,8 +263,9 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
 
     return outcomes;
   } finally {
-    // Always. Nothing this script writes is meant to survive.
-    await client.query("ROLLBACK");
+    // Always. Nothing this script writes is meant to survive. `.catch` because a throwing
+    // ROLLBACK would replace whatever error actually broke the run.
+    await client.query("ROLLBACK").catch(() => undefined);
     client.release();
   }
 }
