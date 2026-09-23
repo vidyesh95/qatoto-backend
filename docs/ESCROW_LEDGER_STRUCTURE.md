@@ -14,10 +14,19 @@
 > domain-neutral, so it is preserved here and **retargeted at the commerce domain**, where a
 > buyer↔seller hold is a genuine product requirement.
 >
-> **Status: ⏳ not built for commerce.** No `order_*` table, route, controller, service or migration
-> exists. What exists is the R&D implementation (`escrow.service.ts`, `escrow-settlement.service.ts`,
-> `escrow-releases.service.ts`, `escrow-provider-adapter.service.ts`, migration 0016), which is the
-> reference implementation of everything below and the thing to port.
+> **Status: ⚠️ overtaken by STORE Phase 14, and read accordingly.** This document was written
+> before commerce answered the custody question, and commerce answered it differently: Phase 14
+> ships escrow **external-only** — a licensed third party holds the money, reached through a
+> connector — with its own tables (`commerce_external_escrow_session`, `commerce_escrow_milestone`)
+> and its own rail-aware ledger (`commerce_journal_account` / `_entry` / `_line`). No `order_*`
+> table was ever created, and none will be. See STORE_BACKEND_STRUCTURE.md §Phase 14.
+>
+> **The R&D implementation this document called "the thing to port" is deleted.** It was retired
+> with the rest of §7's escrow subtree and removed once nothing referenced it; git holds it at
+> commit `4839616` (`src/modules/rnd/funding/escrow*.service.ts`), and migration 0016's tables are
+> still in the database. What remains useful below is the REASONING — the non-custody rule, the
+> double-entry shape, the zero-sum assertion, the hash chain, the four-eyes release and the
+> provider/ledger split. Read it as design argument, not as a description of shipped code.
 
 ---
 
@@ -324,14 +333,24 @@ hold, before releasing one, and in any listing that would expose the surface. A 
 invisible and unusable at the HTTP layer, which makes hiding a button cosmetic rather than
 load-bearing.
 
-## 11. What already exists, and what porting means
+## 11. What already existed, and what the port actually became
 
-The R&D implementation is the reference. Everything in §2–§9 is built and exercised there against a
-real database — the double-entry service, the zero-sum assertion, the hash chain and its verifier,
-the four-way append-only enforcement, the four-eyes release with a frozen evidence snapshot, the
-provider adapter seam, the webhook-event dedupe and the reconciliation job.
+⚠️ **This section is history now.** It described porting the R&D implementation — the double-entry
+service, the zero-sum assertion, the hash chain and its verifier, the four-way append-only
+enforcement, the four-eyes release with its frozen evidence snapshot, the provider adapter seam,
+the webhook-event dedupe and the reconciliation job — into commerce as "a rename plus a
+re-parenting". That is not what happened, and the difference is the custody decision rather than an
+implementation preference.
 
-Porting is a **rename plus a re-parenting**, not a redesign:
+**What commerce built instead (Phase 14):** no custody ledger of its own to release from. A
+licensed provider holds the money and Qatoto mirrors it — `commerce_external_escrow_session` and
+`commerce_escrow_milestone` shadow what the provider says it holds, `applyNormalizedEscrowEvent` is
+the only function permitted to move a settlement balance, and `commerce_journal_*` records gross
+value in memorandum accounts that are explicitly off balance sheet. `order_held` and
+`seller_payable` exist only on the frozen `internal_custody` rail and nothing posts them.
+
+**The R&D code is deleted** (git: `4839616`); migration 0016's tables remain. The rename table
+below is kept only to show what the original port would have been:
 
 | R&D                                 | Commerce                                      |
 | ----------------------------------- | --------------------------------------------- |

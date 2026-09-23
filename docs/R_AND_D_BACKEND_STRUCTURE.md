@@ -83,8 +83,9 @@
 > `requirePlatformCapability`, `platform-role.service.ts:88`; 25 call sites; `pnpm
 db:grant-platform-role`). What is left is scheduling, not unblocking (§11f, §16).
 >
-> **The escrow subtree is 🗑️ retired:** its nine routes now 404, its three jobs are unbound, and its
-> tables survive unreachable and uncalled so migration 0016's rows stay explicable. §11's
+> **The escrow subtree is 🗑️ retired:** its nine routes now 404, and its jobs and services are
+> deleted; only migration 0016's tables survive, unreachable and uncalled, so their rows stay
+> explicable. §11's
 > "Implementation status, per subsection" table is the authoritative, per-endpoint breakdown; treat
 > it over this paragraph if the two ever disagree, since this one is prose and that one is checked
 > against the actual route files.
@@ -431,7 +432,7 @@ qatoto-backend/
 │   │   ├── §11i suppliers · supplier-engagements · launch-readiness
 │   │   ├── plat platform-role (requirePlatformCapability — a SERVICE, not middleware)
 │   │   └── 🗑️  escrow · escrow-releases · escrow-settlement · escrow-provider-adapter —
-│   │            retired, imported only by each other and two unbound jobs. Do not re-bind
+│   │            DELETED. Only migration 0016's tables remain. Do not bring them back
 │   ├── middleware/                            # 16 files. require-auth · require-identified-user ·
 │   │                                          # idempotency (§11l.2) · request-log (§11l.2) ·
 │   │                                          # attach-optional-user · rate-limit (30 limiters) ·
@@ -1378,9 +1379,10 @@ route under `/escrow/*`, `/escrow-releases/*` and `/provider-transfers/*`. Also 
 `POST /webhooks/payments/stripe`, which was never built and now never will be, and the raw-body
 mount it would have needed.
 
-The tables and services still exist in the running backend (migration 0016, `escrow.service.ts` and
-six siblings), but **nothing routes to them and their jobs are deleted** — see §11g. This
-contract does not describe them, and no new code may call them.
+The TABLES still exist in the running backend (migration 0016) and keep their rows and their
+append-only triggers; **the services are deleted** — `escrow.service.ts`, `escrow-releases`,
+`escrow-settlement` and `escrow-provider-adapter`, along with their routes and jobs — see §11g.
+This contract does not describe any of it, and no new code may bring it back.
 
 ---
 
@@ -2925,7 +2927,7 @@ Four states, checked against the actual route files in `src/routes/`, not agains
 | ✅ **Shipped**  | Routed, controlled, serviced, migrated. Reachable on `pnpm dev` today.                   |
 | ⏳ **Pending**  | Spec'd below, in scope for this project, **not built yet** — §16 orders when.            |
 | 🚫 **Deferred** | Spec'd below but **will not be built** against a paid provider — see Appendix A instead. |
-| 🗑️ **Retired**  | Unmounted. The routes 404; the tables and services survive uncalled. Do not re-bind.     |
+| 🗑️ **Retired**  | Unmounted. The routes 404; the tables survive uncalled, the services are deleted.        |
 
 | Subsection                                          | Domain                              | Status     | Backing files                                                                                                                                                                                                       |
 | --------------------------------------------------- | ----------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -3185,7 +3187,7 @@ with a unique index proving neither can exist without the other.
 
 **✅ Shipped in full, and the split is still the point.** Funding rounds, pledges and milestones
 ship as records of intent. Compensation statements ship as §7A. The escrow subtree is **🗑️
-retired** — its nine routes 404, its three jobs are unbound, and its tables and services survive
+retired** — its nine routes 404, its jobs and services are deleted, and only its tables survive
 unreachable so migration 0016's rows stay explicable.
 
 This subsection replaces the old §11c, which described funding and escrow as one thing. They were
@@ -3230,11 +3232,12 @@ POST /provider-transfers/:transferId/settle · /fail
 `POST /webhooks/payments/stripe` was never built and now never will be. There is still no webhook
 router and no raw-body mount anywhere in `src/app.ts`, and there must not be one.
 
-**The tables and services are still on disk and in the database**, uncalled: `escrow_account`,
-`escrow_journal_entry`, `escrow_posting`, `escrow_release`, `provider_transfer`,
-`provider_webhook_event`, `reconciliation_discrepancy`, migration 0016 and seven services. Dropping
-them would discard rows the append-only triggers exist to protect. The queues that served them are
-deleted. **Do not bring them back.** Putting Qatoto back in the
+**The TABLES are still in the database**, uncalled: `escrow_account`, `escrow_journal_entry`,
+`escrow_posting`, `escrow_release`, `provider_transfer`, `provider_webhook_event`,
+`reconciliation_discrepancy` and migration 0016. Dropping them would discard rows the append-only
+triggers exist to protect, and `db:verify-escrow-constraints` still proves those triggers work.
+**The four service files and the queues that served them are deleted** — the last commit holding
+them in full is `4839616`. **Do not bring them back.** Putting Qatoto back in the
 position of holding someone else's money is a licensing decision taken with counsel (§7A.6), not a
 code change.
 
@@ -4872,15 +4875,15 @@ buyer↔seller hold is a real requirement — and even there Qatoto mirrors a li
 Route, Cashfree Easy Split, Stripe Connect, Mangopay) rather than custodying anything itself.
 
 **What is still in the backend, and what is not.** The routes are **gone** — all nine 404, the
-handlers are deleted, and `submit-provider-transfer`, `reconcile-escrow-ledger` and its tick are
-deleted too. Migration 0016, its seven tables and the services
-(`escrow.service.ts`, `escrow-settlement.service.ts`, `escrow-releases.service.ts`,
-`escrow-provider-adapter.service.ts`) are still on disk and in the database,
-**uncalled**.
+handlers are deleted, `submit-provider-transfer`, `reconcile-escrow-ledger` and its tick are
+deleted too, and so are the four services (`escrow.service.ts`, `escrow-settlement.service.ts`,
+`escrow-releases.service.ts`, `escrow-provider-adapter.service.ts`). Git holds them at `4839616`
+if anyone ever needs to read what was there. Migration 0016 and its seven tables remain in the
+database, **uncalled**.
 
-They stay because dropping the tables would discard rows the append-only triggers exist to protect,
-and because `db:verify-escrow-constraints` still proves those triggers work. **Do not re-bind
-them.** §11g's retirement order was followed exactly — §7A first, then the four catch-up items, then
+The tables stay because dropping them would discard rows the append-only triggers exist to protect,
+and because `db:verify-escrow-constraints` still proves those triggers work. That argument never
+covered the TypeScript, which is why the TypeScript is gone. **Do not bring any of it back.** §11g's retirement order was followed exactly — §7A first, then the four catch-up items, then
 the subtree — because retiring it first would have left shipped cash strands pointing at a payout
 mechanism with nothing behind it.
 
