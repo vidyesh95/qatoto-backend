@@ -172,10 +172,16 @@ const EXPECTED_CHECKS = [
 
 const CHECK_VIOLATION_SQLSTATE = "23514";
 const UNIQUE_VIOLATION_SQLSTATE = "23505";
-/** Migration 0010's custom SQLSTATE for an append-only violation. */
-const APPEND_ONLY_SQLSTATE = "QT001";
-/** Migration 0016's own, for a ledger entry whose postings do not sum to zero. */
-const ZERO_SUM_SQLSTATE = "QT002";
+/**
+ * What every trigger guard raises (migration 0202).
+ *
+ * It used to be `QT001`, and `QT002` for the zero-sum trigger. Both were invented codes, and
+ * this server rewrites any SQLSTATE it does not recognise to `XX000` — so neither ever
+ * reached a client, and these seven checks failed against guards that were working perfectly.
+ * The guard is identified by its MESSAGE now; the code only has to survive the wire.
+ */
+const APPEND_ONLY_SQLSTATE = "P0001";
+const ZERO_SUM_SQLSTATE = "P0001";
 
 function sqlStateOf(error: unknown): string | undefined {
   let candidate: unknown = error;

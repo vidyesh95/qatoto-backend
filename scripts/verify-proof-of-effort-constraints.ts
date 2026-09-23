@@ -182,7 +182,7 @@ const EXPECTED_CHECKS = [
 const CHECK_VIOLATION_SQLSTATE = "23514";
 const UNIQUE_VIOLATION_SQLSTATE = "23505";
 /** Migration 0010's custom SQLSTATE for an append-only violation. */
-const APPEND_ONLY_SQLSTATE = "QT001";
+const APPEND_ONLY_SQLSTATE = "P0001";
 
 function sqlStateOf(error: unknown): string | undefined {
   let candidate: unknown = error;

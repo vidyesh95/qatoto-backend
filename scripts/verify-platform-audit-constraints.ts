@@ -30,7 +30,7 @@ interface CheckOutcome {
 }
 
 /** The custom SQLSTATE `qatoto_reject_mutation()` raises (migration 0010). */
-const APPEND_ONLY_SQLSTATE = "QT001";
+const APPEND_ONLY_SQLSTATE = "P0001";
 const CHECK_VIOLATION_SQLSTATE = "23514";
 const UNIQUE_VIOLATION_SQLSTATE = "23505";
 

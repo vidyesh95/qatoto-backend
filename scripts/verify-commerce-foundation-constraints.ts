@@ -23,7 +23,7 @@ type TransactionClient = Pick<PoolClient, "query">;
 
 const CHECK_VIOLATION_SQLSTATE = "23514";
 const UNIQUE_VIOLATION_SQLSTATE = "23505";
-const APPEND_ONLY_SQLSTATE = "QT001";
+const APPEND_ONLY_SQLSTATE = "P0001";
 
 const EXPECTED_TABLES: readonly string[] = [
   "commerce_organization",

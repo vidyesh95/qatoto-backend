@@ -41,8 +41,11 @@ interface CheckOutcome {
 
 type TransactionClient = PoolClient;
 
-/** The application-defined SQLSTATE every §7A trigger raises. */
-const TRIGGER_SQLSTATE = "QT001";
+/**
+ * The SQLSTATE every §7A trigger raises (migration 0202, previously the invented `QT001`,
+ * which this server rewrote to `XX000` before any client saw it).
+ */
+const TRIGGER_SQLSTATE = "P0001";
 /** Postgres's own codes. */
 const CHECK_VIOLATION = "23514";
 const UNIQUE_VIOLATION = "23505";
@@ -54,7 +57,7 @@ const FOREIGN_KEY_VIOLATION = "23503";
  * Accepted alongside the trigger's own code because it is a STRONGER refusal, not a weaker
  * one: the FK graph refuses the statement outright and the trigger never has to. Three of
  * §7A's four tables are referenced this way; `compensation_payment_record` is a leaf, so
- * it reaches its trigger and answers QT001. Both mean "you cannot truncate this".
+ * it reaches its trigger and answers P0001. Both mean "you cannot truncate this".
  */
 const TRUNCATE_BLOCKED_BY_FK = "0A000";
 

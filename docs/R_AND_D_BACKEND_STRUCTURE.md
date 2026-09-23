@@ -848,6 +848,14 @@ The policy:
 - **Append-only means no `UPDATE` and no `DELETE`.** Enforced with a Postgres trigger plus a
   restricted role, not merely by service-layer discipline. Corrections are **reversing entries**,
   never edits.
+- **Every guard raises `P0001`, and a custom SQLSTATE is not an option.** Migrations 0010–0017
+  raised the invented codes `QT001` and `QT002` so an append-only refusal would be
+  distinguishable in the logs. It never was: Postgres rewrites any SQLSTATE it does not
+  recognise to `XX000` (internal_error), so those codes never reached a client, seven escrow
+  and two other verifier checks failed against guards that worked, and `anonymize-account`
+  could not tell a permanent refusal from a backend fault. Migration 0202 moved all twelve
+  guard functions to `P0001`. **What identifies a guard is its message**, which names the
+  table and the operation; the code only has to survive the wire.
 - **Content tables cascade normally** (workshop tasks, chat messages, board columns).
 - **Taxonomy uses `set null`** — deleting a user must not delete a category every other project
   points at.

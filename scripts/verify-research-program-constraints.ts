@@ -34,7 +34,7 @@ import { pool } from "#src/db/index.js";
 const PG_CHECK_VIOLATION = "23514";
 const PG_UNIQUE_VIOLATION = "23505";
 const PG_FOREIGN_KEY_VIOLATION = "23503";
-const QATOTO_APPEND_ONLY_VIOLATION = "QT001";
+const QATOTO_APPEND_ONLY_VIOLATION = "P0001";
 
 interface Assertion {
   readonly label: string;
@@ -402,13 +402,13 @@ async function main(): Promise<void> {
 
         if (effortLog) {
           await expectRefused(
-            "UPDATING a research_effort_log row is refused by the trigger (QT001)",
+            "UPDATING a research_effort_log row is refused by the trigger (P0001)",
             QATOTO_APPEND_ONLY_VIOLATION,
             `UPDATE research_effort_log SET minutes = 999 WHERE id = $1`,
             [effortLog.id],
           );
           await expectRefused(
-            "DELETING a research_effort_log row is refused by the trigger (QT001)",
+            "DELETING a research_effort_log row is refused by the trigger (P0001)",
             QATOTO_APPEND_ONLY_VIOLATION,
             `DELETE FROM research_effort_log WHERE id = $1`,
             [effortLog.id],

@@ -77,19 +77,24 @@ import type { Result } from "#src/types/index.js";
 const STEP_STATEMENT_TIMEOUT_SQL = sql.raw("SET LOCAL statement_timeout = '30s'");
 
 /**
- * Migration 0010's own append-only SQLSTATE, alongside Postgres's generic `RAISE`.
+ * What an immutability trigger raises: Postgres's generic `RAISE`, and nothing else.
  *
- * BOTH, because the immutability triggers in this schema do not agree on which they use:
- * 0010's append-only guards raise `QT001` and the later ones raise `P0001`. Checking only
- * one would let half the trigger surface retry for hours against a rejection that can
- * never succeed.
+ * THIS LIST USED TO CARRY `QT001` TOO, AND THAT ENTRY NEVER MATCHED ANYTHING. Migrations
+ * 0010–0017 raised the invented code `QT001`, but a SQLSTATE this server does not recognise
+ * arrives as `XX000`, so the guard those migrations installed was refusing writes under a
+ * code nothing could test for — and this branch, which exists to stop a doomed write being
+ * retried for hours, silently did not fire for half the trigger surface. Migration 0202
+ * moved every guard to `P0001`, which survives the wire.
+ *
+ * `XX000` is deliberately NOT accepted here. It is Postgres's internal-error code, so
+ * treating it as a permanent trigger refusal would swallow genuine backend faults.
  *
  * Deliberately NOT added as predicates to `src/lib/pg-errors.ts`: that file states, and is
  * right, that a constraint violation reaching the app is a bug to throw on rather than a
  * `Result` to branch on. Here it IS a domain outcome — it means the manifest is wrong —
  * so the check lives at the one call site that has that meaning.
  */
-const TRIGGER_RAISE_SQLSTATES: readonly string[] = ["P0001", "QT001"];
+const TRIGGER_RAISE_SQLSTATES: readonly string[] = ["P0001"];
 
 export type AnonymizeAccountError =
   | { type: "REQUEST_NOT_FOUND" }

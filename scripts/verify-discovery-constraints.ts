@@ -51,7 +51,7 @@ const EXPECTED_TRIGGERS = [
 ] as const;
 
 /** Postgres raises this SQLSTATE from qatoto_reject_mutation() (migration 0010). */
-const APPEND_ONLY_SQLSTATE = "QT001";
+const APPEND_ONLY_SQLSTATE = "P0001";
 const CHECK_VIOLATION_SQLSTATE = "23514";
 
 function sqlStateOf(error: unknown): string | undefined {
@@ -170,7 +170,7 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
                10, 1, 1, 1, 100, 0, 0, 2, 2, 3, 3, 0)`,
     );
 
-    // 1. An UPDATE on an append-only table must raise QT001.
+    // 1. An UPDATE on an append-only table must raise P0001.
     await client.query("SAVEPOINT before_update");
     try {
       await client.query(
@@ -192,7 +192,7 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
     }
     await client.query("ROLLBACK TO SAVEPOINT before_update");
 
-    // 2. A DELETE on an append-only table must raise QT001.
+    // 2. A DELETE on an append-only table must raise P0001.
     await client.query("SAVEPOINT before_delete");
     try {
       await client.query(`DELETE FROM problem_cluster_score_snapshot WHERE id = 'verify-snapshot'`);

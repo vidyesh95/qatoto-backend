@@ -913,7 +913,7 @@ async function main(): Promise<void> {
  *     children must go first — that is the §4f policy working, not an obstacle.
  *
  *  2. **THE APPEND-ONLY TRIGGERS REFUSE DELETE.** Those three tables reject a DELETE with
- *     QT001 by design, so a teardown has to disable the trigger for the span of the cleanup.
+ *     P0001 by design, so a teardown has to disable the trigger for the span of the cleanup.
  *     That is legitimate for a disposable fixture and must NEVER happen on a production path —
  *     the whole point of the trigger is that no service can do this. It is re-enabled in a
  *     `finally`, so a failure mid-teardown cannot leave the table unprotected.
