@@ -4,6 +4,7 @@ import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm
 
 import { db } from "#src/db/index.js";
 import {
+  commerceCartProductLine,
   commerceCategory,
   commerceCategoryRequest,
   commerceProductCustomizationOption,
@@ -38,7 +39,10 @@ import {
   deleteProductDocument as deleteProductDocumentObject,
   uploadProductDocument as uploadProductDocumentObject,
 } from "#src/lib/object-storage.js";
-import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
+import {
+  isForeignKeyViolation,
+  isUniqueViolation as isUniqueConstraintViolation,
+} from "#src/lib/pg-errors.js";
 import { isPdfValidationError, validatePdfBytes } from "#src/modules/rnd/pdf.js";
 import type { ProductAttributeValueView } from "#src/modules/store/catalog/commerce-category-attributes.service.js";
 import { ensureCommerceProductStatsRow } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
@@ -2903,13 +2907,24 @@ export async function deleteProductModel(
  *  WHERE con.contype = 'f' AND tgt.relname = 'product' AND con.confdeltype = 'r';
  * ```
  *
+ * ⚠️ **ONE RESTRICT TABLE IS DELIBERATELY ABSENT: `commerce_cart_product_line`.** A buyer's cart
+ * line is not commercial evidence, and blocking on it let any stranger's cart keep a seller's
+ * listing undeletable forever. `deleteProduct` clears those lines in its transaction instead, so
+ * the query above returns one more row than this list names.
+ *
+ * `"checkouts"` also covers `commerce_checkout_prepare_line_customization`, whose option guard
+ * trigger (0062) ties every row to a prepare line of the same product.
+ *
  * A missed table is not a silent bug — it falls through to the `PRODUCT_IN_USE` backstop on the
- * delete itself, which is why that catch stays even with this preflight in front of it.
+ * delete itself, which is why that catch stays even with this preflight in front of it. It is a
+ * worse outcome than this list, though: by then the asset sweeps have already run.
  */
 async function findBlockingProductReferences(productId: string): Promise<readonly string[]> {
   const result = await db.execute<Record<string, boolean>>(sql`
     SELECT
       EXISTS (SELECT 1 FROM commerce_order_product_line      WHERE product_id = ${productId}) AS "orders",
+      EXISTS (SELECT 1 FROM commerce_checkout_prepare_product_line
+               WHERE product_id = ${productId})                                               AS "checkouts",
       EXISTS (SELECT 1 FROM commerce_completion              WHERE product_id = ${productId}) AS "completions",
       EXISTS (SELECT 1 FROM commerce_inventory_reservation   WHERE product_id = ${productId}) AS "reservations",
       EXISTS (SELECT 1 FROM commerce_review                  WHERE product_id = ${productId}) AS "reviews",
@@ -3048,21 +3063,47 @@ export async function deleteProduct(
     return { success: false, error: modelAssetRemoval.error };
   }
 
-  await db.transaction(async (transaction) => {
-    await transaction
-      .delete(product)
-      .where(
-        and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
-      );
-    await transaction
-      .delete(storeSearchDocument)
-      .where(
-        and(
-          eq(storeSearchDocument.documentKind, "product"),
-          eq(storeSearchDocument.entityId, productId),
-        ),
-      );
-  });
+  /**
+   * ⚠️ **THE CATCH IS THE BACKSTOP `findBlockingProductReferences` PROMISES.** It did not exist, so
+   * a RESTRICT table missing from that list was an unhandled 500 — after the sweeps above had
+   * already destroyed the listing's assets. It turns schema drift into a 409; the preflight is
+   * still the real guard, because only it runs before anything irreversible.
+   */
+  try {
+    await db.transaction(async (transaction) => {
+      /**
+       * BUYERS' CART LINES GO FIRST, and are cleared rather than refused. A cart line is not
+       * commercial evidence, and it is RESTRICT twice over: on `product`, and through
+       * `commerce_cart_line_customization` on every customization option the product cascades.
+       * A listing unpublished to draft while still in somebody's cart 500'd here on either FK.
+       * Their customizations cascade with them, exactly as the buyer's own `removeCartItem`.
+       */
+      await transaction
+        .delete(commerceCartProductLine)
+        .where(eq(commerceCartProductLine.productId, productId));
+      await transaction
+        .delete(product)
+        .where(
+          and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
+        );
+      await transaction
+        .delete(storeSearchDocument)
+        .where(
+          and(
+            eq(storeSearchDocument.documentKind, "product"),
+            eq(storeSearchDocument.entityId, productId),
+          ),
+        );
+    });
+  } catch (error) {
+    if (isForeignKeyViolation(error)) {
+      return {
+        success: false,
+        error: { type: "PRODUCT_IN_USE", references: ["other records"] },
+      };
+    }
+    throw error;
+  }
 
   return { success: true, value: { id: productId } };
 }
