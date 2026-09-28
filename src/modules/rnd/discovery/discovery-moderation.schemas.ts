@@ -64,6 +64,19 @@ export const DecideMergeProposalSchema = z
   })
   .strict();
 
+/**
+ * Marking a problem fixed. The note is REQUIRED and PUBLIC: it is the "verified" in "verified
+ * problem resolution", and it starts the 90-day photo clock (`DATA_RETENTION.md` §3.2).
+ */
+export const ResolveProblemClusterSchema = z.strictObject({
+  note: z.string().trim().min(1).max(2_000),
+});
+
+/** Reopening. The note is optional and goes to the audit chain only — nothing public shows it. */
+export const ReopenProblemClusterSchema = z.strictObject({
+  note: z.string().trim().min(1).max(2_000).optional(),
+});
+
 export const ListMergeProposalsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).max(500).default(1),

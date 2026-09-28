@@ -107,6 +107,8 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "taxonomy_category_rejected",
   "cluster_merge_approved",
   "cluster_merge_rejected",
+  "problem_cluster_resolved",
+  "problem_cluster_reopened",
   "discovery_skill_created",
   "discovery_skill_updated",
   "discovery_skill_deleted",

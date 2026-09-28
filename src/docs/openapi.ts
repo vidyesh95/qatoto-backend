@@ -1015,6 +1015,48 @@ const handWrittenSpec = {
         },
       },
     },
+    "/discovery/admin/problem-clusters/{clusterId}/resolve": {
+      post: {
+        tags: ["Discovery"],
+        summary: "Mark a problem cluster resolved (the problem was fixed)",
+        description:
+          "Requires `moderate_clusters`, checked before the id is read (403 before 404). Only an " +
+          "`active` cluster resolves. The `note` is REQUIRED and PUBLIC — it is shown on the " +
+          "cluster page as the account of how the problem was fixed. The cluster leaves the map " +
+          "and the list; its page stays readable. 90 days after `resolvedAt` its photos are " +
+          "purged and `photosRemovedAt` is stamped.",
+        parameters: [
+          { name: "clusterId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": { description: "Resolved. Returns clusterId, status, resolvedAt, resolutionNote." },
+          "403": { description: "Not platform staff with `moderate_clusters`." },
+          "404": { description: "No such cluster." },
+          "409": { description: "The cluster is not active; the message names its state." },
+          "422": { description: "Missing, empty or over-long note, or an unknown key." },
+        },
+      },
+    },
+    "/discovery/admin/problem-clusters/{clusterId}/reopen": {
+      post: {
+        tags: ["Discovery"],
+        summary: "Reopen a resolved problem cluster",
+        description:
+          "Requires `moderate_clusters`. Only a `resolved` cluster reopens. The resolution fields " +
+          "are cleared (the audit chain keeps them); `photosRemovedAt` is NOT — purged photos do " +
+          "not come back. The optional `note` goes to the audit chain only.",
+        parameters: [
+          { name: "clusterId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": { description: "Reopened." },
+          "403": { description: "Not platform staff with `moderate_clusters`." },
+          "404": { description: "No such cluster." },
+          "409": { description: "The cluster is not resolved; the message names its state." },
+          "422": { description: "Over-long note, or an unknown key." },
+        },
+      },
+    },
     "/api/auth/{splat}": {
       get: {
         tags: ["Better Auth"],

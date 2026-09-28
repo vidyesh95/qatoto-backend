@@ -3024,6 +3024,7 @@ reachable today.
 | `POST /discovery/admin/categories/:id/decide`                     | `{ decision, note? }`                                                                                                            | Platform `moderator` only (§4a). `200` · `403`                                                                                                                                                                                                     |
 | `GET /discovery/admin/merge-proposals`                            | `?page=&limit=`                                                                                                                  | The moderator queue behind the row below. The capability is checked **in-service, before any id is read**, so the `403` names no id (§4a Layer 3). `200` · `403`                                                                                   |
 | `POST /discovery/admin/merge-proposals/:id/decide`                | `{ decision }`                                                                                                                   | Cluster dedup queue. `200` · `403`                                                                                                                                                                                                                 |
+| `POST /discovery/admin/problem-clusters/:id/resolve` · `/reopen`  | `{ note }` · `{ note? }`                                                                                                         | `moderate_clusters`, 403 before 404. Resolve needs `active`, reopen needs `resolved`; otherwise `409` naming the state. The resolve note is PUBLIC. 90 days after `resolvedAt` the daily photo sweep purges the cluster's photos and stamps `photosRemovedAt` (2026-09-28). |
 
 ### 11d. Workshop and daily logs (§8)
 
@@ -3702,8 +3703,10 @@ async function findOriginCluster(projectId: string) {
   saves an entire collision-suffix mechanism for an entity nobody links to by name."_ The field
   carries `clusterId` and `title`. A client links with the id, exactly as `/problem-map` does.
 - **`ne(status, "hidden")` is required, not defensive.** The project detail read is public;
-  `problemClusterStatusEnum` is `active | merged | hidden` and `hidden` means moderator-hidden and
-  excluded from public reads. Omitting the filter makes the project detail the one endpoint that
+  `problemClusterStatusEnum` is `active | merged | hidden | resolved` (`resolved` since
+  2026-09-28, a moderator's public record that the problem was fixed) and `hidden` means
+  moderator-hidden and excluded from public reads. A RESOLVED origin cluster still shows on the
+  project — that is the link worth keeping. Omitting the filter makes the project detail the one endpoint that
   discloses a hidden cluster.
 - **`merged` needs no handling at all.** `discovery-moderation.service.ts:221` re-points links to
   the surviving cluster when a merge is approved, and downgrades `origin` → `founder_declared` as

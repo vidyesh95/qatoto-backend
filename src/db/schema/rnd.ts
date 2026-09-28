@@ -273,6 +273,10 @@ export const problemClusterStatusEnum = pgEnum("problem_cluster_status", [
   "active",
   "merged", // absorbed by an approved merge proposal; mergedIntoClusterId names the survivor
   "hidden", // moderator-hidden; excluded from public reads, NOT deleted
+  // A moderator recorded that the problem was FIXED, with a public note saying how. Off the map
+  // and the list like `merged`; its page stays readable. Its photos are purged 90 days after
+  // `resolved_at` (`sweep-orphan-problem-photos`, `DATA_RETENTION.md` §3.2).
+  "resolved",
 ]);
 
 export const clusterMergeProposalStatusEnum = pgEnum("cluster_merge_proposal_status", [
@@ -1449,8 +1453,8 @@ export const problemSubmission = pgTable(
  * the ids it names. `POST /discovery/problem-reports` therefore stays a JSON route with no
  * idempotency key, which is the property `createProblemSubmission` documents. A photo nobody
  * claims within 24 hours is deleted by `sweep-orphan-problem-photos`, row first, then asset.
- * Every photo, claimed or not, is deleted by that same daily sweep two years after upload
- * (`DATA_RETENTION.md` §3.2).
+ * Every photo, claimed or not, is deleted by that same daily sweep two years after upload, and
+ * every photo on a RESOLVED cluster 90 days after `resolved_at` (`DATA_RETENTION.md` §3.2).
  *
  * ⚠️ **PUBLIC ON THE CLUSTER PAGE, AND NOTHING REVIEWS IT.** The bytes are re-encoded by
  * `validateAndNormalizeImage`, which drops every EXIF field including GPS, but no one blurs or
@@ -1564,6 +1568,18 @@ export const problemCluster = pgTable(
       (): AnyPgColumn => problemCluster.id,
       { onDelete: "restrict" },
     ),
+    // --- RESOLUTION. Set together when a moderator marks the problem fixed, cleared together on
+    //     reopen (`problem_cluster_resolved_ck`). The note is PUBLIC — it is the "verified" in
+    //     "verified problem resolution" — and is written by the moderator about infrastructure,
+    //     never about a reporter.
+    resolvedAt: timestamp("resolved_at"),
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    resolutionNote: text("resolution_note"),
+    // Stamped by the sweep when it purged photos 90 days after resolution, and NEVER cleared:
+    // reopening a cluster cannot bring the files back, so the public notice stays true.
+    photosRemovedAt: timestamp("photos_removed_at"),
     // --- THE SYBIL SURFACE (§6). A cache of
     //     COUNT(DISTINCT reporter_user_id) FILTER (WHERE counts_toward_distinct_reporters),
     //     over IDENTIFIED submissions only. Reconciled nightly by the score job.
@@ -1618,6 +1634,14 @@ export const problemCluster = pgTable(
       "problem_cluster_merged_ck",
       sql`(status = 'merged') = (merged_into_cluster_id IS NOT NULL)
           AND (merged_into_cluster_id IS DISTINCT FROM id)`,
+    ),
+    // ⚠️ `status::text`, NOT `status`: the migration that adds `'resolved'` also adds this CHECK,
+    // and Postgres refuses a new enum value inside the transaction that created it (the
+    // `commerce_journal_account_memorandum_ck` precedent). The text comparison is equivalent.
+    check(
+      "problem_cluster_resolved_ck",
+      sql`(status::text = 'resolved') = (resolved_at IS NOT NULL AND resolution_note IS NOT NULL)
+          AND (resolution_note IS NULL OR char_length(resolution_note) BETWEEN 1 AND 2000)`,
     ),
     check("problem_cluster_reported_order_ck", sql`last_reported_at >= first_reported_at`),
     check(

@@ -1443,6 +1443,13 @@
       "when": 1790607944339,
       "tag": "0205_rainy_tarot",
       "breakpoints": true
+    },
+    {
+      "idx": 206,
+      "version": "7",
+      "when": 1790614302215,
+      "tag": "0206_hot_lester",
+      "breakpoints": true
     }
   ]
 }

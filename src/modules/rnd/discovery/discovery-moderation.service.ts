@@ -39,7 +39,12 @@ export type DiscoveryModerationError =
   | { type: "CATEGORY_ALREADY_DECIDED"; status: string }
   | { type: "MERGE_PROPOSAL_NOT_FOUND"; proposalId: string }
   | { type: "MERGE_PROPOSAL_ALREADY_DECIDED"; status: string }
-  | { type: "MERGE_TARGET_INVALID"; reason: "self_merge" | "target_already_merged" };
+  | {
+      type: "MERGE_TARGET_INVALID";
+      reason: "self_merge" | "target_already_merged" | "target_resolved";
+    }
+  | { type: "CLUSTER_NOT_FOUND"; clusterId: string }
+  | { type: "CLUSTER_STATUS_CONFLICT"; status: string };
 
 export type CategoryDecisionInput =
   | {
@@ -235,7 +240,11 @@ export async function decideMergeProposal(
   if (!targetCluster || targetCluster.status !== "active") {
     return {
       success: false,
-      error: { type: "MERGE_TARGET_INVALID", reason: "target_already_merged" },
+      error: {
+        type: "MERGE_TARGET_INVALID",
+        // A fixed problem is not somewhere new reports should be absorbed into.
+        reason: targetCluster?.status === "resolved" ? "target_resolved" : "target_already_merged",
+      },
     };
   }
 
@@ -282,7 +291,15 @@ export async function decideMergeProposal(
     // 3. Mark the source absorbed.
     await tx
       .update(problemCluster)
-      .set({ status: "merged", mergedIntoClusterId: proposal.targetClusterId })
+      .set({
+        status: "merged",
+        mergedIntoClusterId: proposal.targetClusterId,
+        // A RESOLVED source must shed its resolution, or `problem_cluster_resolved_ck` refuses
+        // the update. `photosRemovedAt` stays: purged files do not come back.
+        resolvedAt: null,
+        resolvedByUserId: null,
+        resolutionNote: null,
+      })
       .where(eq(problemCluster.id, proposal.sourceClusterId));
 
     // 4. RE-DERIVE the target's counts. See the function comment — adding would
@@ -421,4 +438,136 @@ export async function listPendingMergeProposals(
     success: true,
     value: { rows: rows.map(toMergeProposalView), total: totalRow?.total ?? 0 },
   };
+}
+
+/** What a resolve or reopen returns: the cluster's lifecycle facts after the write. */
+export interface ClusterResolutionView {
+  readonly clusterId: string;
+  readonly status: (typeof problemCluster.$inferSelect)["status"];
+  readonly resolvedAt: string | null;
+  readonly resolutionNote: string | null;
+}
+
+function toClusterResolutionView(row: typeof problemCluster.$inferSelect): ClusterResolutionView {
+  return {
+    clusterId: row.id,
+    status: row.status,
+    resolvedAt: row.resolvedAt === null ? null : row.resolvedAt.toISOString(),
+    resolutionNote: row.resolutionNote,
+  };
+}
+
+/**
+ * Why a conditional resolve/reopen matched nothing: the cluster does not exist (404), or it is
+ * not in the state the verb needs (409, carrying the state it IS in). Read AFTER the write
+ * missed, so a lost race reports the winner's state rather than a stale one.
+ */
+async function explainClusterTransitionMiss(clusterId: string): Promise<DiscoveryModerationError> {
+  const [current] = await db
+    .select({ status: problemCluster.status })
+    .from(problemCluster)
+    .where(eq(problemCluster.id, clusterId));
+  return current === undefined
+    ? { type: "CLUSTER_NOT_FOUND", clusterId }
+    : { type: "CLUSTER_STATUS_CONFLICT", status: current.status };
+}
+
+/**
+ * Marks an ACTIVE cluster resolved — the problem was fixed — with a PUBLIC note saying how.
+ *
+ * The note is required because it is the "verified" in "verified problem resolution"
+ * (`DATA_RETENTION.md` §3.2): the resolution starts a 90-day clock after which every photo on the
+ * cluster is purged, and a reader is owed the reason. The cluster leaves the map and the list;
+ * its page stays readable. Only `active` clusters resolve — a merged or hidden one is refused
+ * with the state it is in, never silently re-stated.
+ */
+export async function resolveProblemCluster(
+  actorUserId: string,
+  clusterId: string,
+  input: { readonly note: string },
+): Promise<Result<ClusterResolutionView, DiscoveryModerationError>> {
+  const capabilityResult = await requirePlatformCapability(actorUserId, "moderate_clusters");
+  if (!capabilityResult.success) {
+    return { success: false, error: capabilityResult.error };
+  }
+
+  const resolvedAt = new Date();
+  const resolved = await recordPlatformAction(
+    async (tx) => {
+      const [row] = await tx
+        .update(problemCluster)
+        .set({
+          status: "resolved",
+          resolvedAt,
+          resolvedByUserId: actorUserId,
+          resolutionNote: input.note,
+        })
+        .where(and(eq(problemCluster.id, clusterId), eq(problemCluster.status, "active")))
+        .returning();
+      return row ?? null;
+    },
+    (row) =>
+      row === null
+        ? null
+        : {
+            eventKind: "problem_cluster_resolved",
+            actorUserId,
+            actorRoleSnapshot: capabilityResult.value.platformRole,
+            actionLabel: "Marked a problem cluster resolved",
+            targetLabel: `cluster ${clusterId}`,
+            detailNote: input.note,
+            payload: { clusterId },
+            occurredAt: resolvedAt,
+          },
+  );
+
+  if (!resolved) return { success: false, error: await explainClusterTransitionMiss(clusterId) };
+  return { success: true, value: toClusterResolutionView(resolved) };
+}
+
+/**
+ * Returns a RESOLVED cluster to `active` — the problem came back, or it was resolved in error.
+ *
+ * The resolution columns are cleared together (`problem_cluster_resolved_ck`); the audit chain
+ * keeps who resolved it and why. `photosRemovedAt` is NOT cleared: if the 90-day purge already
+ * ran, the files are gone, and the public notice saying so stays true. Reopening before the
+ * purge stops the clock, because the sweep only reads `resolved` clusters.
+ */
+export async function reopenProblemCluster(
+  actorUserId: string,
+  clusterId: string,
+  input: { readonly note?: string },
+): Promise<Result<ClusterResolutionView, DiscoveryModerationError>> {
+  const capabilityResult = await requirePlatformCapability(actorUserId, "moderate_clusters");
+  if (!capabilityResult.success) {
+    return { success: false, error: capabilityResult.error };
+  }
+
+  const reopenedAt = new Date();
+  const reopened = await recordPlatformAction(
+    async (tx) => {
+      const [row] = await tx
+        .update(problemCluster)
+        .set({ status: "active", resolvedAt: null, resolvedByUserId: null, resolutionNote: null })
+        .where(and(eq(problemCluster.id, clusterId), eq(problemCluster.status, "resolved")))
+        .returning();
+      return row ?? null;
+    },
+    (row) =>
+      row === null
+        ? null
+        : {
+            eventKind: "problem_cluster_reopened",
+            actorUserId,
+            actorRoleSnapshot: capabilityResult.value.platformRole,
+            actionLabel: "Reopened a resolved problem cluster",
+            targetLabel: `cluster ${clusterId}`,
+            ...(input.note === undefined ? {} : { detailNote: input.note }),
+            payload: { clusterId },
+            occurredAt: reopenedAt,
+          },
+  );
+
+  if (!reopened) return { success: false, error: await explainClusterTransitionMiss(clusterId) };
+  return { success: true, value: toClusterResolutionView(reopened) };
 }

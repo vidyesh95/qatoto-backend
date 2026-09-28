@@ -508,6 +508,11 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
     },
     "problem_cluster_merge_proposal.proposed_by_user_id": { kind: "null_out" },
+    "problem_cluster.resolved_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "The moderator who marked a public problem fixed — the same enforcement-record reason as a merge decision above. The resolution starts a 90-day photo purge, so an unattributable one could not be questioned.",
+    },
     "problem_cluster_project_link.linked_by_user_id": { kind: "null_out" },
     "problem_submission.reporter_user_id": {
       kind: "retain",

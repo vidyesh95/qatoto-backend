@@ -207,7 +207,9 @@ function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
         message:
           error.reason === "self_merge"
             ? "A cluster cannot be merged into itself."
-            : "The target cluster has already been merged into another.",
+            : error.reason === "target_resolved"
+              ? "The target cluster is resolved. Reopen it before merging into it."
+              : "The target cluster has already been merged into another.",
       };
     // NOTE: there is deliberately no COORDINATES_OUT_OF_RANGE arm. Coordinates never
     // arrive from a client at all — `POST /discovery/problem-reports` takes `locationText`
@@ -235,6 +237,13 @@ function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       return { statusCode: 409, message: `That category is already ${error.status}.` };
     case "MERGE_PROPOSAL_ALREADY_DECIDED":
       return { statusCode: 409, message: `That proposal is already ${error.status}.` };
+    // Resolve needs `active`, reopen needs `resolved`. The current state is named so a moderator
+    // who lost a race to another one sees what the cluster became, not a bare refusal.
+    case "CLUSTER_STATUS_CONFLICT":
+      return {
+        statusCode: 409,
+        message: `That cluster is ${error.status}. Refresh to see its current state.`,
+      };
     // RESOURCE-NEUTRAL WORDING, because two domains now share these literals: a talent
     // profile (`/talent/me/publish`) and a market insight (`/admin/market-insights/:id/
     // publish`). "Your profile is already published" was correct when only one reached

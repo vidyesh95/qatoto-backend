@@ -31,6 +31,8 @@ import { CreateCategorySchema } from "#src/modules/rnd/discovery/discovery-catal
 import {
   DecideCategorySchema,
   DecideMergeProposalSchema,
+  ReopenProblemClusterSchema,
+  ResolveProblemClusterSchema,
 } from "#src/modules/rnd/discovery/discovery-moderation.schemas.js";
 import {
   CreateDiscoveryRegionSchema,
@@ -285,6 +287,14 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   "post /discovery/admin/market-insights": { schema: CreateMarketInsightSchema, required: true },
   "post /discovery/admin/merge-proposals/{proposalId}/decide": {
     schema: DecideMergeProposalSchema,
+    required: true,
+  },
+  "post /discovery/admin/problem-clusters/{clusterId}/reopen": {
+    schema: ReopenProblemClusterSchema,
+    required: false,
+  },
+  "post /discovery/admin/problem-clusters/{clusterId}/resolve": {
+    schema: ResolveProblemClusterSchema,
     required: true,
   },
   "post /discovery/admin/regions": { schema: CreateDiscoveryRegionSchema, required: true },

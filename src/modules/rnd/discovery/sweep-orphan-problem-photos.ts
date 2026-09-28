@@ -1,10 +1,11 @@
-import { and, inArray, isNull, lt } from "drizzle-orm";
+import { and, inArray, isNull, lt, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { problemSubmissionPhoto } from "#src/db/schema.js";
 import { deleteProblemPhotos, listProblemPhotoAssets } from "#src/lib/cloudinary.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 
 /**
  * The daily problem-photo sweep (Civic Pulse). The `sweep-orphan-showcase-images` shape, one table.
@@ -14,6 +15,13 @@ import { logger } from "#src/lib/logger.js";
  * it is two years old. It lives here rather than in a job of its own because of ROWS GO FIRST
  * below: a file whose delete fails has already lost its row, so this same run's listing finds it
  * and retries. The job's name predates the step; a pg-boss queue name is not worth renaming.
+ *
+ * AND THE 90-DAYS-AFTER-RESOLUTION RULE, second: once a moderator has marked a cluster RESOLVED
+ * and 90 days have passed, every photo on it is deleted — row, then file — and the cluster is
+ * stamped `photos_removed_at` so its page can say "Photo removed upon verified problem
+ * resolution". The stamp is written only when rows were actually deleted, so a cluster that
+ * never had photos never shows the notice. Reopening a cluster stops this clock; it cannot bring
+ * back files already purged, which is why the stamp is never cleared.
  *
  * THEN TWO KINDS OF LEFTOVER, each with a different cause:
  *
@@ -46,11 +54,17 @@ const UNCLAIMED_UPLOAD_LIFETIME_MS = 24 * 60 * 60 * 1000;
  */
 const PHOTO_RETENTION_MS = 730 * 24 * 60 * 60 * 1000;
 
+/** How long a RESOLVED cluster's photos stay visible before they are purged (§3.2). */
+const RESOLVED_CLUSTER_PHOTO_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
+
+type ResolutionPurgedPhotoRow = { readonly public_id: string };
+
 /** Bounds one run's Admin API spend. A folder larger than this is swept over several nights. */
 const MAX_LISTING_PAGES_PER_RUN = 20;
 
 export interface ProblemPhotoSweepSummary {
   readonly retentionExpiredRowsDeleted: number;
+  readonly resolutionPurgedRowsDeleted: number;
   readonly expiredUploadRowsDeleted: number;
   readonly orphanAssetsDeleted: number;
   readonly listingPagesRead: number;
@@ -72,6 +86,42 @@ export async function sweepOrphanProblemPhotos(asOf: Date): Promise<ProblemPhoto
       {
         assetCount: retentionExpiredPublicIds.length,
         errorType: retentionAssetDelete.error.type,
+      },
+    );
+  }
+
+  // ONE STATEMENT, so the delete and the stamp cannot disagree: the photos go and their clusters
+  // are stamped atomically, and only clusters that actually lost photos are stamped.
+  const resolutionCutoff = new Date(asOf.getTime() - RESOLVED_CLUSTER_PHOTO_LIFETIME_MS);
+  const resolutionPurgedRows = await db.execute<ResolutionPurgedPhotoRow>(sql`
+    WITH purged_photo AS (
+      DELETE FROM problem_submission_photo AS photo
+      USING problem_submission AS submission, problem_cluster AS cluster
+      WHERE photo.submission_id = submission.id
+        AND submission.cluster_id = cluster.id
+        AND cluster.status = 'resolved'
+        AND cluster.resolved_at < ${utcTimestamp(resolutionCutoff)}
+      RETURNING photo.public_id, cluster.id AS cluster_id
+    ), stamped_cluster AS (
+      UPDATE problem_cluster
+      SET photos_removed_at = ${utcTimestamp(asOf)}
+      WHERE id IN (SELECT DISTINCT cluster_id FROM purged_photo)
+        AND photos_removed_at IS NULL
+      RETURNING id
+    )
+    SELECT public_id FROM purged_photo
+  `);
+
+  const resolutionPurgedPublicIds = resolutionPurgedRows.rows.map(
+    (purgedRow) => purgedRow.public_id,
+  );
+  const resolutionAssetDelete = await deleteProblemPhotos(resolutionPurgedPublicIds);
+  if (!resolutionAssetDelete.success) {
+    logger.warn(
+      "sweep-orphan-problem-photos: resolution-purged photo assets not deleted; listing retries",
+      {
+        assetCount: resolutionPurgedPublicIds.length,
+        errorType: resolutionAssetDelete.error.type,
       },
     );
   }
@@ -148,6 +198,7 @@ export async function sweepOrphanProblemPhotos(asOf: Date): Promise<ProblemPhoto
 
   return {
     retentionExpiredRowsDeleted: retentionExpiredPublicIds.length,
+    resolutionPurgedRowsDeleted: resolutionPurgedPublicIds.length,
     expiredUploadRowsDeleted: expiredPublicIds.length,
     orphanAssetsDeleted,
     listingPagesRead,
@@ -165,6 +216,7 @@ export async function handleSweepOrphanProblemPhotos(rawPayload: unknown): Promi
 
   logger.info("sweep-orphan-problem-photos complete", {
     retentionExpiredRowsDeleted: summary.retentionExpiredRowsDeleted,
+    resolutionPurgedRowsDeleted: summary.resolutionPurgedRowsDeleted,
     expiredUploadRowsDeleted: summary.expiredUploadRowsDeleted,
     orphanAssetsDeleted: summary.orphanAssetsDeleted,
     listingPagesRead: summary.listingPagesRead,

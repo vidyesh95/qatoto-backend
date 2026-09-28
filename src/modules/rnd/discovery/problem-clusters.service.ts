@@ -210,9 +210,10 @@ export async function linkProjectToCluster(
   if (!cluster) {
     return { success: false, error: { type: "CLUSTER_NOT_FOUND", clusterId } };
   }
-  if (cluster.status !== "active") {
-    // A merged cluster's links get REPOINTED by moderation, never added to; a hidden one is
-    // withdrawn from the map and must not accrue new provenance.
+  // A merged cluster's links get REPOINTED by moderation, never added to; a hidden one is
+  // withdrawn from the map and must not accrue new provenance. A RESOLVED one stays linkable:
+  // "this project is what fixed it" is the most valuable link a cluster can carry.
+  if (cluster.status === "merged" || cluster.status === "hidden") {
     return { success: false, error: { type: "CLUSTER_NOT_LINKABLE", status: cluster.status } };
   }
 
@@ -395,6 +396,16 @@ export interface ProblemClusterView {
   readonly lastReportedAt: string;
   readonly status: (typeof problemCluster.$inferSelect)["status"];
   readonly mergedIntoClusterId: string | null;
+  /** ISO-8601 UTC. Non-null exactly when `status` is `resolved`. */
+  readonly resolvedAt: string | null;
+  /** The moderator's PUBLIC account of how it was fixed. Non-null exactly when resolved. */
+  readonly resolutionNote: string | null;
+  /**
+   * ISO-8601 UTC. When the 90-days-after-resolution purge removed this cluster's photos. Set only
+   * if photos were actually removed, and never cleared — so "Photo removed upon verified problem
+   * resolution" is printed only where it is true, even after a reopen.
+   */
+  readonly photosRemovedAt: string | null;
 }
 
 const PROBLEM_CLUSTER_SORTS = ["opportunity", "recent", "reporters", "distance"] as const;
@@ -441,6 +452,9 @@ const PROBLEM_CLUSTER_VIEW_COLUMNS = {
   lastReportedAt: problemCluster.lastReportedAt,
   status: problemCluster.status,
   mergedIntoClusterId: problemCluster.mergedIntoClusterId,
+  resolvedAt: problemCluster.resolvedAt,
+  resolutionNote: problemCluster.resolutionNote,
+  photosRemovedAt: problemCluster.photosRemovedAt,
 } as const;
 
 /**
@@ -468,6 +482,9 @@ interface ProblemClusterQueryRow {
   readonly lastReportedAt: Date;
   readonly status: (typeof problemCluster.$inferSelect)["status"];
   readonly mergedIntoClusterId: string | null;
+  readonly resolvedAt: Date | null;
+  readonly resolutionNote: string | null;
+  readonly photosRemovedAt: Date | null;
 }
 
 function toProblemClusterView(row: ProblemClusterQueryRow): ProblemClusterView {
@@ -489,6 +506,9 @@ function toProblemClusterView(row: ProblemClusterQueryRow): ProblemClusterView {
     lastReportedAt: row.lastReportedAt.toISOString(),
     status: row.status,
     mergedIntoClusterId: row.mergedIntoClusterId,
+    resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    resolutionNote: row.resolutionNote,
+    photosRemovedAt: row.photosRemovedAt?.toISOString() ?? null,
   };
 }
 

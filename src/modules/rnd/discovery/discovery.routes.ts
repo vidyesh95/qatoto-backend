@@ -325,6 +325,25 @@ router.delete(
   vocabularyController.deleteRegion,
 );
 
+// Resolution — `moderate_clusters`, capability before id (403 before 404). Two literal verbs
+// rather than a PATCH of `status`, the `/admin/market-insights/:id/publish|unpublish` precedent:
+// each verb has exactly one legal starting state, and the 409 names the state it found.
+router.post(
+  "/admin/problem-clusters/:clusterId/resolve",
+  requireAuth,
+  discoveryModerationLimiter,
+  compactBody,
+  moderationController.resolveProblemCluster,
+);
+
+router.post(
+  "/admin/problem-clusters/:clusterId/reopen",
+  requireAuth,
+  discoveryModerationLimiter,
+  compactBody,
+  moderationController.reopenProblemCluster,
+);
+
 router.post(
   "/admin/merge-proposals/:proposalId/decide",
   requireAuth,
