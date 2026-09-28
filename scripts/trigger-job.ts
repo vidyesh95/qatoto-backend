@@ -62,6 +62,10 @@ const TRIGGERABLE_JOBS = {
     grain: "hour",
     idempotencyKey: idempotencyKeyFor.recomputeTrendingSearches,
   },
+  [JOB_NAMES.recomputeProgramPostTrending]: {
+    grain: "hour",
+    idempotencyKey: idempotencyKeyFor.recomputeProgramPostTrending,
+  },
   [JOB_NAMES.revalidateYoutubeEmbeds]: {
     grain: "day",
     idempotencyKey: idempotencyKeyFor.revalidateYoutubeEmbeds,

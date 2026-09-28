@@ -465,7 +465,7 @@ async function main(): Promise<void> {
     const hiddenFeed = await postsService.listProgramPosts({
       programId,
       viewerUserId: strangerUserId,
-      filter: { track: "idea", limit: 20 },
+      filter: { track: "idea", sort: "newest", limit: 20 },
     });
     const hiddenRow = hiddenFeed.rows.find((row) => row.postId === ideaPostId);
     check(

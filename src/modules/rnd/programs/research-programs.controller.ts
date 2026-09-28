@@ -5,6 +5,10 @@ import {
   requirePlatformCapability,
   type PlatformStaffContext,
 } from "#src/modules/platform/roles/platform-role.service.js";
+import {
+  decodeProgramPostFeedCursor,
+  type ProgramPostFeedCursor,
+} from "#src/modules/rnd/programs/program-post-feed-cursor.js";
 import * as categoriesService from "#src/modules/rnd/programs/research-paper-categories.service.js";
 import * as papersService from "#src/modules/rnd/programs/research-papers.service.js";
 import {
@@ -839,16 +843,33 @@ export async function listPosts(req: Request, res: Response): Promise<void> {
     respondValidationFailed(res, parsedQuery.error);
     return;
   }
-  const decoded = decodeCursorOrRespond(res, parsedQuery.data.cursor);
-  if (!decoded.ok) return;
+  // Decoded UNDER the requested sort: a cursor minted by the other order is a 422, like a
+  // malformed one, never a silent first page or a silently re-ordered one.
+  let feedCursor: ProgramPostFeedCursor | undefined;
+  if (parsedQuery.data.cursor !== undefined) {
+    const decodedCursor = decodeProgramPostFeedCursor(
+      parsedQuery.data.cursor,
+      parsedQuery.data.sort,
+    );
+    if (decodedCursor === null) {
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Malformed cursor, or one from a different sort.",
+      } satisfies ApiResponse);
+      return;
+    }
+    feedCursor = decodedCursor;
+  }
 
   const postPage = await postsService.listProgramPosts({
     programId: program.programId,
     viewerUserId: req.user?.id ?? null,
     filter: {
       track: parsedQuery.data.track,
+      sort: parsedQuery.data.sort,
       limit: parsedQuery.data.limit,
-      ...(decoded.cursor === undefined ? {} : { cursor: decoded.cursor }),
+      ...(feedCursor === undefined ? {} : { cursor: feedCursor }),
     },
   });
 

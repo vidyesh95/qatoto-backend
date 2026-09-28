@@ -517,6 +517,26 @@ export async function handleRecomputeTrendingVideosTick(
   }
 }
 
+/** The hourly programme-discussion trending tick. Hour-quantized like the other trending ticks. */
+export async function handleRecomputeProgramPostTrendingTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcHourStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeProgramPostTrending,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeProgramPostTrending(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-program-post-trending-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
 /**
  * The hourly trending-searches tick. Hour-quantized for the trending-videos tick's reason, and
  * because the job it enqueues also enforces the search log's 30-day retention.

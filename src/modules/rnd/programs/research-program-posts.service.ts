@@ -10,6 +10,11 @@ import {
 import { encodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
+  encodeProgramPostFeedCursor,
+  type ProgramPostFeedCursor,
+  type ProgramPostFeedSort,
+} from "#src/modules/rnd/programs/program-post-feed-cursor.js";
+import {
   PROGRAM_AUTHOR_COLUMNS,
   toProgramAuthorView,
   type ProgramAccessError,
@@ -101,6 +106,7 @@ const POST_SELECT_COLUMNS = {
   replyCount: researchProgramPost.replyCount,
   isHidden: researchProgramPost.isHidden,
   createdAt: researchProgramPost.createdAt,
+  trendingScore: researchProgramPost.trendingScore,
   ...PROGRAM_AUTHOR_COLUMNS,
 } as const;
 
@@ -117,6 +123,7 @@ interface RawPostRow {
   readonly replyCount: number;
   readonly isHidden: boolean;
   readonly createdAt: Date;
+  readonly trendingScore: number;
   readonly authorUserId: string | null;
   readonly authorName: string | null;
   readonly authorHandle: string | null;
@@ -163,8 +170,10 @@ function toPostView(
 
 export interface ListPostsFilter {
   readonly track: ResearchProgramPostTrack;
+  readonly sort: ProgramPostFeedSort;
   readonly limit: number;
-  readonly cursor?: InstantCursor | undefined;
+  /** Decoded under `sort` by the controller, so a cross-order cursor never reaches here. */
+  readonly cursor?: ProgramPostFeedCursor | undefined;
 }
 
 /**
@@ -182,6 +191,7 @@ export async function listProgramPosts(input: {
   readonly rows: readonly ResearchProgramPostView[];
   readonly nextCursor: string | null;
 }> {
+  const isTrending = input.filter.sort === "trending";
   const conditions = [
     eq(researchProgramPost.programId, input.programId),
     eq(researchProgramPost.track, input.filter.track),
@@ -189,23 +199,54 @@ export async function listProgramPosts(input: {
     // filtering on depth uses the feed index.
     eq(researchProgramPost.depth, 0),
   ];
+  // TRENDING IS A RECOMMENDATION, so a hidden post is not in it — the newest feed still shows
+  // it as a placeholder. This also matches `research_program_post_trending_idx`'s predicate.
+  if (isTrending) conditions.push(eq(researchProgramPost.isHidden, false));
 
-  if (input.filter.cursor !== undefined) {
-    const { instant, id } = input.filter.cursor;
-    conditions.push(
-      or(
-        lt(researchProgramPost.createdAt, instant),
-        and(eq(researchProgramPost.createdAt, instant), lt(researchProgramPost.id, id)),
-      )!,
-    );
+  const cursor = input.filter.cursor;
+  if (cursor !== undefined) {
+    switch (cursor.sort) {
+      case "newest":
+        conditions.push(
+          or(
+            lt(researchProgramPost.createdAt, cursor.createdAt),
+            and(
+              eq(researchProgramPost.createdAt, cursor.createdAt),
+              lt(researchProgramPost.id, cursor.id),
+            ),
+          )!,
+        );
+        break;
+      case "trending":
+        // Row comparison over the whole descending key, one predicate the index can range on.
+        conditions.push(
+          sql`(${researchProgramPost.trendingScore}, ${researchProgramPost.createdAt}, ${researchProgramPost.id}) < (${cursor.trendingScore}, ${cursor.createdAt}, ${cursor.id})`,
+        );
+        break;
+      default: {
+        const exhaustiveCheck: never = cursor;
+        throw new Error(`Unhandled programme post cursor: ${JSON.stringify(exhaustiveCheck)}`);
+      }
+    }
   }
 
+  // ⚠️ THE TRENDING KEY IS STORED, NOT LIVE. `trending_score` is rewritten only by the hourly job,
+  // so pages fetched within the hour are stable; a run landing between two fetches can move a row
+  // — the trade-off `?mode=trending` videos accept, and the reason a live count cannot be a key.
   const topLevelRows = (await db
     .select(POST_SELECT_COLUMNS)
     .from(researchProgramPost)
     .leftJoin(user, eq(user.id, researchProgramPost.authorUserId))
     .where(and(...conditions))
-    .orderBy(desc(researchProgramPost.createdAt), desc(researchProgramPost.id))
+    .orderBy(
+      ...(isTrending
+        ? [
+            desc(researchProgramPost.trendingScore),
+            desc(researchProgramPost.createdAt),
+            desc(researchProgramPost.id),
+          ]
+        : [desc(researchProgramPost.createdAt), desc(researchProgramPost.id)]),
+    )
     .limit(input.filter.limit + 1)) as RawPostRow[];
 
   const hasMore = topLevelRows.length > input.filter.limit;
@@ -251,7 +292,16 @@ export async function listProgramPosts(input: {
     ),
     nextCursor:
       hasMore && lastRow
-        ? encodeInstantCursor({ instant: lastRow.createdAt, id: lastRow.postId })
+        ? encodeProgramPostFeedCursor(
+            isTrending
+              ? {
+                  sort: "trending",
+                  trendingScore: lastRow.trendingScore,
+                  createdAt: lastRow.createdAt,
+                  id: lastRow.postId,
+                }
+              : { sort: "newest", createdAt: lastRow.createdAt, id: lastRow.postId },
+          )
         : null,
   };
 }

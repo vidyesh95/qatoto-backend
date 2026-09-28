@@ -23,6 +23,7 @@ import {
   handleSweepDisputeWindowsTick,
   handlePruneEngagementDataTick,
   handleRecomputePlatformCategoryPopularityTick,
+  handleRecomputeProgramPostTrendingTick,
   handleRecomputeTrendingSearchesTick,
   handleRecomputeTrendingVideosTick,
   handleRecomputeUserAffinitiesTick,
@@ -79,6 +80,7 @@ import { handleGenerateLocalizationNarrative } from "#src/modules/rnd/import-int
 import { handleRecomputeLocalizationAssessments } from "#src/modules/rnd/import-intelligence/recompute-localization-assessments.js";
 import { handleSyncComtradeTradeFlows } from "#src/modules/rnd/import-intelligence/sync-comtrade-trade-flows.js";
 import { handleRecomputeBranchSignals } from "#src/modules/rnd/programs/recompute-branch-signals.js";
+import { handleRecomputeProgramPostTrending } from "#src/modules/rnd/programs/recompute-program-post-trending.js";
 import { handleRecomputeProgramStats } from "#src/modules/rnd/programs/recompute-program-stats.js";
 import { handleSweepDisputeWindows } from "#src/modules/rnd/proof-of-effort/sweep-dispute-windows.js";
 import {
@@ -459,6 +461,16 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeTrendingSearches,
     workOptions,
     runJob(JOB_NAMES.recomputeTrendingSearches, handleRecomputeTrendingSearches),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeProgramPostTrendingTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeProgramPostTrendingTick, handleRecomputeProgramPostTrendingTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeProgramPostTrending,
+    workOptions,
+    runJob(JOB_NAMES.recomputeProgramPostTrending, handleRecomputeProgramPostTrending),
   );
   await boss.work(
     JOB_NAMES.revalidateYoutubeEmbedsTick,

@@ -7871,6 +7871,14 @@ export const researchProgramPost = pgTable(
     authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
     reactionCount: integer("reaction_count").default(0).notNull(),
     replyCount: integer("reply_count").default(0).notNull(),
+    // --- TRENDING (`?sort=trending`). Written ONLY by the hourly `recompute-program-post-trending`
+    //     job: reactions + 2 × visible replies in the last seven days, on top-level posts. STORED,
+    //     not computed per request, because the feed is keyset-paginated and a key that moves
+    //     between two page fetches skips or repeats rows — the reason the blueprint and video
+    //     comment threads refuse a like-count sort. Frozen between runs, so a page is stable for
+    //     the hour.
+    trendingScore: integer("trending_score").default(0).notNull(),
+    trendingScoredAt: timestamp("trending_scored_at"),
     // Moderation. Hidden rather than deleted, so a report stays explicable and a
     // wrong call is reversible — `post_restored` is a real audit event.
     isHidden: boolean("is_hidden").default(false).notNull(),
@@ -7894,6 +7902,18 @@ export const researchProgramPost = pgTable(
       table.createdAt,
       table.id,
     ),
+    // The TRENDING feed: top-level, visible rows by stored score, then newest, ending in a unique
+    // column. Partial on exactly the rows `?sort=trending` may return — hidden posts are not
+    // recommended, even though the newest feed still shows them as placeholders.
+    index("research_program_post_trending_idx")
+      .on(
+        table.programId,
+        table.track,
+        table.trendingScore.desc(),
+        table.createdAt.desc(),
+        table.id.desc(),
+      )
+      .where(sql`depth = 0 AND NOT is_hidden`),
     // A thread's replies, oldest first.
     index("research_program_post_parent_idx").on(table.parentPostId, table.createdAt, table.id),
     index("research_program_post_authorUserId_idx").on(table.authorUserId, table.id),
@@ -7916,7 +7936,10 @@ export const researchProgramPost = pgTable(
       sql`char_length(body_text) BETWEEN 1 AND 10000
           AND (hidden_reason IS NULL OR char_length(hidden_reason) BETWEEN 1 AND 2000)`,
     ),
-    check("research_program_post_counts_ck", sql`reaction_count >= 0 AND reply_count >= 0`),
+    check(
+      "research_program_post_counts_ck",
+      sql`reaction_count >= 0 AND reply_count >= 0 AND trending_score >= 0`,
+    ),
     // A reply has no replies of its own — the cap, restated where it is cheap to check.
     check("research_program_post_leaf_ck", sql`depth = 0 OR reply_count = 0`),
     check(
@@ -7949,6 +7972,8 @@ export const researchProgramPostReaction = pgTable(
     uniqueIndex("research_program_post_reaction_unq").on(table.postId, table.userId),
     // "Did I react to this?" across a fetched page, in one query.
     index("research_program_post_reaction_userId_idx").on(table.userId, table.postId),
+    // The trending job's seven-day window scan, hourly. Nothing else reads reactions by time.
+    index("research_program_post_reaction_created_idx").on(table.createdAt),
   ],
 );
 

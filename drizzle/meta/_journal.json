@@ -1457,6 +1457,13 @@
       "when": 1790615618394,
       "tag": "0207_quiet_vanisher",
       "breakpoints": true
+    },
+    {
+      "idx": 208,
+      "version": "7",
+      "when": 1790617143146,
+      "tag": "0208_safe_starfox",
+      "breakpoints": true
     }
   ]
 }

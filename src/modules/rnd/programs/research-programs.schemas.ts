@@ -222,6 +222,9 @@ export const DismissReportSchema = z
 
 export const ListPostsQuerySchema = CursorQuerySchema.extend({
   track: z.enum(["informal_paper", "idea"]).default("idea"),
+  // `trending` orders by the STORED hourly score (`recompute-program-post-trending`), then newest.
+  // The cursor carries which order minted it, and a cross-order cursor is a 422.
+  sort: z.enum(["newest", "trending"]).default("newest"),
 }).strict();
 
 const PARTICIPANT_ROLES = [
