@@ -110,25 +110,33 @@ function mapQaError(res: Response, error: CommerceProductQaError): void {
  * asked about, or read from, a listing the public cannot see.
  */
 /**
- * A24. Who is reading, for `viewer.hasVotedHelpful`.
+ * Who is reading — for `viewer.hasVotedHelpful` (A24) and `viewer.canDelete` (§3.3) — and, on
+ * the answer withdrawal, who is acting.
  *
  * Resolved here rather than by a guard, for the reason `store.controller.getProduct`
- * states: on a public read the organization is descriptive, not required. A visitor with
- * no account, and a signed-in visitor with no active commerce organization, both get
- * `null` — neither can vote, so neither is told anything about a vote.
+ * states: on a public read the organization is descriptive, not required.
+ *
+ * `userId` is kept for EVERY signed-in caller, with or without an active organization: an author
+ * whose session has no active organization may still withdraw their own question or answer, and
+ * dropping the user here hid exactly that control. The organization and role come only from a
+ * verified ACTIVE membership, never from the request.
  */
 async function resolveQaViewer(
   req: Request,
 ): Promise<commerceProductQaService.ProductQaViewerContext> {
-  if (!req.user || !req.authSession?.activeOrganizationId) {
-    return commerceProductQaService.ANONYMOUS_QA_VIEWER;
-  }
+  if (!req.user) return commerceProductQaService.ANONYMOUS_QA_VIEWER;
+  const signedInViewer = { ...commerceProductQaService.ANONYMOUS_QA_VIEWER, userId: req.user.id };
+  if (!req.authSession?.activeOrganizationId) return signedInViewer;
+
   const activeOrganization = await resolveActiveCommerceOrganization({
     userId: req.user.id,
     activeOrganizationId: req.authSession.activeOrganizationId,
   });
+  if (!activeOrganization.success) return signedInViewer;
   return {
-    organizationId: activeOrganization.success ? activeOrganization.value.organizationId : null,
+    userId: req.user.id,
+    organizationId: activeOrganization.value.organizationId,
+    memberRole: activeOrganization.value.memberRole,
   };
 }
 
@@ -296,8 +304,7 @@ export async function answerProductQuestion(req: Request, res: Response): Promis
 }
 
 export async function retractProductAnswer(req: Request, res: Response): Promise<void> {
-  const answererUserId = requireUserId(req, res);
-  if (!answererUserId) return;
+  if (!requireUserId(req, res)) return;
   if (!parseNoQuery(req, res)) return;
 
   const params = ProductAnswerIdParamsSchema.safeParse(req.params);
@@ -307,7 +314,7 @@ export async function retractProductAnswer(req: Request, res: Response): Promise
   }
 
   const result = await commerceProductQaService.retractProductAnswer(
-    answererUserId,
+    await resolveQaViewer(req),
     params.data.answerId,
   );
   if (!result.success) {

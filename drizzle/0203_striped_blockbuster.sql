@@ -1,0 +1,1 @@
+ALTER TYPE "public"."commerce_organization_audit_event_kind" ADD VALUE IF NOT EXISTS 'product_answer_withdrawn';

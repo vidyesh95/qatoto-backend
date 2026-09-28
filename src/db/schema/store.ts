@@ -415,6 +415,15 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "freight_rate_card_withdrawn",
     "freight_rate_break_added",
     "freight_rate_breaks_replaced",
+    /**
+     * A product answer withdrawn, filed on the ANSWERING organization's chain. Every answer has
+     * one — `commerce_product_answer.author_organization_id` is NOT NULL for seller and
+     * verified-buyer answers alike — so this covers an author withdrawing their own answer and a
+     * seller teammate withdrawing the org's. `removed_by_author` is a state, not an actor, and
+     * `hidden_by_user_id` is CHECK-bound to moderator hides; this entry is where "which member
+     * did it" is answered, and it survives a later restore.
+     */
+    "product_answer_withdrawn",
   ],
 );
 

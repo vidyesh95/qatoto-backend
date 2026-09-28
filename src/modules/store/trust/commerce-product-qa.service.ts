@@ -13,7 +13,14 @@ import {
 } from "#src/db/schema.js";
 import { ensureCommerceProductStatsRow } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import {
+  buildAnswerWithdrawalAuditEntry,
+  canViewerDeleteAnswer,
+  canViewerDeleteQuestion,
+  type QaPermissionViewer,
+} from "#src/modules/store/trust/commerce-product-qa.permissions.js";
 import type {
   AnswerProductQuestionInput,
   AskProductQuestionInput,
@@ -40,9 +47,21 @@ export type CommerceProductQaError =
   | { type: "SELF_VOTE_FORBIDDEN" }
   | { type: "INVALID_CURSOR" };
 
-/** A24. What the CALLER has done to this answer, absent when there is no caller. */
+/**
+ * What the CALLER may do with, and has done to, this answer. Absent (`viewer: null`) only when
+ * there is no signed-in caller at all.
+ */
 export interface ProductAnswerViewerState {
-  readonly hasVotedHelpful: boolean;
+  /**
+   * A24. `null` — NOT `false` — for a caller with no active commerce organization: the vote table
+   * is keyed on the organization, so such a caller cannot vote, and "you have not endorsed this"
+   * and "you cannot endorse this" are different facts. This used to be expressed by the whole
+   * `viewer` being null; it moved down to the field when `canDelete` arrived, because an author
+   * whose session has no active organization may still withdraw their own answer.
+   */
+  readonly hasVotedHelpful: boolean | null;
+  /** §3.3. The server's verdict from `canViewerDeleteAnswer`. The client never infers it. */
+  readonly canDelete: boolean;
 }
 
 export interface ProductAnswerProjection {
@@ -53,14 +72,8 @@ export interface ProductAnswerProjection {
   readonly createdAt: Date;
   readonly helpfulCount: number;
   /**
-   * A24, following A11's `engagement.viewer`: `null` for a caller with no active
-   * commerce organization, NOT `{hasVotedHelpful: false}`. "You have not endorsed this"
-   * and "we do not know who you are" are different facts, and a toggle that renders the
-   * second as the first teaches a buyer the count is not to be trusted.
-   *
-   * The key is the ORGANIZATION rather than the user, because that is what
-   * `commerce_product_answer_vote` is keyed on — a signed-in visitor with no active
-   * organization cannot vote, so `null` is also the honest answer about what they may do.
+   * `null` only for a caller who is not signed in. A signed-in caller always gets the object, with
+   * `hasVotedHelpful: null` when they have no active organization to vote as — see the field.
    */
   readonly viewer: ProductAnswerViewerState | null;
   readonly author: {
@@ -75,12 +88,17 @@ export interface ProductAnswerProjection {
  * Who is reading. Resolved by the controller from the optional session — descriptively,
  * never by a guard, because on a public read a missing organization is a rendering
  * detail rather than a refusal.
+ *
+ * `userId` is set for every signed-in caller; `organizationId` and `memberRole` only when the
+ * session has an ACTIVE membership, verified by `resolveActiveCommerceOrganization`.
  */
-export interface ProductQaViewerContext {
-  readonly organizationId: string | null;
-}
+export type ProductQaViewerContext = QaPermissionViewer;
 
-export const ANONYMOUS_QA_VIEWER: ProductQaViewerContext = { organizationId: null };
+export const ANONYMOUS_QA_VIEWER: ProductQaViewerContext = {
+  userId: null,
+  organizationId: null,
+  memberRole: null,
+};
 
 /**
  * A24. Who is voting. Unlike the answer WRITE, which resolves the organization itself to
@@ -101,6 +119,11 @@ export interface ProductQuestionProjection {
   readonly hasSellerAnswer: boolean;
   /** The asker's display handle. Their EMPLOYER is never projected — see the table. */
   readonly askedBy: { readonly name: string; readonly handle: string | null } | null;
+  /**
+   * §3.3. `null` for a caller who is not signed in; otherwise the server's verdict from
+   * `canViewerDeleteQuestion`, which is the asker and nobody else.
+   */
+  readonly viewer: { readonly canDelete: boolean } | null;
   /**
    * At most one answer, seller's first. The full list is its own paginated route:
    * a cursor over a computed preference rank is how pagination starts skipping rows.
@@ -199,13 +222,12 @@ export async function askProductQuestion(
 
   if (!question) return { success: false, error: { type: "NOT_FOUND" } };
 
-  // The viewer is unused with `includeTopAnswer: false` — a question just asked has no
-  // answers, so there is nothing for a vote state to be about.
-  const [projected] = await projectQuestions(
-    [question],
-    /* includeTopAnswer */ false,
-    ANONYMOUS_QA_VIEWER,
-  );
+  // Projected AS THE ASKER, so the 201 already says `viewer.canDelete: true` — the client renders
+  // its Withdraw control from the server's verdict, never from "I just posted this".
+  const [projected] = await projectQuestions([question], /* includeTopAnswer */ false, {
+    ...ANONYMOUS_QA_VIEWER,
+    userId: askerUserId,
+  });
   return projected
     ? { success: true, value: projected }
     : { success: false, error: { type: "NOT_FOUND" } };
@@ -393,7 +415,9 @@ export async function answerProductQuestion(
       return { success: false, error: { type: "ALREADY_ANSWERED" } };
     case "answered": {
       const [projected] = await projectAnswers([outcome.answer], {
+        userId: input.answererUserId,
         organizationId: activeOrganization.value.organizationId,
+        memberRole: activeOrganization.value.memberRole,
       });
       return projected
         ? { success: true, value: projected }
@@ -408,16 +432,56 @@ export async function answerProductQuestion(
   }
 }
 
-/** Withdraw one's own answer (Appendix A9). */
+async function appendAuditOrThrow(
+  transaction: DatabaseTransaction,
+  input: Parameters<typeof appendCommerceOrganizationAuditEntry>[1],
+): Promise<void> {
+  const appended = await appendCommerceOrganizationAuditEntry(transaction, input);
+  if (!appended.success) {
+    throw new Error(`Product answer withdrawal audit append failed: ${appended.error.type}`);
+  }
+}
+
+/**
+ * Withdraw an answer (Appendix A9, §3.3) — the author's own, or, for a SELLER answer, any active
+ * member of the seller organization. `canViewerDeleteAnswer` is the rule, shared with the read
+ * projection's `viewer.canDelete` so the control and the route cannot disagree.
+ *
+ * A caller the rule refuses gets `NOT_FOUND`, the same 404 as a row that does not exist: the
+ * refusal must not become an oracle for which answer ids are live.
+ *
+ * Every withdrawal appends `product_answer_withdrawn` to the ANSWERING organization's audit
+ * chain, in this transaction — `removed_by_author` records that it happened, the audit entry
+ * records who. A failed append throws and rolls the withdrawal back.
+ */
 export async function retractProductAnswer(
-  answererUserId: string,
+  viewer: ProductQaViewerContext,
   answerId: string,
 ): Promise<Result<{ readonly answerId: string }, CommerceProductQaError>> {
   const outcome = await db.transaction(async (transaction) => {
+    /**
+     * ⚠️ THE ROW LOCK IS LOAD-BEARING. Without it:
+     *  - two teammates withdrawing at once both pass the `visible` check, and one withdrawal
+     *    appends TWO audit events;
+     *  - a moderator hide (`commerce-content-reports.service` `setTargetVisibility`) committing
+     *    between this read and the update below would be overwritten to `removed_by_author` —
+     *    which in fact 500s, because the moderator's `hidden_by_user_id` then fails
+     *    `commerce_product_answer_hidden_ck`.
+     * Locked, the loser blocks, re-reads the row under READ COMMITTED, finds it no longer
+     * `visible`, and gets the 404.
+     *
+     * NOT closed here: a report decided AFTER this withdrawal commits. `setTargetVisibility`
+     * updates by id with no state condition, so an actioned report ends `hidden_by_moderator` and
+     * a DISMISSED one sets the answer back to `visible`. That is a pre-existing bug in the report
+     * path, tracked in todo.md ("Report decisions overwrite author withdrawals").
+     */
     const [answer] = await transaction
       .select({
         id: commerceProductAnswer.id,
         questionId: commerceProductAnswer.questionId,
+        authorUserId: commerceProductAnswer.authorUserId,
+        authorKind: commerceProductAnswer.authorKind,
+        authorOrganizationId: commerceProductAnswer.authorOrganizationId,
         productId: commerceProductQuestion.productId,
       })
       .from(commerceProductAnswer)
@@ -428,20 +492,22 @@ export async function retractProductAnswer(
       .where(
         and(
           eq(commerceProductAnswer.id, answerId),
-          eq(commerceProductAnswer.authorUserId, answererUserId),
           eq(commerceProductAnswer.visibilityState, "visible"),
         ),
       )
-      .limit(1);
-    if (!answer) return { status: "not_found" as const };
+      .limit(1)
+      .for("update", { of: commerceProductAnswer });
+    if (!answer || !canViewerDeleteAnswer(answer, viewer)) return { status: "not_found" as const };
 
+    const now = new Date();
     await transaction
       .update(commerceProductAnswer)
-      .set({ visibilityState: "removed_by_author", hiddenAt: new Date() })
+      .set({ visibilityState: "removed_by_author", hiddenAt: now })
       .where(eq(commerceProductAnswer.id, answer.id));
 
     await refreshQuestionAnswerSummary(transaction, answer.questionId);
     await refreshProductQuestionCounters(transaction, answer.productId);
+    await appendAuditOrThrow(transaction, buildAnswerWithdrawalAuditEntry(answer, viewer, now));
     return { status: "retracted" as const };
   });
 
@@ -511,7 +577,12 @@ async function projectAnswers(
       createdAt: row.createdAt,
       helpfulCount: row.helpfulCount,
       viewer:
-        viewerOrganizationId === null ? null : { hasVotedHelpful: votedAnswerIds.has(row.id) },
+        viewer.userId === null
+          ? null
+          : {
+              hasVotedHelpful: viewerOrganizationId === null ? null : votedAnswerIds.has(row.id),
+              canDelete: canViewerDeleteAnswer(row, viewer),
+            },
       author: organization
         ? {
             organizationId: organization.organizationId,
@@ -599,6 +670,7 @@ async function projectQuestions(
       answerCount: row.answerCount,
       hasSellerAnswer: row.hasSellerAnswer,
       askedBy: asker ? { name: asker.name, handle: asker.handle ?? null } : null,
+      viewer: viewer.userId === null ? null : { canDelete: canViewerDeleteQuestion(row, viewer) },
       topAnswer: topAnswers.get(row.id) ?? null,
     };
   });
