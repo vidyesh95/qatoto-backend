@@ -19,6 +19,7 @@ import {
   videoTranscript,
   videoTranscriptSegment,
 } from "#src/db/schema.js";
+import { listTrendingTags } from "#src/modules/home/feed/trending-tags.js";
 import {
   listOpenRolesByIds,
   type OpenRoleView,
@@ -194,6 +195,13 @@ export interface WatchPayload {
     readonly byteSize: number;
     readonly downloadPath: string;
   }[];
+  /**
+   * PLATFORM-WIDE, NOT ABOUT THIS VIDEO: the tags creators put on currently trending videos, at
+   * most five, lowercased, each used by at least two different creators (`trending-tags.ts`). It
+   * rides on this payload so the watch page needs no second request. `[]` is the ordinary state
+   * while few videos carry tags, and it renders nothing.
+   */
+  readonly trendingTags: readonly string[];
 }
 
 export async function getWatchPayload(
@@ -286,6 +294,7 @@ export async function getWatchPayload(
     documentRows,
     transcriptRows,
     transcriptSegments,
+    trendingTags,
   ] = await Promise.all([
     db
       .select({ slug: contentCategory.slug, label: contentCategory.label })
@@ -342,6 +351,7 @@ export async function getWatchPayload(
       .from(videoTranscriptSegment)
       .where(eq(videoTranscriptSegment.videoId, videoId))
       .orderBy(asc(videoTranscriptSegment.segmentOrder)),
+    listTrendingTags(),
   ]);
   const [transcriptRow] = transcriptRows;
 
@@ -447,6 +457,7 @@ export async function getWatchPayload(
         ...documentRow,
         downloadPath: videoDocumentDownloadPath(videoId, documentRow.id),
       })),
+      trendingTags,
     },
   };
 }
@@ -463,8 +474,12 @@ export async function getWatchPayload(
  *      concept exists in the schema (`talent_profile_skill.is_verified` is a skill
  *      badge on a different subsystem). Omitted rather than hard-coded, because a
  *      constant `false` on a trust signal is a claim we cannot support.
- *   `isPremium` on the video, product reviews, trending search terms — each needs a table, a
- *      job or a model that does not exist, not a projection.
+ *   `isPremium` on the video, product reviews, trending SEARCH TERMS — each needs a table, a
+ *      job or a model that does not exist, not a projection. Search terms stay out BY DECISION:
+ *      nothing logs what anyone searches for, and nothing will for one line of copy.
+ *
+ * `trendingTags` IS NOT THOSE SEARCH TERMS. It is a projection of the hourly trending-video
+ * snapshot — the tags creators put on trending videos — so it needed no new table or job.
  *
  * `transcript` LEFT THIS LIST too. It is the creator's own uploaded subtitle file, not ASR.
  *

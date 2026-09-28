@@ -1266,6 +1266,14 @@ domain where `new Date()` is called.
 | `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` dropped at 90. **Dry-run by default** — see below |
 | `publish-scheduled-videos`               | `* * * * *`        | the `scheduled` → `published` hop (STUDIO §4). **Every minute, deliberately**: a creator who set 09:00 does not accept 09:59, and the sweep is one indexed range scan over rows whose time has come |
 
+> **TRENDING TAGS RIDE ON `recompute-trending-videos`; THEY ARE NOT A JOB (2026-09-28).** The
+> watch payload's `trendingTags` is aggregated at READ time from the latest
+> `trending_video_snapshot` (`src/modules/home/feed/trending-tags.ts`): the tags on currently
+> trending videos, lowercased and counted once per video, ranked by summed trending score, at most
+> five, each used by at least TWO different creators. Each video is re-checked against the current
+> public gate, and a snapshot older than three hours yields `[]`. No table, no migration. It is
+> NOT search terms — nothing logs searches, by decision.
+
 Ordering is expressed **by cron time**, not by code — same convention as
 `recompute-branch-signals` (`20 3`) running before `recompute-program-stats` (`35 3`).
 
