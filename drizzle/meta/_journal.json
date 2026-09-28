@@ -1450,6 +1450,13 @@
       "when": 1790614302215,
       "tag": "0206_hot_lester",
       "breakpoints": true
+    },
+    {
+      "idx": 207,
+      "version": "7",
+      "when": 1790615618394,
+      "tag": "0207_quiet_vanisher",
+      "breakpoints": true
     }
   ]
 }

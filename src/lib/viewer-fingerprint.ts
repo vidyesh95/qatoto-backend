@@ -120,6 +120,36 @@ export function computeBlueprintViewerFingerprint(input: ViewerFingerprintInput)
 }
 
 /**
+ * The search log's per-WEEK searcher key — `search_query_log.searcher_fingerprint`.
+ *
+ * A FOURTH DOMAIN, for the reason the others are separate: a fingerprint learned from one surface
+ * must not address another surface's rows.
+ *
+ * ⚠️ **THE SALT ROTATES WEEKLY, NOT DAILY, AND THAT IS THE ANTI-GAMING FLOOR'S WHOLE BASIS.** The
+ * trending-searches floor counts distinct searchers over seven days; with a daily salt one person
+ * searching on five days would be five "searchers". A week string in the salt makes one person one
+ * fingerprint per ISO week, so over a rolling seven days they count at most TWICE (when the window
+ * straddles a Monday). The week string travels in the field the other domains use for the day,
+ * which is only ever a salt component.
+ *
+ * Nothing linking a fingerprint to a person is stored: the raw IP never is, the user id is inside
+ * the hash, and rows are deleted after 30 days by `recompute-trending-searches` itself.
+ */
+export function computeSearchQueryFingerprint(input: {
+  readonly utcIsoWeekString: string;
+  readonly viewerUserId: string | null;
+  readonly clientIp: string;
+  readonly userAgent: string;
+}): string {
+  return computeFingerprintForDomain("searchquery", {
+    utcDayString: input.utcIsoWeekString,
+    viewerUserId: input.viewerUserId,
+    clientIp: input.clientIp,
+    userAgent: input.userAgent,
+  });
+}
+
+/**
  * The UTC day, as the string that goes into both the hash above and the row's
  * day-bucket column.
  *

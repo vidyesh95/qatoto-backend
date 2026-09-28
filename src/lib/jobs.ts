@@ -121,6 +121,10 @@ export const JOB_NAMES = {
   // about what the word means.
   recomputeTrendingVideosTick: "recompute-trending-videos-tick",
   recomputeTrendingVideos: "recompute-trending-videos",
+  // "Everyone is searching for", AND the search log's 30-day retention — which is why it runs
+  // hourly and unconditionally rather than riding the dry-run-by-default prune job.
+  recomputeTrendingSearchesTick: "recompute-trending-searches-tick",
+  recomputeTrendingSearches: "recompute-trending-searches",
   revalidateYoutubeEmbedsTick: "revalidate-youtube-embeds-tick",
   revalidateYoutubeEmbeds: "revalidate-youtube-embeds",
   pruneEngagementDataTick: "prune-engagement-data-tick",
@@ -1043,6 +1047,22 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeTrendingVideos),
     },
   },
+  [JOB_NAMES.recomputeTrendingSearchesTick]: {
+    name: JOB_NAMES.recomputeTrendingSearchesTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.recomputeTrendingSearchesTick) },
+  },
+  [JOB_NAMES.recomputeTrendingSearches]: {
+    name: JOB_NAMES.recomputeTrendingSearches,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // Inside its own hour, like trending videos: the next tick must not queue behind it.
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeTrendingSearches),
+    },
+  },
   [JOB_NAMES.revalidateYoutubeEmbedsTick]: {
     name: JOB_NAMES.revalidateYoutubeEmbedsTick,
     payloadSchema: TickPayloadSchema,
@@ -1656,6 +1676,9 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // HOURLY, and the only job in this domain that is. A "trending" chip recomputed nightly
   // is a lie about what the word means — §6 says so and this is where it is enforced.
   [JOB_NAMES.recomputeTrendingVideosTick]: "18 * * * *",
+  // Hourly for the same reason as trending videos, and because it also enforces the search log's
+  // disclosed 30-day retention. :28 is a minute no other hourly tick uses.
+  [JOB_NAMES.recomputeTrendingSearchesTick]: "28 * * * *",
   // The §8.2 backstop, for videos nobody happens to be watching. The fast path is the
   // client's playback-error report at three distinct fingerprints; this is what catches a
   // dead player on a video with no viewers left to report it.
@@ -2052,6 +2075,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.rollupUserWatchActivity]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.recomputeTrendingVideosTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeTrendingVideos]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputeTrendingSearchesTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeTrendingSearches]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.revalidateYoutubeEmbedsTick]: TickPayloadSchema,
   [JOB_NAMES.revalidateYoutubeEmbeds]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.pruneEngagementDataTick]: TickPayloadSchema,
@@ -2209,6 +2234,8 @@ export const idempotencyKeyFor = {
   // Quantized to the HOUR rather than the day, so 24 distinct runs a day dedup correctly.
   recomputeTrendingVideos: (asOfIso: string): string =>
     `${JOB_NAMES.recomputeTrendingVideos}:${asOfIso}`,
+  recomputeTrendingSearches: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeTrendingSearches}:${asOfIso}`,
   revalidateYoutubeEmbeds: (asOfIso: string): string =>
     `${JOB_NAMES.revalidateYoutubeEmbeds}:${asOfIso}`,
   pruneEngagementData: (asOfIso: string): string => `${JOB_NAMES.pruneEngagementData}:${asOfIso}`,

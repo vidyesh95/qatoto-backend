@@ -962,6 +962,89 @@ export const trendingVideoSnapshot = pgTable(
 );
 
 /**
+ * One row per (day, search term, searcher-week) — the evidence behind "Everyone is searching for".
+ *
+ * ⚠️ **NO USER ID, NO IP, NOTHING THAT NAMES A PERSON.** `searcher_fingerprint` is
+ * `computeSearchQueryFingerprint` — a salted hash whose salt rotates every ISO week — so a row
+ * says only that SOMEONE searched this term on this day. It cannot be exported or erased per
+ * account because nothing links it to one; the privacy policy says exactly that.
+ *
+ * NEVER STORED AT ALL: a query with an email address, a web address or seven or more digits, or
+ * outside 2–80 characters after normalizing (`search-query-log.ts`). Only page 1 of a search is
+ * recorded, and the primary key collapses a repeat search the same day to one row.
+ *
+ * ⚠️ **30 DAYS, ENFORCED BY `recompute-trending-searches` ITSELF**, unconditionally. Not by
+ * `prune-engagement-data`, which is dry-run by default: a disclosed retention period cannot hang
+ * on a flag that may be off.
+ */
+export const searchQueryLog = pgTable(
+  "search_query_log",
+  {
+    searchDay: date("search_day").notNull(),
+    normalizedTerm: text("normalized_term").notNull(),
+    searcherFingerprint: text("searcher_fingerprint").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // The key LEADS with the day, so the 30-day prune and the 7-day window both range over its
+    // prefix — a separate day index would be a second copy of the same ordering.
+    primaryKey({ columns: [table.searchDay, table.normalizedTerm, table.searcherFingerprint] }),
+    check(
+      "search_query_log_term_ck",
+      sql`char_length(normalized_term) BETWEEN 2 AND 80 AND normalized_term = lower(normalized_term)`,
+    ),
+  ],
+);
+
+/**
+ * The CURRENT trending searches — at most five rows, replaced wholesale every hour by
+ * `recompute-trending-searches`. It holds terms and counts, never a fingerprint, so it needs no
+ * retention rule of its own. A term reaches it only when at least five distinct searcher-weeks
+ * searched it in the last seven days and no moderator has suppressed it.
+ */
+export const trendingSearchTerm = pgTable(
+  "trending_search_term",
+  {
+    rank: integer("rank").primaryKey(),
+    term: text("term").notNull(),
+    searcherCount: integer("searcher_count").notNull(),
+    asOf: timestamp("as_of").notNull(),
+  },
+  (table) => [
+    uniqueIndex("trending_search_term_term_unq").on(table.term),
+    check(
+      "trending_search_term_ck",
+      sql`rank BETWEEN 1 AND 5 AND searcher_count >= 5 AND char_length(term) BETWEEN 2 AND 80`,
+    ),
+  ],
+);
+
+/**
+ * Terms a `moderate_content` holder has blocked from "Everyone is searching for" — a slur or a
+ * brigaded phrase can clear the five-searcher floor. Excluded when the hourly list is computed AND
+ * when it is read, so a suppression takes effect on the next page load, not the next hour.
+ * The reason is required: it is the audit record's account of why public text was withheld.
+ */
+export const searchTermSuppression = pgTable(
+  "search_term_suppression",
+  {
+    term: text("term").primaryKey(),
+    suppressedByUserId: text("suppressed_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    reason: text("reason").notNull(),
+    suppressedAt: timestamp("suppressed_at").defaultNow().notNull(),
+  },
+  () => [
+    check(
+      "search_term_suppression_ck",
+      sql`char_length(term) BETWEEN 2 AND 80 AND term = lower(term)
+          AND char_length(reason) BETWEEN 1 AND 2000`,
+    ),
+  ],
+);
+
+/**
  * §4.4 — what the platform as a whole watches, per category, nightly.
  *
  * The ONLY consumer is cold start: a signed-in viewer with no history sees this

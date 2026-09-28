@@ -25,6 +25,7 @@ import {
   listFeedVideos as listFeedVideosService,
   searchVideos as searchVideosService,
 } from "#src/modules/home/feed/feed.service.js";
+import { recordSearchQuery } from "#src/modules/home/feed/search-query-log.js";
 import { isWellFormedRankSeed, mintRankSeed } from "#src/modules/home/rank-seed.js";
 import * as contentCategoriesService from "#src/modules/studio/content-categories.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
@@ -217,6 +218,25 @@ export async function searchVideos(req: Request, res: Response): Promise<void> {
     // false, which is definitionally true of them rather than a lookup we failed to do.
     viewerUserId: req.user?.id ?? null,
   });
+
+  // THE SEARCH LOG (`search-query-log.ts`): page 1 only, and never at the search's expense — a
+  // failed write is logged WITHOUT the term and the reader still gets their results.
+  if (parsedQuery.data.page === 1) {
+    try {
+      await recordSearchQuery({
+        rawQuery: parsedQuery.data.query,
+        searchedAt: new Date(),
+        viewerUserId: req.user?.id ?? null,
+        clientIp: req.ip ?? "",
+        userAgent: (req.headers["user-agent"] ?? "").slice(0, 512),
+      });
+    } catch (error) {
+      logger.warn("feed: search query not recorded", {
+        requestId: req.requestId,
+        errorMessage: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
 
   const response: PaginatedResponse = {
     status: "success",

@@ -508,6 +508,11 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
     },
     "problem_cluster_merge_proposal.proposed_by_user_id": { kind: "null_out" },
+    "search_term_suppression.suppressed_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "The moderator who withheld a search term from public display — an enforcement record, the merge-decision reason. The search log itself has no user reference to erase: `search_query_log` holds a weekly-salted hash only.",
+    },
     "problem_cluster.resolved_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",

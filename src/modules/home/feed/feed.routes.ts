@@ -1,8 +1,11 @@
 import express from "express";
 
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
-import { feedReadLimiter } from "#src/middleware/rate-limit.js";
+import { compactBody } from "#src/middleware/json-body.js";
+import { communityModerationLimiter, feedReadLimiter } from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
 import * as feedController from "#src/modules/home/feed/feed.controller.js";
+import * as searchTermSuppressionController from "#src/modules/home/feed/search-term-suppression.controller.js";
 
 const router = express.Router();
 
@@ -99,5 +102,25 @@ router.get("/videos", attachOptionalUser, feedReadLimiter, feedController.listFe
  * `/search` silently — the failure mode would look like a 404 from a route that exists.
  */
 router.get("/search", attachOptionalUser, feedReadLimiter, feedController.searchVideos);
+
+/*
+ * "Everyone is searching for" suppression — `moderate_content`, checked in-service before anything
+ * is read. The public list is re-filtered at read time, so a suppression shows on the next load.
+ * There is no list route yet: lifting one is by API only (`todo.md`).
+ */
+router.post(
+  "/admin/search-terms/suppressions",
+  requireAuth,
+  communityModerationLimiter,
+  compactBody,
+  searchTermSuppressionController.suppressSearchTerm,
+);
+
+router.delete(
+  "/admin/search-terms/suppressions/:term",
+  requireAuth,
+  communityModerationLimiter,
+  searchTermSuppressionController.unsuppressSearchTerm,
+);
 
 export default router;

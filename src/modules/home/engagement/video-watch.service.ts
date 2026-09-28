@@ -19,6 +19,7 @@ import {
   videoTranscript,
   videoTranscriptSegment,
 } from "#src/db/schema.js";
+import { listTrendingSearches } from "#src/modules/home/feed/trending-searches.js";
 import { listTrendingTags } from "#src/modules/home/feed/trending-tags.js";
 import {
   listOpenRolesByIds,
@@ -202,6 +203,12 @@ export interface WatchPayload {
    * while few videos carry tags, and it renders nothing.
    */
   readonly trendingTags: readonly string[];
+  /**
+   * PLATFORM-WIDE, NOT ABOUT THIS VIDEO: what at least five distinct searchers looked for in the
+   * last seven days, at most five terms, none suppressed by a moderator (`trending-searches.ts`).
+   * The search log behind it holds no identity; see `search-query-log.ts` for what is never kept.
+   */
+  readonly trendingSearches: readonly string[];
 }
 
 export async function getWatchPayload(
@@ -295,6 +302,7 @@ export async function getWatchPayload(
     transcriptRows,
     transcriptSegments,
     trendingTags,
+    trendingSearches,
   ] = await Promise.all([
     db
       .select({ slug: contentCategory.slug, label: contentCategory.label })
@@ -352,6 +360,7 @@ export async function getWatchPayload(
       .where(eq(videoTranscriptSegment.videoId, videoId))
       .orderBy(asc(videoTranscriptSegment.segmentOrder)),
     listTrendingTags(),
+    listTrendingSearches(),
   ]);
   const [transcriptRow] = transcriptRows;
 
@@ -458,6 +467,7 @@ export async function getWatchPayload(
         downloadPath: videoDocumentDownloadPath(videoId, documentRow.id),
       })),
       trendingTags,
+      trendingSearches,
     },
   };
 }
@@ -474,9 +484,12 @@ export async function getWatchPayload(
  *      concept exists in the schema (`talent_profile_skill.is_verified` is a skill
  *      badge on a different subsystem). Omitted rather than hard-coded, because a
  *      constant `false` on a trust signal is a claim we cannot support.
- *   `isPremium` on the video, product reviews, trending SEARCH TERMS — each needs a table, a
- *      job or a model that does not exist, not a projection. Search terms stay out BY DECISION:
- *      nothing logs what anyone searches for, and nothing will for one line of copy.
+ *   `isPremium` on the video, product reviews — each needs a table, a job or a model that does
+ *      not exist, not a projection.
+ *
+ * `trendingSearches` LEFT THIS LIST (2026-09-28). It rests on `search_query_log`, which stores no
+ * identity, never stores a search holding an email, a web address or seven digits, keeps rows 30
+ * days, and publishes a term only past five distinct searchers and no moderator suppression.
  *
  * `trendingTags` IS NOT THOSE SEARCH TERMS. It is a projection of the hourly trending-video
  * snapshot — the tags creators put on trending videos — so it needed no new table or job.

@@ -32,3 +32,25 @@ export function utcDayStringOf(instant: Date): string {
 export function utcHourOf(instant: Date): number {
   return instant.getUTCHours();
 }
+
+/**
+ * The ISO-8601 week of an instant, UTC — `"2026-W40"`. Weeks start on Monday, and week 1 is the
+ * week holding the year's first Thursday, so the late-December and early-January days that belong
+ * to a neighbouring year's week are labelled with THAT year.
+ *
+ * It exists for the search-query fingerprint (`computeSearchQueryFingerprint`), whose salt rotates
+ * WEEKLY rather than daily: counting "distinct searchers in 7 days" with a daily salt would count
+ * one person who searched on five days as five people.
+ */
+export function utcIsoWeekStringOf(instant: Date): string {
+  const utcDate = new Date(
+    Date.UTC(instant.getUTCFullYear(), instant.getUTCMonth(), instant.getUTCDate()),
+  );
+  // Monday = 1 … Sunday = 7, then move to the Thursday of this ISO week.
+  const isoWeekday = utcDate.getUTCDay() === 0 ? 7 : utcDate.getUTCDay();
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - isoWeekday);
+  const isoYear = utcDate.getUTCFullYear();
+  const firstDayOfIsoYear = Date.UTC(isoYear, 0, 1);
+  const isoWeekNumber = Math.ceil(((utcDate.getTime() - firstDayOfIsoYear) / 86_400_000 + 1) / 7);
+  return `${isoYear}-W${String(isoWeekNumber).padStart(2, "0")}`;
+}

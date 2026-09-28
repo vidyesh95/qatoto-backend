@@ -517,6 +517,29 @@ export async function handleRecomputeTrendingVideosTick(
   }
 }
 
+/**
+ * The hourly trending-searches tick. Hour-quantized for the trending-videos tick's reason, and
+ * because the job it enqueues also enforces the search log's 30-day retention.
+ */
+export async function handleRecomputeTrendingSearchesTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcHourStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeTrendingSearches,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeTrendingSearches(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-trending-searches-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
 /** The §8.2 backstop, for videos with no viewers left to report a dead player. */
 export async function handleRevalidateYoutubeEmbedsTick(
   _rawPayload: unknown,

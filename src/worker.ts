@@ -23,6 +23,7 @@ import {
   handleSweepDisputeWindowsTick,
   handlePruneEngagementDataTick,
   handleRecomputePlatformCategoryPopularityTick,
+  handleRecomputeTrendingSearchesTick,
   handleRecomputeTrendingVideosTick,
   handleRecomputeUserAffinitiesTick,
   handleRollupUserWatchActivityTick,
@@ -63,6 +64,7 @@ import { handleSweepOrphanShowcaseImages } from "#src/modules/home/blueprints/sw
 import { handlePruneEngagementData } from "#src/modules/home/engagement/prune-engagement-data.js";
 import { handleRecomputeUserAffinities } from "#src/modules/home/engagement/recompute-user-affinities.js";
 import { handleRollupUserWatchActivity } from "#src/modules/home/engagement/rollup-user-watch-activity.js";
+import { handleRecomputeTrendingSearches } from "#src/modules/home/feed/recompute-trending-searches.js";
 import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
 import { handleCloseCompensationPeriod } from "#src/modules/rnd/compensation/close-compensation-period.js";
 import { handleRecomputeCompensationDraft } from "#src/modules/rnd/compensation/recompute-compensation-draft.js";
@@ -447,6 +449,16 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeTrendingVideos,
     workOptions,
     runJob(JOB_NAMES.recomputeTrendingVideos, handleRecomputeTrendingVideos),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeTrendingSearchesTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeTrendingSearchesTick, handleRecomputeTrendingSearchesTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeTrendingSearches,
+    workOptions,
+    runJob(JOB_NAMES.recomputeTrendingSearches, handleRecomputeTrendingSearches),
   );
   await boss.work(
     JOB_NAMES.revalidateYoutubeEmbedsTick,
