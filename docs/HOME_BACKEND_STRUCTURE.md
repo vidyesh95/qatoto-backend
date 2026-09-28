@@ -1261,6 +1261,7 @@ domain where `new Date()` is called.
 | `recompute-platform-category-popularity` | `40 1 * * *`       | after quality; feeds cold start                                                            |
 | `recompute-user-affinities`              | `50 1 * * *`       | after popularity                                                                           |
 | `recompute-trending-videos`              | `18 * * * *`       | **hourly.** A "trending" chip recomputed nightly is a lie about what it says.              |
+| `recompute-trending-searches`            | `28 * * * *`       | **hourly.** Prunes `search_query_log` past 30 days UNCONDITIONALLY, then publishes ≤5 terms with ≥5 distinct weekly fingerprints in 7 days, minus suppressions |
 | `verify-youtube-video`                   | on demand, backoff | §8.3 deferred verification                                                                 |
 | `revalidate-youtube-embeds`              | `10 5 * * *`       | backstop for §8.2                                                                          |
 | `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` dropped at 90. **Dry-run by default** — see below |
@@ -1272,7 +1273,16 @@ domain where `new Date()` is called.
 > trending videos, lowercased and counted once per video, ranked by summed trending score, at most
 > five, each used by at least TWO different creators. Each video is re-checked against the current
 > public gate, and a snapshot older than three hours yields `[]`. No table, no migration. It is
-> NOT search terms — nothing logs searches, by decision.
+> NOT search terms — those are `trendingSearches`, below.
+>
+> **TRENDING SEARCHES ARE A SEARCH LOG, BOUNDED (2026-09-28).** `GET /feed/search` page 1 writes
+> `search_query_log (search_day, normalized_term, searcher_fingerprint)` — no user id, no IP; the
+> fingerprint is `computeSearchQueryFingerprint`, salted per ISO WEEK so one person counts at most
+> twice in a rolling 7 days. A search with an email, a web address or 7+ digits, or outside 2–80
+> characters, is never written (`search-query-log.ts`). `recompute-trending-searches` enforces the
+> 30-day retention itself rather than through the dry-run prune job. `moderate_content` holders
+> suppress terms (`POST`/`DELETE /feed/admin/search-terms/suppressions`, audited); the watch read
+> re-filters suppressions so a hide takes effect on the next load.
 
 Ordering is expressed **by cron time**, not by code — same convention as
 `recompute-branch-signals` (`20 3`) running before `recompute-program-stats` (`35 3`).
