@@ -8,11 +8,16 @@ import {
   handleReservation,
   showcaseLaunch,
   showcaseLaunchWriteUpImage,
+  problemSubmissionPhoto,
   user,
   video,
   videoDocument,
 } from "#src/db/schema.js";
-import { deleteShowcaseImages, deleteUserAvatar } from "#src/lib/cloudinary.js";
+import {
+  deleteProblemPhotos,
+  deleteShowcaseImages,
+  deleteUserAvatar,
+} from "#src/lib/cloudinary.js";
 import { PermanentJobError } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
 import { readSqlStateCode } from "#src/lib/pg-errors.js";
@@ -671,6 +676,29 @@ export async function anonymizeAccount(
     );
   }
 
+  /**
+   * --- 1.7. Problem-report photos, before the loop below deletes the rows that name them.
+   *
+   * THE 1.6 ARGUMENT, WITH ONE DIFFERENCE: THE REPORT ITSELF SURVIVES. `problem_submission` is
+   * retained under Art. 17(3)(e) as the evidence behind `distinctReporterCount`, but a photograph
+   * is not needed for that count and is the most identifying thing a reporter sends — so
+   * `problem_submission_photo` is `delete_rows` and its assets go here first.
+   *
+   * A CDN FAILURE DOES NOT STOP THE ERASURE, for 1.6's reason. The assets are then left with no
+   * row naming them, and the daily `sweep-orphan-problem-photos` job deletes them once they are a
+   * day old — so a photo can outlive the erasure on the CDN by up to about a day, not forever.
+   */
+  if (!completedSteps.has("purge_problem_submission_photos")) {
+    const stillPending = await assertStillPending(requestId);
+    if (!stillPending.success) return stillPending;
+
+    rowsByStep["purge_problem_submission_photos"] = await purgeProblemSubmissionPhotos(
+      requestId,
+      userId,
+      isEnabled,
+    );
+  }
+
   for (const step of steps) {
     if (completedSteps.has(step.stepName)) continue;
 
@@ -907,6 +935,37 @@ async function purgeShowcaseLaunchImages(
   });
 
   return imagePublicIds.length;
+}
+
+async function purgeProblemSubmissionPhotos(
+  requestId: string,
+  userId: string,
+  isEnabled: boolean,
+): Promise<number> {
+  const photoRows = await db
+    .select({ publicId: problemSubmissionPhoto.publicId })
+    .from(problemSubmissionPhoto)
+    .where(eq(problemSubmissionPhoto.uploadedByUserId, userId));
+  const photoPublicIds = photoRows.map((photoRow) => photoRow.publicId);
+
+  if (!isEnabled) return photoPublicIds.length;
+
+  const deleteResult = await deleteProblemPhotos(photoPublicIds);
+  if (!deleteResult.success) {
+    logger.error(
+      "problem-report photos not deleted during anonymization; the orphan sweep removes them",
+      { userId, photoCount: photoPublicIds.length, errorType: deleteResult.error.type },
+    );
+  }
+
+  await db.insert(anonymizationStepLog).values({
+    requestId,
+    stepName: "purge_problem_submission_photos",
+    tableName: "problem_submission_photo",
+    rowsAffected: photoPublicIds.length,
+  });
+
+  return photoPublicIds.length;
 }
 
 async function purgeExportArchives(

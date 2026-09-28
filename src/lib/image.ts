@@ -9,10 +9,10 @@ import type { Result } from "#src/types/index.js";
  * image, reject decompression bombs and out-of-range dimensions, then RE-ENCODE —
  * which strips EXIF/metadata and any non-image payload smuggled in the container.
  *
- * SHARED BY SEVEN CALL SITES with different output profiles — avatars (avif @ 1024px),
+ * SHARED BY MANY CALL SITES with different output profiles — avatars (avif @ 1024px),
  * product images (avif @ 1600px), project covers, video thumbnails, physical receipts
- * (webp) and promotional slides (avif @ 2400px, twice). Everything but the output box and
- * codec is identical, so the validation core lives in {@link validateAndNormalizeImage} and
+ * (webp), promotional slides (avif @ 2400px, twice), showcase images and problem-report
+ * photos. Everything but the output box and codec is identical, so the validation core lives in {@link validateAndNormalizeImage} and
  * the entry points just pass options.
  *
  * BECAUSE IT IS SHARED, THE ALLOWLIST BELOW IS THE PLATFORM'S ANSWER to "what may anyone

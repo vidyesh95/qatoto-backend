@@ -609,6 +609,10 @@ const handWrittenSpec = {
           "`countryCode`, `opportunityScore`, `reportCount`, `status`, `clusterId` and the " +
           "RESOLVED `latitudeMicrodegrees` / `longitudeMicrodegrees` are still rejected with 422 " +
           "by .strict(). " +
+          "`photoIds` names up to three DISTINCT photos staged by `POST " +
+          "/discovery/problem-reports/photos`; the report and the claim are one transaction, and " +
+          "any id that is not the caller's own unclaimed upload refuses the whole report with one " +
+          "generic 422 on `photoIds` (never a per-id 'not found'). " +
           "Returns a RECEIPT, not a cluster: none of those numbers exists yet.",
         requestBody: {
           required: true,
@@ -636,6 +640,12 @@ const handWrittenSpec = {
                     minimum: -180000000,
                     maximum: 180000000,
                   },
+                  // Distinctness is a Zod refinement, stated in the description above.
+                  photoIds: {
+                    type: "array",
+                    maxItems: 3,
+                    items: { type: "string", format: "uuid" },
+                  },
                 },
               },
             },
@@ -647,6 +657,47 @@ const handWrittenSpec = {
           "403": { description: "Session is anonymous — an identified account is required." },
           "422": { $ref: "#/components/responses/ValidationFailed" },
           "429": { description: "More than 10 reports in 15 minutes." },
+        },
+      },
+    },
+    "/discovery/problem-reports/photos": {
+      post: {
+        tags: ["Discovery"],
+        summary: "Stage one photo for a problem report (201)",
+        description:
+          "multipart/form-data, field `photo`, 5MB cap. Requires an IDENTIFIED account. sharp " +
+          "decodes the bytes, auto-orients, and re-encodes to AVIF with NO metadata carried over — " +
+          "EXIF, including GPS, never reaches storage. The photo is stored UNCLAIMED; send its " +
+          "`photoId` in `POST /discovery/problem-reports` within a day or the daily sweep deletes " +
+          "it. Once claimed it is PUBLIC on the cluster page. Nothing reviews or blurs the image.",
+        requestBody: {
+          required: true,
+          content: {
+            "multipart/form-data": {
+              schema: {
+                type: "object",
+                properties: { photo: { type: "string", format: "binary" } },
+                required: ["photo"],
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description:
+              "Stored. `{ photoId, url, widthPx, heightPx, blurDataUrl }` — the size is measured " +
+              "on the re-encoded file.",
+          },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "403": { description: "Session is anonymous — an identified account is required." },
+          "409": { description: "Too many unclaimed photos (12). Send a report or wait a day." },
+          "413": { description: "File exceeds the 5 MB cap." },
+          "422": {
+            description: "Not a decodable image, unsupported format, or out-of-bounds dimensions.",
+          },
+          "429": { description: "More than 40 photo uploads in 15 minutes." },
+          "502": { description: "Cloudinary upload failed." },
+          "503": { description: "Cloudinary is not configured." },
         },
       },
     },

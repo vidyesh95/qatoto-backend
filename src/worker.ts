@@ -39,6 +39,7 @@ import {
   handleReconcileConnectorStateTick,
   handleRecomputeLocalizationAssessmentsTick,
   handleSweepOrphanShowcaseImagesTick,
+  handleSweepOrphanProblemPhotosTick,
   handleSweepPendingDocumentScansTick,
   handleSyncComtradeTradeFlowsTick,
 } from "#src/jobs/scheduled-ticks.js";
@@ -69,6 +70,7 @@ import { handleGeocodeAndClusterSubmission } from "#src/modules/rnd/discovery/ge
 import { handleRecomputeDemandSignals } from "#src/modules/rnd/discovery/recompute-demand-signals.js";
 import { handleRecomputeOpportunityScores } from "#src/modules/rnd/discovery/recompute-opportunity-scores.js";
 import { handleRefreshTalentProjections } from "#src/modules/rnd/discovery/refresh-talent-projections.js";
+import { handleSweepOrphanProblemPhotos } from "#src/modules/rnd/discovery/sweep-orphan-problem-photos.js";
 import { handleRecomputeEquitySnapshot } from "#src/modules/rnd/funding/recompute-equity-snapshot.js";
 import { handleRecomputeInvestorConfidence } from "#src/modules/rnd/funding/recompute-investor-confidence.js";
 import { handleGenerateLocalizationNarrative } from "#src/modules/rnd/import-intelligence/generate-localization-narrative.js";
@@ -642,6 +644,19 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.sweepOrphanShowcaseImages,
     workOptions,
     runJob(JOB_NAMES.sweepOrphanShowcaseImages, handleSweepOrphanShowcaseImages),
+  );
+
+  // Civic Pulse — the daily sweep of unclaimed problem-report photos and of any problem-photo
+  // asset left with no row naming it (including one an erasure's CDN delete failed on).
+  await boss.work(
+    JOB_NAMES.sweepOrphanProblemPhotosTick,
+    workOptions,
+    runJob(JOB_NAMES.sweepOrphanProblemPhotosTick, handleSweepOrphanProblemPhotosTick),
+  );
+  await boss.work(
+    JOB_NAMES.sweepOrphanProblemPhotos,
+    workOptions,
+    runJob(JOB_NAMES.sweepOrphanProblemPhotos, handleSweepOrphanProblemPhotos),
   );
 
   // R&D §10A — import intelligence. The weekly Comtrade ingest, the nightly feasibility

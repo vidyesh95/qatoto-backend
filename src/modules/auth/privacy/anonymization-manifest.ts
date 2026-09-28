@@ -514,6 +514,10 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(e)",
       note: "Authored content other people have replied to or voted on. Attribution is by id, so scrubbing user.name is what removes the identity.",
     },
+    // The report survives (above); its photos do not. A photograph is not needed for
+    // distinctReporterCount and is the most identifying thing a reporter sends. The assets are
+    // removed from Cloudinary by `purge_problem_submission_photos` before this deletes the rows.
+    "problem_submission_photo.uploaded_by_user_id": { kind: "delete_rows" },
     "product.created_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",

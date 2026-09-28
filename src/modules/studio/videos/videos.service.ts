@@ -25,6 +25,8 @@ import {
   videoMilestone,
   videoOpenRole,
   videoTeamMember,
+  videoTranscript,
+  videoTranscriptSegment,
 } from "#src/db/schema.js";
 import {
   deleteVideoThumbnail as deleteThumbnailAsset,
@@ -40,6 +42,11 @@ import {
   uploadVideoDocument as uploadDocumentObject,
   type ObjectStorageError,
 } from "#src/lib/object-storage.js";
+import {
+  parseTranscriptFile,
+  type TranscriptFormat,
+  type TranscriptParseError,
+} from "#src/lib/subtitle-parse.js";
 import {
   buildYoutubeEmbedUrl,
   extractYoutubeVideoId,
@@ -209,6 +216,9 @@ export type VideoError =
   | { type: "DOCUMENT_STORAGE_NOT_CONFIGURED" }
   | { type: "DOCUMENT_STORAGE_UPLOAD_FAILED" }
   | { type: "DOCUMENT_STORAGE_DELETE_FAILED" }
+  // --- Creator-supplied transcript -------------------------------------------------
+  // `line` is 1-based and null when the refusal is about the file as a whole (not UTF-8, empty).
+  | ({ type: "TRANSCRIPT_INVALID" } & TranscriptParseError)
   | YoutubeSourceError
   | ImageValidationError
   | CloudinaryError;
@@ -385,6 +395,17 @@ export function deriveStudioVideoStatus(
 // Projections
 // --------------------------------------------------------------------------------
 
+/**
+ * Whether this video has a creator-supplied transcript, and what kind. The SEGMENTS are not part
+ * of the studio projection — the form needs to know one exists, not to re-render it — and they
+ * travel on the public watch read instead.
+ */
+export interface VideoTranscriptSummaryView {
+  readonly format: TranscriptFormat;
+  readonly segmentCount: number;
+  readonly uploadedAt: Date;
+}
+
 export interface VideoChapterView {
   readonly id: string;
   readonly startSeconds: number;
@@ -533,6 +554,8 @@ export interface PublicVideo {
   readonly category: string | null;
 
   readonly chapters: readonly VideoChapterView[];
+  /** NULL when the creator has not uploaded one — the ordinary case. */
+  readonly transcript: VideoTranscriptSummaryView | null;
   /**
    * The taxonomy rows this video is tagged into, at most three.
    *
@@ -648,6 +671,7 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     playlistRows,
     categories,
     researchProjectRows,
+    transcriptRows,
   ] = await Promise.all([
     db
       .select({
@@ -750,6 +774,15 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
           .from(researchProject)
           .where(eq(researchProject.id, row.researchProjectId))
           .limit(1),
+    db
+      .select({
+        format: videoTranscript.format,
+        segmentCount: videoTranscript.segmentCount,
+        uploadedAt: videoTranscript.uploadedAt,
+      })
+      .from(videoTranscript)
+      .where(eq(videoTranscript.videoId, row.id))
+      .limit(1),
   ]);
 
   return {
@@ -813,6 +846,7 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     category: row.category,
 
     chapters,
+    transcript: transcriptRows[0] ?? null,
     categories,
     attachedProducts,
     milestones,
@@ -1801,6 +1835,98 @@ export async function replaceChapters(
       );
     }
   });
+
+  const updated = await loadOwnedVideoRow(creatorId, videoId);
+  if (!updated) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+  return { success: true, value: await toPublicVideo(updated, Date.now()) };
+}
+
+/** Rows per INSERT when writing transcript segments — well under Postgres's parameter limit. */
+const TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE = 1000;
+
+/**
+ * Replaces the video's transcript with the parsed contents of `transcriptFileBytes`.
+ *
+ * ⚠️ **THE VIDEO ROW IS LOCKED FIRST, AND THAT LOCK IS WHAT MAKES THE REPLACE SAFE.** Delete-then-
+ * insert under READ COMMITTED is not safe on its own: two concurrent PUTs can each delete the old
+ * set and then each insert, and the second then violates the `(video_id, segment_order)` key or
+ * leaves the two sets interleaved. `SELECT … FOR UPDATE` on the owned video row serializes every
+ * PUT and DELETE on that video, and doubles as the ownership check — no row, no lock, a 404.
+ *
+ * (`replaceChapters` above has the same delete-then-insert shape WITHOUT the lock. Recorded in the
+ * frontend `todo.md`; not changed here because it is a different surface.)
+ *
+ * The parse runs BEFORE the transaction opens: a refused file costs no lock and no connection.
+ */
+export async function replaceVideoTranscript(
+  creatorId: string,
+  videoId: string,
+  transcriptFileBytes: Uint8Array,
+): Promise<Result<PublicVideo, VideoError>> {
+  const parsedTranscript = parseTranscriptFile(transcriptFileBytes);
+  if (!parsedTranscript.success) {
+    return { success: false, error: { type: "TRANSCRIPT_INVALID", ...parsedTranscript.error } };
+  }
+  const { format, segments } = parsedTranscript.value;
+
+  const isOwnedVideoLocked = await db.transaction(async (tx) => {
+    const [lockedVideo] = await tx
+      .select({ id: video.id })
+      .from(video)
+      .where(ownedVideoPredicate(creatorId, videoId))
+      .for("update")
+      .limit(1);
+    if (!lockedVideo) return false;
+
+    // The segments cascade from the parent row.
+    await tx.delete(videoTranscript).where(eq(videoTranscript.videoId, videoId));
+    await tx.insert(videoTranscript).values({ videoId, format, segmentCount: segments.length });
+    for (
+      let batchStart = 0;
+      batchStart < segments.length;
+      batchStart += TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE
+    ) {
+      await tx.insert(videoTranscriptSegment).values(
+        segments
+          .slice(batchStart, batchStart + TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE)
+          .map((segment, indexInBatch) => ({
+            videoId,
+            segmentOrder: batchStart + indexInBatch,
+            startOffsetSeconds: segment.startOffsetSeconds,
+            endOffsetSeconds: segment.endOffsetSeconds,
+            segmentText: segment.segmentText,
+          })),
+      );
+    }
+    return true;
+  });
+  if (!isOwnedVideoLocked) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+
+  const updated = await loadOwnedVideoRow(creatorId, videoId);
+  if (!updated) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+  return { success: true, value: await toPublicVideo(updated, Date.now()) };
+}
+
+/**
+ * Removes the video's transcript. IDEMPOTENT: a video with none answers the same success, because
+ * the state the creator asked for is reached either way. Takes the same row lock as the replace.
+ */
+export async function deleteVideoTranscript(
+  creatorId: string,
+  videoId: string,
+): Promise<Result<PublicVideo, VideoError>> {
+  const isOwnedVideoLocked = await db.transaction(async (tx) => {
+    const [lockedVideo] = await tx
+      .select({ id: video.id })
+      .from(video)
+      .where(ownedVideoPredicate(creatorId, videoId))
+      .for("update")
+      .limit(1);
+    if (!lockedVideo) return false;
+    await tx.delete(videoTranscript).where(eq(videoTranscript.videoId, videoId));
+    return true;
+  });
+  if (!isOwnedVideoLocked) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
 
   const updated = await loadOwnedVideoRow(creatorId, videoId);
   if (!updated) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };

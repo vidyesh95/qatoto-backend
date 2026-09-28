@@ -1012,6 +1012,17 @@ export async function uploadShowcaseImage(
   publicId: string,
   imageBuffer: Buffer,
 ): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  return uploadImageAtFreshPublicId(publicId, imageBuffer);
+}
+
+/**
+ * The body behind every FRESH-public-id upload (showcase images, problem-report photos).
+ * `overwrite: false`: each caller mints a new id, so a collision is a bug, not a replace.
+ */
+async function uploadImageAtFreshPublicId(
+  publicId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
   if (!ensureConfigured()) {
     return { success: false, error: { type: "NOT_CONFIGURED" } };
   }
@@ -1056,6 +1067,21 @@ export async function uploadShowcaseImage(
  * launch lost a name race — should not spend that budget.
  */
 export async function deleteShowcaseImages(
+  publicIds: readonly string[],
+): Promise<Result<{ requestedCount: number }, CloudinaryError>> {
+  return deleteImagesByPublicIds(publicIds);
+}
+
+/**
+ * The body behind {@link deleteShowcaseImages} and {@link deleteProblemPhotos}.
+ *
+ * ⚠️ **"NOT FOUND" IS SUCCESS, AND SWEEPS DEPEND ON IT.** `uploader.destroy` answers
+ * `{ result: "not found" }` and `delete_resources` marks the id `not_found`; neither throws. A
+ * sweep deletes the asset first and the row second, so a run that died between the two leaves a
+ * row whose asset is already gone — and the next run must be able to finish it. Only a THROWN
+ * error (transport, auth, rate limit) is a failure here.
+ */
+async function deleteImagesByPublicIds(
   publicIds: readonly string[],
 ): Promise<Result<{ requestedCount: number }, CloudinaryError>> {
   if (publicIds.length === 0) {
@@ -1115,6 +1141,14 @@ const CloudinaryResourceListingSchema = z.object({
 export async function listShowcaseImageAssets(
   nextCursor: string | null,
 ): Promise<Result<ShowcaseImageAssetPage, ShowcaseImageListingError>> {
+  return listImageAssetsUnderFolder(SHOWCASE_IMAGE_FOLDER, nextCursor);
+}
+
+/** One page of every image asset under `folder`, parsed rather than trusted. */
+async function listImageAssetsUnderFolder(
+  folder: string,
+  nextCursor: string | null,
+): Promise<Result<ShowcaseImageAssetPage, ShowcaseImageListingError>> {
   if (!ensureConfigured()) {
     return { success: false, error: { type: "NOT_CONFIGURED" } };
   }
@@ -1124,7 +1158,7 @@ export async function listShowcaseImageAssets(
     rawListing = await cloudinary.api.resources({
       type: "upload",
       resource_type: "image",
-      prefix: `${SHOWCASE_IMAGE_FOLDER}/`,
+      prefix: `${folder}/`,
       max_results: 500,
       ...(nextCursor === null ? {} : { next_cursor: nextCursor }),
     });
@@ -1156,6 +1190,43 @@ export async function listShowcaseImageAssets(
       nextCursor: parsedListing.data.next_cursor ?? null,
     },
   };
+}
+
+/**
+ * ---------------------------------------------------------------------------------------
+ * Civic Pulse problem-report photos — `qatoto/problem-photos/<photoId>`.
+ *
+ * Addressed by the photo's own row id, because it is uploaded before the report exists (the
+ * showcase write-up shape). Fresh ids, stored with their `secure_url`, so the orphan sweep can
+ * match assets to rows by public id and a delete never rebuilds an address.
+ * ---------------------------------------------------------------------------------------
+ */
+const PROBLEM_PHOTO_FOLDER = "qatoto/problem-photos";
+
+export function problemPhotoPublicId(photoId: string): string {
+  return `${PROBLEM_PHOTO_FOLDER}/${photoId}`;
+}
+
+/** The buffer MUST have been through `validateAndNormalizeImage` first (EXIF/GPS stripped). */
+export async function uploadProblemPhoto(
+  publicId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  return uploadImageAtFreshPublicId(publicId, imageBuffer);
+}
+
+/** An id that is already gone counts as deleted — see {@link deleteImagesByPublicIds}. */
+export async function deleteProblemPhotos(
+  publicIds: readonly string[],
+): Promise<Result<{ requestedCount: number }, CloudinaryError>> {
+  return deleteImagesByPublicIds(publicIds);
+}
+
+/** One page of every asset under the problem-photo folder, for the orphan sweep. */
+export async function listProblemPhotoAssets(
+  nextCursor: string | null,
+): Promise<Result<ShowcaseImageAssetPage, ShowcaseImageListingError>> {
+  return listImageAssetsUnderFolder(PROBLEM_PHOTO_FOLDER, nextCursor);
 }
 
 /**

@@ -16,6 +16,8 @@ import {
   videoOpenRole,
   videoSave,
   videoStats,
+  videoTranscript,
+  videoTranscriptSegment,
 } from "#src/db/schema.js";
 import {
   listOpenRolesByIds,
@@ -73,6 +75,22 @@ export interface WatchPayload {
   readonly videoType: (typeof video.$inferSelect)["videoType"];
   readonly areCommentsEnabled: boolean;
   readonly chapters: readonly { readonly startSeconds: number; readonly title: string }[];
+  /**
+   * The CREATOR'S OWN transcript, uploaded as a subtitle file or pasted text. NULL when there is
+   * none, which is the ordinary case. Nothing here is machine-generated: no speech-to-text runs
+   * anywhere, because the backend never holds the video's audio.
+   *
+   * `endOffsetSeconds` is set for every srt/vtt cue and NULL for every `text` paragraph, whose
+   * `startOffsetSeconds` is then always 0 — a renderer must not draw a time for those.
+   */
+  readonly transcript: {
+    readonly format: (typeof videoTranscript.$inferSelect)["format"];
+    readonly segments: readonly {
+      readonly startOffsetSeconds: number;
+      readonly endOffsetSeconds: number | null;
+      readonly segmentText: string;
+    }[];
+  } | null;
   readonly creator: {
     readonly id: string;
     readonly handle: string | null;
@@ -260,51 +278,72 @@ export async function getWatchPayload(
 
   // Small ordered reads rather than json aggregation in the main query: each is an index scan
   // on `video_id`, and keeping them separate keeps the row above flat.
-  const [categories, chapters, openRoleRows, attachedProductRows, documentRows] = await Promise.all(
-    [
-      db
-        .select({ slug: contentCategory.slug, label: contentCategory.label })
-        .from(videoCategory)
-        .innerJoin(contentCategory, eq(contentCategory.id, videoCategory.categoryId))
-        .where(eq(videoCategory.videoId, videoId))
-        .orderBy(asc(contentCategory.sortOrder), asc(contentCategory.slug)),
-      db
-        .select({ startSeconds: videoChapter.startSeconds, title: videoChapter.title })
-        .from(videoChapter)
-        .where(eq(videoChapter.videoId, videoId))
-        .orderBy(asc(videoChapter.position)),
-      db
-        .select({
-          roleTitle: videoOpenRole.roleTitle,
-          roleDescription: videoOpenRole.roleDescription,
-          openRoleId: videoOpenRole.openRoleId,
-        })
-        .from(videoOpenRole)
-        .where(eq(videoOpenRole.videoId, videoId))
-        .orderBy(asc(videoOpenRole.position)),
-      db
-        .select({
-          productId: videoAttachedProduct.productId,
-          pinnedAtSeconds: videoAttachedProduct.pinnedAtSeconds,
-        })
-        .from(videoAttachedProduct)
-        .where(eq(videoAttachedProduct.videoId, videoId))
-        // The creator's order, which is what `PUT /videos/:videoId/products` stored. No
-        // server-side re-sort: rearranging somebody's carousel is a change they did not ask for.
-        .orderBy(asc(videoAttachedProduct.position)),
-      // ⚠️ `objectStorageKey` IS SELECTED NOWHERE. It is an internal address into a private bucket,
-      // and a public payload is the last place it may appear. The path below is composed from ids.
-      db
-        .select({
-          id: videoDocument.id,
-          fileName: videoDocument.fileName,
-          byteSize: videoDocument.byteSize,
-        })
-        .from(videoDocument)
-        .where(eq(videoDocument.videoId, videoId))
-        .orderBy(asc(videoDocument.position)),
-    ],
-  );
+  const [
+    categories,
+    chapters,
+    openRoleRows,
+    attachedProductRows,
+    documentRows,
+    transcriptRows,
+    transcriptSegments,
+  ] = await Promise.all([
+    db
+      .select({ slug: contentCategory.slug, label: contentCategory.label })
+      .from(videoCategory)
+      .innerJoin(contentCategory, eq(contentCategory.id, videoCategory.categoryId))
+      .where(eq(videoCategory.videoId, videoId))
+      .orderBy(asc(contentCategory.sortOrder), asc(contentCategory.slug)),
+    db
+      .select({ startSeconds: videoChapter.startSeconds, title: videoChapter.title })
+      .from(videoChapter)
+      .where(eq(videoChapter.videoId, videoId))
+      .orderBy(asc(videoChapter.position)),
+    db
+      .select({
+        roleTitle: videoOpenRole.roleTitle,
+        roleDescription: videoOpenRole.roleDescription,
+        openRoleId: videoOpenRole.openRoleId,
+      })
+      .from(videoOpenRole)
+      .where(eq(videoOpenRole.videoId, videoId))
+      .orderBy(asc(videoOpenRole.position)),
+    db
+      .select({
+        productId: videoAttachedProduct.productId,
+        pinnedAtSeconds: videoAttachedProduct.pinnedAtSeconds,
+      })
+      .from(videoAttachedProduct)
+      .where(eq(videoAttachedProduct.videoId, videoId))
+      // The creator's order, which is what `PUT /videos/:videoId/products` stored. No
+      // server-side re-sort: rearranging somebody's carousel is a change they did not ask for.
+      .orderBy(asc(videoAttachedProduct.position)),
+    // ⚠️ `objectStorageKey` IS SELECTED NOWHERE. It is an internal address into a private bucket,
+    // and a public payload is the last place it may appear. The path below is composed from ids.
+    db
+      .select({
+        id: videoDocument.id,
+        fileName: videoDocument.fileName,
+        byteSize: videoDocument.byteSize,
+      })
+      .from(videoDocument)
+      .where(eq(videoDocument.videoId, videoId))
+      .orderBy(asc(videoDocument.position)),
+    db
+      .select({ format: videoTranscript.format })
+      .from(videoTranscript)
+      .where(eq(videoTranscript.videoId, videoId))
+      .limit(1),
+    db
+      .select({
+        startOffsetSeconds: videoTranscriptSegment.startOffsetSeconds,
+        endOffsetSeconds: videoTranscriptSegment.endOffsetSeconds,
+        segmentText: videoTranscriptSegment.segmentText,
+      })
+      .from(videoTranscriptSegment)
+      .where(eq(videoTranscriptSegment.videoId, videoId))
+      .orderBy(asc(videoTranscriptSegment.segmentOrder)),
+  ]);
+  const [transcriptRow] = transcriptRows;
 
   // Resolved in ONE query rather than per blurb. Every id here was scoped to this video's own
   // venture when it was written, which is why the batch read does not re-scope it.
@@ -343,6 +382,11 @@ export async function getWatchPayload(
       videoType: row.videoType,
       areCommentsEnabled: row.areCommentsEnabled,
       chapters,
+      // The parent row is the existence fact; the segments are read beside it rather than joined.
+      transcript:
+        transcriptRow === undefined
+          ? null
+          : { format: transcriptRow.format, segments: transcriptSegments },
       creator: {
         id: row.creatorId,
         handle: row.creatorHandle,
@@ -419,8 +463,10 @@ export async function getWatchPayload(
  *      concept exists in the schema (`talent_profile_skill.is_verified` is a skill
  *      badge on a different subsystem). Omitted rather than hard-coded, because a
  *      constant `false` on a trust signal is a claim we cannot support.
- *   `transcript`, `isPremium` on the video, product reviews, trending search terms — each
- *      needs a table, a job or a model that does not exist, not a projection.
+ *   `isPremium` on the video, product reviews, trending search terms — each needs a table, a
+ *      job or a model that does not exist, not a projection.
+ *
+ * `transcript` LEFT THIS LIST too. It is the creator's own uploaded subtitle file, not ASR.
  *
  * `products` LEFT THIS LIST. It was recorded here as a follow-up and is now `attachedProducts`
  * above, read through the store's own eligibility helper.

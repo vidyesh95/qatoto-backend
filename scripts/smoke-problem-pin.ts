@@ -119,7 +119,14 @@ async function main(): Promise<void> {
   }
 
   // 2. The real service: quantization and insert.
-  const receipt = await clustersService.createProblemSubmission(reporterUserId, parsed.data);
+  const submissionResult = await clustersService.createProblemSubmission(
+    reporterUserId,
+    parsed.data,
+  );
+  if (!submissionResult.success) {
+    throw new Error(`smoke-problem-pin: submission refused (${submissionResult.error.type})`);
+  }
+  const receipt = submissionResult.value;
   console.log(`  wrote submission ${receipt.submissionId} (deleted at the end of this run)`);
 
   try {

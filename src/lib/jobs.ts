@@ -175,6 +175,10 @@ export const JOB_NAMES = {
   // day, and any showcase asset left with no row naming it.
   sweepOrphanShowcaseImagesTick: "sweep-orphan-showcase-images-tick",
   sweepOrphanShowcaseImages: "sweep-orphan-showcase-images",
+  // R&D §6 CIVIC PULSE — problem-report photos. Daily: deletes photos no report claimed within a
+  // day, and any problem-photo asset left with no row naming it.
+  sweepOrphanProblemPhotosTick: "sweep-orphan-problem-photos-tick",
+  sweepOrphanProblemPhotos: "sweep-orphan-problem-photos",
   // R&D §10A — import intelligence. The ingest is weekly because annual trade statistics
   // are revised a few times a year, not nightly; the assessment is daily because the
   // supplier and substitute inputs it also reads change whenever a moderator edits one.
@@ -1342,6 +1346,30 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanShowcaseImages),
     },
   },
+  [JOB_NAMES.sweepOrphanProblemPhotosTick]: {
+    name: JOB_NAMES.sweepOrphanProblemPhotosTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanProblemPhotosTick),
+    },
+  },
+  [JOB_NAMES.sweepOrphanProblemPhotos]: {
+    name: JOB_NAMES.sweepOrphanProblemPhotos,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // `singleton` for the showcase sweep's reason: a concurrent pair spends the Admin API twice.
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanProblemPhotos),
+    },
+  },
   [JOB_NAMES.deriveProductRelationsTick]: {
     name: JOB_NAMES.deriveProductRelationsTick,
     payloadSchema: TickPayloadSchema,
@@ -1679,6 +1707,9 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // Nothing waits on it: an unclaimed upload is invisible to readers, so a late run only costs
   // storage for a few more hours.
   [JOB_NAMES.sweepOrphanShowcaseImagesTick]: "25 4 * * *",
+  // CIVIC PULSE — the problem-photo sweep. 04:35 UTC, clear of the showcase sweep at 04:25 so the
+  // two never spend the Cloudinary Admin API budget in the same minute.
+  [JOB_NAMES.sweepOrphanProblemPhotosTick]: "35 4 * * *",
   // STORE Phase 9 — nightly relation derivation. 02:40 UTC sits after the 01:xx
   // recompute chain and well before the 04:55 prune, so a night's completed orders are
   // settled before their co-occurrence is mined.
@@ -2044,6 +2075,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.sweepPendingDocumentScans]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.sweepOrphanShowcaseImagesTick]: TickPayloadSchema,
   [JOB_NAMES.sweepOrphanShowcaseImages]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.sweepOrphanProblemPhotosTick]: TickPayloadSchema,
+  [JOB_NAMES.sweepOrphanProblemPhotos]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.syncComtradeTradeFlowsTick]: TickPayloadSchema,
   [JOB_NAMES.syncComtradeTradeFlows]: SyncComtradeTradeFlowsPayloadSchema,
   [JOB_NAMES.recomputeLocalizationAssessmentsTick]: TickPayloadSchema,
@@ -2240,6 +2273,8 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.sweepPendingDocumentScans}:${asOfIso}`,
   sweepOrphanShowcaseImages: (asOfIso: string): string =>
     `${JOB_NAMES.sweepOrphanShowcaseImages}:${asOfIso}`,
+  sweepOrphanProblemPhotos: (asOfIso: string): string =>
+    `${JOB_NAMES.sweepOrphanProblemPhotos}:${asOfIso}`,
   reconcileCommercePayments: (asOfIso: string): string =>
     `${JOB_NAMES.reconcileCommercePayments}:${asOfIso}`,
   deriveProductRelations: (asOfIso: string): string =>

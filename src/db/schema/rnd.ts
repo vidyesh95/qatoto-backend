@@ -1442,6 +1442,83 @@ export const problemSubmission = pgTable(
 );
 
 /**
+ * A photo a reporter attached to a problem report — ground proof of the failure they describe.
+ *
+ * STAGED, ON THE `showcase_launch_write_up_image` PRECEDENT. Each photo uploads the moment it is
+ * picked and lands here unclaimed (`submission_id` NULL); the report's submit transaction claims
+ * the ids it names. `POST /discovery/problem-reports` therefore stays a JSON route with no
+ * idempotency key, which is the property `createProblemSubmission` documents. A photo nobody
+ * claims within 24 hours is deleted by `sweep-orphan-problem-photos`, asset first, then row.
+ *
+ * ⚠️ **PUBLIC ON THE CLUSTER PAGE, AND NOTHING REVIEWS IT.** The bytes are re-encoded by
+ * `validateAndNormalizeImage`, which drops every EXIF field including GPS, but no one blurs or
+ * vets the picture itself. The report sheet says so in the reporter's own words before they pick
+ * a file (`GEOLOCATION_PRIVACY.md` §4).
+ *
+ * ⚠️ **ERASURE DELETES THESE ROWS EVEN THOUGH THE REPORT SURVIVES.** `problem_submission` is
+ * retained under Art. 17(3)(e) because it is the evidence behind `distinctReporterCount`; a
+ * photograph is not needed for that count and is the most identifying thing a reporter sends.
+ * `anonymize-account.service.ts` purges the Cloudinary assets before the manifest deletes rows.
+ *
+ * THE SIZE IS THE SERVER'S — read from sharp's re-encoded output, never from the client.
+ */
+export const problemSubmissionPhoto = pgTable(
+  "problem_submission_photo",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // NULL until a submit claims it. Cascade: a report's photos have no meaning without it.
+    submissionId: text("submission_id").references(() => problemSubmission.id, {
+      onDelete: "cascade",
+    }),
+    // R2 `cascade`-class: the photo is the uploader's content, not ledger evidence. In practice
+    // accounts are anonymized, not deleted, and the manifest deletes these rows explicitly.
+    uploadedByUserId: text("uploaded_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Stored so a delete never has to rebuild it. */
+    publicId: text("public_id").notNull().unique(),
+    url: text("url").notNull().unique(),
+    widthPx: integer("width_px").notNull(),
+    heightPx: integer("height_px").notNull(),
+    /** A 16px WebP as a base64 data URL, painted in the reserved box until the file loads. */
+    blurDataUrl: text("blur_data_url").notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("problem_submission_photo_submission_idx").on(
+      table.submissionId,
+      table.createdAt,
+      table.id,
+    ),
+    // The staging cap and the sweeper both ask "which of this reporter's uploads are unclaimed".
+    index("problem_submission_photo_unclaimed_idx")
+      .on(table.uploadedByUserId, table.createdAt)
+      .where(sql`submission_id IS NULL`),
+    check(
+      "problem_submission_photo_dimensions_ck",
+      sql`width_px BETWEEN 1 AND 8192 AND height_px BETWEEN 1 AND 8192`,
+    ),
+    check(
+      "problem_submission_photo_url_ck",
+      sql`char_length(url) BETWEEN 1 AND 2048
+          AND url LIKE 'https://%'
+          AND url !~ '[[:space:][:cntrl:]]'`,
+    ),
+    // ⚠️ `chr(59)`, not a literal semicolon: drizzle-kit cuts a CHECK body at its first `;`.
+    // Same expression as `showcase_launch_write_up_image_blur_ck`, for the same reason — `next/image`
+    // writes this value into an inline CSS `url()`.
+    check(
+      "problem_submission_photo_blur_ck",
+      sql`char_length(blur_data_url) <= 2048
+          AND left(blur_data_url, 23) = ('data:image/webp' || chr(59) || 'base64,')
+          AND substr(blur_data_url, 24) ~ '^[A-Za-z0-9+/]+={0,2}$'`,
+    ),
+  ],
+);
+
+/**
  * The deduplicated, scored, publicly rendered entity — `ProblemReport` in the frontend.
  *
  * THE CENTROID IS STORED AS A SUM PLUS A COUNT, not as a mean. §4c bans running-mean
@@ -2559,7 +2636,19 @@ export const geocodeCacheRelations = relations(geocodeCache, ({ one }) => ({
   }),
 }));
 
-export const problemSubmissionRelations = relations(problemSubmission, ({ one }) => ({
+export const problemSubmissionPhotoRelations = relations(problemSubmissionPhoto, ({ one }) => ({
+  submission: one(problemSubmission, {
+    fields: [problemSubmissionPhoto.submissionId],
+    references: [problemSubmission.id],
+  }),
+  uploadedBy: one(user, {
+    fields: [problemSubmissionPhoto.uploadedByUserId],
+    references: [user.id],
+  }),
+}));
+
+export const problemSubmissionRelations = relations(problemSubmission, ({ one, many }) => ({
+  photos: many(problemSubmissionPhoto),
   reporter: one(user, { fields: [problemSubmission.reporterUserId], references: [user.id] }),
   category: one(researchCategory, {
     fields: [problemSubmission.categoryId],

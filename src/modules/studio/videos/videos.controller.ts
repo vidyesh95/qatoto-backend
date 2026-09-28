@@ -164,6 +164,66 @@ export async function uploadThumbnail(req: Request, res: Response): Promise<void
   res.status(200).json(response);
 }
 
+/** PUT /videos/:videoId/transcript — multipart, field `transcript`. Never reads a body. */
+export async function replaceTranscript(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  if (!req.file) {
+    respondFieldRefusal(
+      res,
+      "transcript",
+      "A transcript file is required (multipart field 'transcript').",
+    );
+    return;
+  }
+
+  const replaceResult = await videosService.replaceVideoTranscript(
+    req.user.id,
+    firstParam(req.params.videoId ?? ""),
+    req.file.buffer,
+  );
+  if (!replaceResult.success) {
+    respondStudioError(res, replaceResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Transcript updated successfully",
+    data: replaceResult.value,
+  };
+  res.status(200).json(response);
+}
+
+/** DELETE /videos/:videoId/transcript */
+export async function deleteTranscript(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const deleteResult = await videosService.deleteVideoTranscript(
+    req.user.id,
+    firstParam(req.params.videoId ?? ""),
+  );
+  if (!deleteResult.success) {
+    respondStudioError(res, deleteResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Transcript removed",
+    data: deleteResult.value,
+  };
+  res.status(200).json(response);
+}
+
 /** PUT /videos/:videoId/chapters */
 export async function replaceChapters(req: Request, res: Response): Promise<void> {
   if (!req.user) {

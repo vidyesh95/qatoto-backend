@@ -369,6 +369,21 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
     manifestKey: "showcase_launch.author_user_id",
     note: "The Cloudinary handle the byte-deletion step reads. Collected BEFORE the row delete, which is why that step is not in the manifest loop.",
   },
+  "problem_submission_photo.url": {
+    kind: "covered_by_row_delete",
+    manifestKey: "problem_submission_photo.uploaded_by_user_id",
+    note: "The only public handle on a reporter's photograph. The row dies although its report is retained; `deleteProblemPhotos` deletes the Cloudinary bytes first.",
+  },
+  "problem_submission_photo.public_id": {
+    kind: "covered_by_row_delete",
+    manifestKey: "problem_submission_photo.uploaded_by_user_id",
+    note: "The Cloudinary handle `purge_problem_submission_photos` reads. Collected BEFORE the row delete, which is why that step is not in the manifest loop.",
+  },
+  "video_transcript_segment.segment_text": {
+    kind: "covered_by_row_delete",
+    manifestKey: "video.creator_id",
+    note: "The creator's own transcript of their own video, which can name them or anyone they speak about. Cascades video → video_transcript → video_transcript_segment, so it dies with the video.",
+  },
   "video.contact_email": {
     kind: "covered_by_row_delete",
     manifestKey: "video.creator_id",

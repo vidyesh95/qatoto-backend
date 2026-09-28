@@ -4,6 +4,7 @@ import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import {
   firstParam,
   respondDiscoveryError,
+  respondProblemPhotoUploadError,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/rnd/discovery/discovery-error-response.js";
@@ -133,7 +134,15 @@ export async function createProblemReport(req: Request, res: Response): Promise<
   // The reporter id comes from the SESSION and nowhere else (§13). There is no
   // `reporterUserId` key in the schema, so `.strict()` already 422s an attempt to send
   // one — this line is why there is nothing to send.
-  const receipt = await clustersService.createProblemSubmission(req.user.id, parsedBody.data);
+  const submissionResult = await clustersService.createProblemSubmission(
+    req.user.id,
+    parsedBody.data,
+  );
+  if (!submissionResult.success) {
+    respondDiscoveryError(res, submissionResult.error);
+    return;
+  }
+  const receipt = submissionResult.value;
 
   const enqueueResult = await sendJob(
     JOB_NAMES.geocodeAndClusterSubmission,
@@ -157,6 +166,43 @@ export async function createProblemReport(req: Request, res: Response): Promise<
     data: receipt,
   };
   res.status(202).json(response);
+}
+
+/**
+ * POST /discovery/problem-reports/photos (multipart, field `photo`) — one photo, unclaimed.
+ *
+ * Never reads a body: the file is the whole request. 201, not 202 — the photo is stored and
+ * measured by the time this answers; nothing about it is pending.
+ */
+export async function uploadProblemReportPhoto(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  if (!req.file) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "Choose a photo to upload.",
+      errors: { photo: ["Choose a photo to upload."] },
+    });
+    return;
+  }
+
+  const uploadResult = await clustersService.uploadProblemReportPhoto(req.user.id, req.file.buffer);
+  if (!uploadResult.success) {
+    respondProblemPhotoUploadError(res, uploadResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "Photo uploaded",
+    data: uploadResult.value,
+  };
+  res.status(201).json(response);
 }
 
 /** GET /discovery/problem-reports/mine */

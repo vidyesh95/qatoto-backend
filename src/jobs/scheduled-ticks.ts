@@ -782,6 +782,28 @@ export async function handleSweepOrphanShowcaseImagesTick(
 }
 
 /**
+ * The daily problem-photo sweep tick (Civic Pulse). Day-quantized for the showcase tick's reason.
+ */
+export async function handleSweepOrphanProblemPhotosTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.sweepOrphanProblemPhotos,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.sweepOrphanProblemPhotos(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `sweep-orphan-problem-photos-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/**
  * The hourly external-connector reconciliation tick (STORE Phase 14).
  *
  * Quantized to the HOUR like its siblings, so a double cron fire collapses to one real job.

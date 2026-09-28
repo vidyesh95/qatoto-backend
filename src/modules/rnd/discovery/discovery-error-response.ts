@@ -1,11 +1,13 @@
 import type { Response } from "express";
 
+import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import type { DiscoveryModerationError } from "#src/modules/rnd/discovery/discovery-moderation.service.js";
 import type { DiscoveryVocabularyError } from "#src/modules/rnd/discovery/discovery-vocabulary.service.js";
 import type { MarketInsightError } from "#src/modules/rnd/discovery/market-insights.service.js";
 import type {
   ProblemClusterError,
   ProblemClusterLinkError,
+  ProblemPhotoUploadError,
 } from "#src/modules/rnd/discovery/problem-clusters.service.js";
 import type { TalentProfileError } from "#src/modules/rnd/discovery/talent-profiles.service.js";
 import type { ResearchCategoryError } from "#src/modules/rnd/programs/research-categories.service.js";
@@ -127,6 +129,12 @@ function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       return { statusCode: 403, message: "This action requires a platform staff role." };
 
     // --- 422: validation a schema could not express.
+    // ⚠️ ONE MESSAGE FOR EVERY CAUSE — not yours, already claimed, swept, never existed. Do not
+    // "improve" it into "photo not found": that would tell a caller which photo ids exist.
+    case "PROBLEM_PHOTOS_NOT_AVAILABLE": {
+      const message = "One or more photos could not be attached. Upload them again.";
+      return { statusCode: 422, message, errors: { photoIds: [message] } };
+    }
     case "VIEWPORT_INCOMPLETE":
       return {
         statusCode: 422,
@@ -296,5 +304,63 @@ function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
 
 export function respondDiscoveryError(res: Response, error: DiscoveryDomainError): void {
   const { statusCode, message, errors } = mapDiscoveryErrorToResponse(error);
+  res.status(statusCode).json({ status: "error", statusCode, message, errors });
+}
+
+/** A 422 keyed to the multipart `photo` field, so the sheet shows it on the tile that failed. */
+function photoRefusal(message: string): {
+  readonly statusCode: 422;
+  readonly message: string;
+  readonly errors: Readonly<Record<string, readonly string[]>>;
+} {
+  return { statusCode: 422, message, errors: { photo: [message] } };
+}
+
+/**
+ * A problem-report photo upload refusal. Its own mapper, because its variants are storage and
+ * image-decoding errors that no other discovery route produces. Every 422 is keyed `photo`, the
+ * multipart field, so the sheet can show it on the tile that failed.
+ */
+function mapProblemPhotoUploadErrorToResponse(error: ProblemPhotoUploadError): {
+  readonly statusCode: number;
+  readonly message: string;
+  readonly errors?: Readonly<Record<string, readonly string[]>>;
+} {
+  switch (error.type) {
+    case "PROBLEM_PHOTO_STAGING_LIMIT_REACHED":
+      return {
+        statusCode: 409,
+        message: `You have ${String(error.limit)} uploaded photos no report uses yet. Send your report, or wait a day for unused photos to clear.`,
+      };
+    case "NOT_AN_IMAGE":
+      return photoRefusal("The uploaded file is not a valid image.");
+    case "UNSUPPORTED_FORMAT":
+      return photoRefusal(describeUnsupportedImageFormat(error.detected));
+    case "DIMENSIONS_TOO_SMALL":
+      return photoRefusal(
+        `The photo must be at least 64x64 pixels (received ${String(error.width)}x${String(error.height)}).`,
+      );
+    case "DIMENSIONS_TOO_LARGE":
+      return photoRefusal(
+        `The photo is too large (received ${String(error.width)}x${String(error.height)}).`,
+      );
+    case "NOT_CONFIGURED":
+      return { statusCode: 503, message: "Photo uploads are not configured on this server." };
+    case "UPLOAD_FAILED":
+      return { statusCode: 502, message: "Could not store the photo. Please try again." };
+    case "DELETE_FAILED":
+      return { statusCode: 502, message: "Could not remove a stored photo. Please try again." };
+    default: {
+      const exhaustiveCheck: never = error;
+      throw new Error(`Unhandled problem photo upload error: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+export function respondProblemPhotoUploadError(
+  res: Response,
+  error: ProblemPhotoUploadError,
+): void {
+  const { statusCode, message, errors } = mapProblemPhotoUploadErrorToResponse(error);
   res.status(statusCode).json({ status: "error", statusCode, message, errors });
 }

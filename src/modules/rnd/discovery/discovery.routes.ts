@@ -6,6 +6,7 @@ import {
   categoryCreateLimiter,
   discoveryModerationLimiter,
   problemReportLimiter,
+  problemReportPhotoUploadLimiter,
   talentProfileWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
@@ -16,6 +17,7 @@ import * as vocabularyController from "#src/modules/rnd/discovery/discovery-voca
 import * as marketInsightsController from "#src/modules/rnd/discovery/market-insights.controller.js";
 import * as clustersController from "#src/modules/rnd/discovery/problem-clusters.controller.js";
 import * as talentController from "#src/modules/rnd/discovery/talent-profiles.controller.js";
+import { uploadProblemReportPhotoFile } from "#src/modules/rnd/discovery/upload-problem-report-photo.js";
 
 /**
  * Discovery — problem clusters, taxonomy, knowledge hub, talent directory
@@ -88,6 +90,22 @@ router.post(
   requireIdentifiedUser,
   longFormBody,
   clustersController.createProblemReport,
+);
+
+/**
+ * POST /discovery/problem-reports/photos — one photo, staged UNCLAIMED until a report names it.
+ *
+ * A literal segment, so it sits above `/:submissionId` like `/mine`. Multipart: multer is the
+ * parser, so there is no JSON cap in the chain, and the upload limiter is the only limiter
+ * (the showcase routes' rule — a multipart route carries one limiter, never two).
+ */
+router.post(
+  "/problem-reports/photos",
+  requireAuth,
+  problemReportPhotoUploadLimiter,
+  requireIdentifiedUser,
+  uploadProblemReportPhotoFile,
+  clustersController.uploadProblemReportPhoto,
 );
 
 /**

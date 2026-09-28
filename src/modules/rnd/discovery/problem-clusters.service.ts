@@ -1,4 +1,6 @@
-import { and, asc, between, desc, eq, gte, or, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+
+import { and, asc, between, count, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -7,9 +9,17 @@ import {
   problemClusterProjectLink,
   problemClusterScoreSnapshot,
   problemSubmission,
+  problemSubmissionPhoto,
   researchCategory,
   researchProject,
 } from "#src/db/schema.js";
+import {
+  problemPhotoPublicId,
+  uploadProblemPhoto,
+  type CloudinaryError,
+} from "#src/lib/cloudinary.js";
+import { buildBlurPlaceholderDataUrl } from "#src/lib/image-blur-placeholder.js";
+import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
@@ -38,7 +48,56 @@ export type ProblemClusterError =
   | { type: "CLUSTER_NOT_FOUND"; clusterId: string }
   | { type: "SUBMISSION_NOT_FOUND"; submissionId: string }
   | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
-  | { type: "VIEWPORT_INCOMPLETE" };
+  | { type: "VIEWPORT_INCOMPLETE" }
+  /**
+   * ⚠️ ONE VARIANT FOR "not yours", "already on another report", "swept after a day" AND "never
+   * existed", and it must stay one. A distinct "not found" would turn
+   * `problem_submission_photo.id` into an existence oracle for other reporters' photos. The
+   * reporter's fix is identical in every case — upload the photo again.
+   */
+  | { type: "PROBLEM_PHOTOS_NOT_AVAILABLE" };
+
+/** Why a problem-report photo upload was refused. Mapped by `respondProblemPhotoUploadError`. */
+export type ProblemPhotoUploadError =
+  | ImageValidationError
+  | CloudinaryError
+  | { readonly type: "PROBLEM_PHOTO_STAGING_LIMIT_REACHED"; readonly limit: number };
+
+type ProblemSubmissionStatus = (typeof problemSubmission.$inferSelect)["status"];
+
+/** One photo as every read renders it. The size is the server's, measured after re-encode. */
+export interface ProblemReportPhotoView {
+  readonly photoId: string;
+  readonly url: string;
+  readonly widthPx: number;
+  readonly heightPx: number;
+  readonly blurDataUrl: string;
+}
+
+const PROBLEM_REPORT_PHOTO_VIEW_COLUMNS = {
+  photoId: problemSubmissionPhoto.id,
+  url: problemSubmissionPhoto.url,
+  widthPx: problemSubmissionPhoto.widthPx,
+  heightPx: problemSubmissionPhoto.heightPx,
+  blurDataUrl: problemSubmissionPhoto.blurDataUrl,
+} as const;
+
+/** Photos render in a panel at most ~800px wide, 2x on a dense screen. Never enlarged. */
+const PROBLEM_PHOTO_OUTPUT_MAX_DIMENSION_PX = 1600;
+
+/**
+ * Unclaimed uploads one reporter may hold at once. Four reports' worth: enough to abandon a
+ * sheet and start again, not enough to use the staging area as free image hosting. A READ, not a
+ * lock — two racing uploads can overshoot by one, bounded by the upload limiter.
+ */
+const MAX_UNCLAIMED_PROBLEM_PHOTOS_PER_REPORTER = 12;
+
+/**
+ * The cluster page's photo strip: the newest photos across ALL the cluster's reports, capped per
+ * read. Older photos drop off the public strip; each reporter still sees their own under My
+ * reports.
+ */
+const CLUSTER_PHOTO_LIMIT = 12;
 
 /**
  * The cluster↔project link write path (§11j.1, §11j.4).
@@ -548,6 +607,11 @@ export interface ProblemClusterDetailView extends ProblemClusterView {
   readonly scoreHistory: readonly ClusterScoreHistoryPoint[];
   /** Caller-dependent, NOT a row property. False for anonymous readers. */
   readonly viewerHasReported: boolean;
+  /**
+   * Reporter photos, newest first, at most {@link CLUSTER_PHOTO_LIMIT}. Empty on a `hidden`
+   * cluster, and never from a report a moderator struck from the count.
+   */
+  readonly photos: readonly ProblemReportPhotoView[];
 }
 
 const SCORE_HISTORY_LIMIT = 12;
@@ -573,7 +637,7 @@ export async function findProblemCluster(
 
   if (!row) return null;
 
-  const [linkedProjects, scoreHistory, viewerReportRows] = await Promise.all([
+  const [linkedProjects, scoreHistory, viewerReportRows, photos] = await Promise.all([
     db
       .select({
         slug: researchProject.slug,
@@ -615,10 +679,34 @@ export async function findProblemCluster(
           )
           .limit(1)
       : Promise.resolve([]),
+    /*
+     * ⚠️ PUBLIC PHOTOS FOLLOW THE TWO PUBLIC-READ RULES THE REST OF THIS SURFACE ALREADY HAS.
+     * A `hidden` cluster is "excluded from public reads", and a submission a moderator struck
+     * with `countsTowardDistinctReporters = false` is sybil evidence kept for audit, not content.
+     * Neither may put a photograph in front of a reader.
+     */
+    row.status === "hidden"
+      ? Promise.resolve([])
+      : db
+          .select(PROBLEM_REPORT_PHOTO_VIEW_COLUMNS)
+          .from(problemSubmissionPhoto)
+          .innerJoin(
+            problemSubmission,
+            eq(problemSubmissionPhoto.submissionId, problemSubmission.id),
+          )
+          .where(
+            and(
+              eq(problemSubmission.clusterId, clusterId),
+              eq(problemSubmission.countsTowardDistinctReporters, true),
+            ),
+          )
+          .orderBy(desc(problemSubmissionPhoto.createdAt), desc(problemSubmissionPhoto.id))
+          .limit(CLUSTER_PHOTO_LIMIT),
   ]);
 
   return {
     ...toProblemClusterView(row),
+    photos,
     linkedProjects,
     scoreHistory: scoreHistory.map((point) => ({
       ...point,
@@ -636,6 +724,8 @@ export interface CreateProblemSubmissionInput {
   /** The reporter's optional coarse pin. Both or neither, enforced by the request schema. */
   readonly approxLatitudeMicrodegrees?: number | undefined;
   readonly approxLongitudeMicrodegrees?: number | undefined;
+  /** Staged uploads to claim. Distinct and at most three, enforced by the request schema. */
+  readonly photoIds?: readonly string[] | undefined;
 }
 
 export interface ProblemSubmissionReceiptView {
@@ -669,7 +759,7 @@ export interface ProblemSubmissionReceiptView {
 export async function createProblemSubmission(
   reporterUserId: string,
   input: CreateProblemSubmissionInput,
-): Promise<ProblemSubmissionReceiptView> {
+): Promise<Result<ProblemSubmissionReceiptView, ProblemClusterError>> {
   // ⚠️ **RE-QUANTIZED HERE, ON THE WAY IN, AND THAT IS NOT BELT-AND-BRACES.** The browser rounds to
   // 3 decimals before sending, but CLAUDE.md §0 is explicit that a client-side check "exists only
   // for fast UX feedback" — a hostile client posts 6 decimals and the rounding it skipped is the
@@ -688,36 +778,198 @@ export async function createProblemSubmission(
       ? null
       : quantizePublishedMicrodegrees(input.approxLongitudeMicrodegrees);
 
-  const [created] = await db
-    .insert(problemSubmission)
-    .values({
-      reporterUserId,
-      title: input.title,
-      categoryId: input.categoryId,
-      description: input.description,
-      locationText: input.locationText,
-      approxLatitudeMicrodegrees,
-      approxLongitudeMicrodegrees,
-      // Everything else falls to its column default: status='queued', the RESOLVED coordinates
-      // NULL, countryCode NULL. The pin above is the only geography a client can supply, and it
-      // refines position only — see the schema's note.
-    })
-    .returning({
-      id: problemSubmission.id,
-      status: problemSubmission.status,
-      createdAt: problemSubmission.createdAt,
-    });
+  const photoIds = input.photoIds ?? [];
 
-  if (!created) {
-    throw new Error("createProblemSubmission: insert returned no row");
+  /*
+   * ONE TRANSACTION, because a report and its photos are one statement. The photos are locked and
+   * counted BEFORE anything is written, the `submitShowcaseLaunch` shape: accepting the words while
+   * silently dropping the evidence would leave the reporter believing their photo is on the map.
+   */
+  const transactionOutcome = await db.transaction(
+    async (
+      tx,
+    ): Promise<
+      | { readonly kind: "photos_unavailable" }
+      | {
+          readonly kind: "inserted";
+          readonly created: { id: string; status: ProblemSubmissionStatus; createdAt: Date };
+        }
+    > => {
+      if (photoIds.length > 0) {
+        /*
+         * THE PREDICATE IS THE AUTHORIZATION. Only this reporter's own, still-unclaimed uploads
+         * match, so a photo id belonging to anyone else simply does not lock. Locked, so a second
+         * report submitted at the same instant cannot claim the same photo. The request schema
+         * already refused duplicate ids, which is what makes the count comparison exact.
+         */
+        const lockedPhotoRows = await tx
+          .select({ id: problemSubmissionPhoto.id })
+          .from(problemSubmissionPhoto)
+          .where(
+            and(
+              inArray(problemSubmissionPhoto.id, [...photoIds]),
+              eq(problemSubmissionPhoto.uploadedByUserId, reporterUserId),
+              isNull(problemSubmissionPhoto.submissionId),
+            ),
+          )
+          .for("update");
+        if (lockedPhotoRows.length !== photoIds.length) {
+          // Nothing has been written yet, so returning commits an empty transaction.
+          return { kind: "photos_unavailable" };
+        }
+      }
+
+      const [created] = await tx
+        .insert(problemSubmission)
+        .values({
+          reporterUserId,
+          title: input.title,
+          categoryId: input.categoryId,
+          description: input.description,
+          locationText: input.locationText,
+          approxLatitudeMicrodegrees,
+          approxLongitudeMicrodegrees,
+          // Everything else falls to its column default: status='queued', the RESOLVED
+          // coordinates NULL, countryCode NULL. The pin above is the only geography a client can
+          // supply, and it refines position only — see the schema's note.
+        })
+        .returning({
+          id: problemSubmission.id,
+          status: problemSubmission.status,
+          createdAt: problemSubmission.createdAt,
+        });
+
+      if (!created) {
+        throw new Error("createProblemSubmission: insert returned no row");
+      }
+
+      if (photoIds.length > 0) {
+        await tx
+          .update(problemSubmissionPhoto)
+          .set({ submissionId: created.id })
+          .where(inArray(problemSubmissionPhoto.id, [...photoIds]));
+      }
+
+      return { kind: "inserted", created };
+    },
+  );
+
+  switch (transactionOutcome.kind) {
+    case "photos_unavailable":
+      return { success: false, error: { type: "PROBLEM_PHOTOS_NOT_AVAILABLE" } };
+    case "inserted":
+      return {
+        success: true,
+        value: {
+          submissionId: transactionOutcome.created.id,
+          clusteringStatus: transactionOutcome.created.status,
+          clusterId: null,
+          submittedAt: transactionOutcome.created.createdAt.toISOString(),
+        },
+      };
+    default: {
+      const exhaustiveCheck: never = transactionOutcome;
+      return exhaustiveCheck;
+    }
+  }
+}
+
+/**
+ * Stores one problem-report photo, UNCLAIMED, and returns what the sheet needs to show it.
+ *
+ * THE ROW EXISTS BEFORE ANY REPORT DOES. A reporter adds photos while filling in the sheet; the
+ * report's submit transaction claims the ids it names (`createProblemSubmission`). See
+ * `problem_submission_photo` for why, and `sweep-orphan-problem-photos` for the ones nobody claims.
+ *
+ * ⚠️ `validateAndNormalizeImage` IS WHAT REMOVES THE GPS. It auto-orients, then re-encodes with
+ * no metadata carried over, so the stored file holds pixels and nothing else. The raw bytes never
+ * leave this process.
+ */
+export async function uploadProblemReportPhoto(
+  uploaderUserId: string,
+  rawImageBytes: Buffer,
+): Promise<Result<ProblemReportPhotoView, ProblemPhotoUploadError>> {
+  const [stagingRow] = await db
+    .select({ unclaimedPhotoCount: count() })
+    .from(problemSubmissionPhoto)
+    .where(
+      and(
+        eq(problemSubmissionPhoto.uploadedByUserId, uploaderUserId),
+        isNull(problemSubmissionPhoto.submissionId),
+      ),
+    );
+  if ((stagingRow?.unclaimedPhotoCount ?? 0) >= MAX_UNCLAIMED_PROBLEM_PHOTOS_PER_REPORTER) {
+    return {
+      success: false,
+      error: {
+        type: "PROBLEM_PHOTO_STAGING_LIMIT_REACHED",
+        limit: MAX_UNCLAIMED_PROBLEM_PHOTOS_PER_REPORTER,
+      },
+    };
   }
 
+  const normalizedImage = await validateAndNormalizeImage(rawImageBytes, {
+    outputMaxDimensionPx: PROBLEM_PHOTO_OUTPUT_MAX_DIMENSION_PX,
+    outputFormat: "avif",
+  });
+  if (!normalizedImage.success) return { success: false, error: normalizedImage.error };
+
+  const blurDataUrl = await buildBlurPlaceholderDataUrl(rawImageBytes);
+  if (!blurDataUrl.success) return { success: false, error: blurDataUrl.error };
+
+  const photoId = randomUUID();
+  const photoPublicId = problemPhotoPublicId(photoId);
+  const uploadResult = await uploadProblemPhoto(photoPublicId, normalizedImage.value.buffer);
+  if (!uploadResult.success) return { success: false, error: uploadResult.error };
+
+  // If this insert throws, the asset above has no row naming it. The orphan sweep deletes any
+  // asset under the folder older than a day with no row.
+  await db.insert(problemSubmissionPhoto).values({
+    id: photoId,
+    uploadedByUserId: uploaderUserId,
+    publicId: photoPublicId,
+    url: uploadResult.value.secureUrl,
+    // The re-encoded file's size, never a number the client sent.
+    widthPx: normalizedImage.value.width,
+    heightPx: normalizedImage.value.height,
+    blurDataUrl: blurDataUrl.value,
+  });
+
   return {
-    submissionId: created.id,
-    clusteringStatus: created.status,
-    clusterId: null,
-    submittedAt: created.createdAt.toISOString(),
+    success: true,
+    value: {
+      photoId,
+      url: uploadResult.value.secureUrl,
+      widthPx: normalizedImage.value.width,
+      heightPx: normalizedImage.value.height,
+      blurDataUrl: blurDataUrl.value,
+    },
   };
+}
+
+/** The photos on each of the given submissions, oldest first — the order they were attached. */
+async function findPhotosBySubmission(
+  submissionIds: readonly string[],
+): Promise<ReadonlyMap<string, readonly ProblemReportPhotoView[]>> {
+  const photosBySubmission = new Map<string, ProblemReportPhotoView[]>();
+  if (submissionIds.length === 0) return photosBySubmission;
+
+  const photoRows = await db
+    .select({
+      ...PROBLEM_REPORT_PHOTO_VIEW_COLUMNS,
+      submissionId: problemSubmissionPhoto.submissionId,
+    })
+    .from(problemSubmissionPhoto)
+    .where(inArray(problemSubmissionPhoto.submissionId, [...submissionIds]))
+    .orderBy(asc(problemSubmissionPhoto.createdAt), asc(problemSubmissionPhoto.id));
+
+  for (const { submissionId, ...photo } of photoRows) {
+    if (submissionId === null) continue;
+    const submissionPhotos = photosBySubmission.get(submissionId) ?? [];
+    submissionPhotos.push(photo);
+    photosBySubmission.set(submissionId, submissionPhotos);
+  }
+  return photosBySubmission;
 }
 
 /**
@@ -763,6 +1015,8 @@ export interface MyProblemSubmissionView {
   readonly clusterTitle: string | null;
   readonly geocodeFailureReason: string | null;
   readonly submittedAt: string;
+  /** The reporter's own photos on this report, in the order they were attached. */
+  readonly photos: readonly ProblemReportPhotoView[];
 }
 
 export interface MyProblemSubmissionFilter {
@@ -817,7 +1071,13 @@ export async function findMyProblemSubmission(
       ),
     );
 
-  return row ? { ...row, submittedAt: row.submittedAt.toISOString() } : null;
+  if (!row) return null;
+  const photosBySubmission = await findPhotosBySubmission([row.submissionId]);
+  return {
+    ...row,
+    submittedAt: row.submittedAt.toISOString(),
+    photos: photosBySubmission.get(row.submissionId) ?? [],
+  };
 }
 
 /**
@@ -854,8 +1114,14 @@ export async function listMyProblemSubmissions(
       .where(whereClause),
   ]);
 
+  const photosBySubmission = await findPhotosBySubmission(rows.map((row) => row.submissionId));
+
   return {
-    rows: rows.map((row) => ({ ...row, submittedAt: row.submittedAt.toISOString() })),
+    rows: rows.map((row) => ({
+      ...row,
+      submittedAt: row.submittedAt.toISOString(),
+      photos: photosBySubmission.get(row.submissionId) ?? [],
+    })),
     total: totalRow?.total ?? 0,
   };
 }

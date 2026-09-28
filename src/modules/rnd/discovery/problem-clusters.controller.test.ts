@@ -238,10 +238,13 @@ describe("createProblemReport", () => {
   it("responds 202 with a receipt, never a cluster or a score", async () => {
     checkCategoryUsableMock.mockResolvedValue({ usable: true });
     createProblemSubmissionMock.mockResolvedValue({
-      submissionId: "sub-1",
-      clusteringStatus: "queued",
-      clusterId: null,
-      submittedAt: "2026-07-21T00:00:00.000Z",
+      success: true,
+      value: {
+        submissionId: "sub-1",
+        clusteringStatus: "queued",
+        clusterId: null,
+        submittedAt: "2026-07-21T00:00:00.000Z",
+      },
     });
     sendJobMock.mockResolvedValue({ success: true, value: { jobId: "job-1" } });
 
@@ -265,10 +268,13 @@ describe("createProblemReport", () => {
   it("stamps the reporter from the session, never from the body", async () => {
     checkCategoryUsableMock.mockResolvedValue({ usable: true });
     createProblemSubmissionMock.mockResolvedValue({
-      submissionId: "sub-1",
-      clusteringStatus: "queued",
-      clusterId: null,
-      submittedAt: "2026-07-21T00:00:00.000Z",
+      success: true,
+      value: {
+        submissionId: "sub-1",
+        clusteringStatus: "queued",
+        clusterId: null,
+        submittedAt: "2026-07-21T00:00:00.000Z",
+      },
     });
     sendJobMock.mockResolvedValue({ success: true, value: { jobId: "job-1" } });
 
@@ -306,10 +312,13 @@ describe("createProblemReport", () => {
     // polling "queued" forever with no error anywhere.
     checkCategoryUsableMock.mockResolvedValue({ usable: true });
     createProblemSubmissionMock.mockResolvedValue({
-      submissionId: "sub-1",
-      clusteringStatus: "queued",
-      clusterId: null,
-      submittedAt: "2026-07-21T00:00:00.000Z",
+      success: true,
+      value: {
+        submissionId: "sub-1",
+        clusteringStatus: "queued",
+        clusterId: null,
+        submittedAt: "2026-07-21T00:00:00.000Z",
+      },
     });
     sendJobMock.mockResolvedValue({
       success: false,

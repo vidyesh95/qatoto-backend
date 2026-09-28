@@ -337,6 +337,19 @@ export const problemReportLimiter = createLimiter({
 });
 
 /**
+ * POST /discovery/problem-reports/photos — photos staged for a report.
+ *
+ * Three photos per report against `problemReportLimiter`'s ten reports gives thirty; the margin
+ * above that covers re-picking a photo that came out wrong. The staging cap in the service bounds
+ * what one account can hold unclaimed; this bounds how fast it can churn Cloudinary uploads.
+ */
+export const problemReportPhotoUploadLimiter = createLimiter({
+  namespace: "problemReportPhotoUpload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 40,
+});
+
+/**
  * POST /feedback — what somebody says about the product itself.
  *
  * PAIRED WITH `requireIdentifiedUser` the way `problemReportLimiter` above is, and for the
@@ -474,6 +487,17 @@ export const videoCreateLimiter = createLimiter({
  */
 export const videoThumbnailUploadLimiter = createLimiter({
   namespace: "videoThumbnailUpload",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});
+
+/**
+ * PUT and DELETE /videos/:videoId/transcript. Each PUT parses up to 1 MB and writes up to 20,000
+ * rows under a row lock, so it is bounded like an upload rather than like a metadata edit. Twenty a
+ * minute is far above a creator fixing a line and re-uploading.
+ */
+export const videoTranscriptWriteLimiter = createLimiter({
+  namespace: "videoTranscriptWrite",
   windowMs: ONE_MINUTE_MS,
   limit: 20,
 });

@@ -576,6 +576,67 @@ export const videoChapter = pgTable(
   ],
 );
 
+/**
+ * The format a creator's transcript file was DETECTED as. Never declared by the client: the
+ * upload carries no format field, and `subtitle-parse.ts` decides from the bytes.
+ */
+export const videoTranscriptFormatEnum = pgEnum("video_transcript_format", ["srt", "vtt", "text"]);
+
+/**
+ * A creator-supplied transcript: one row per video that HAS one.
+ *
+ * ⚠️ **THE INVARIANT IS "A TRANSCRIPT EXISTS IFF THIS ROW EXISTS".** There is deliberately no
+ * status or format column on `video`: two places that can each say whether a transcript exists
+ * can disagree, and the watch read and the studio form would then disagree with each other. A
+ * segment cannot exist without this row (its FK), and this row cannot exist without segments —
+ * `segment_count > 0` here, the replace writes both in one transaction, and the parser refuses a
+ * file with no cues.
+ *
+ * ⚠️ **NOT CAPTIONS, AND NOT MADE BY QATOTO.** It renders in the watch page's Transcript tab only.
+ * Captions inside the embedded YouTube player stay YouTube's, and no speech-to-text runs anywhere:
+ * the backend holds no video bytes to run it on (§5, Appendix A). The creator uploads a subtitle
+ * file they already have.
+ */
+export const videoTranscript = pgTable(
+  "video_transcript",
+  {
+    videoId: text("video_id")
+      .primaryKey()
+      .references(() => video.id, { onDelete: "cascade" }),
+    format: videoTranscriptFormatEnum("format").notNull(),
+    segmentCount: integer("segment_count").notNull(),
+    uploadedAt: timestamp("uploaded_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  () => [check("video_transcript_segment_count_ck", sql`segment_count > 0`)],
+);
+
+/**
+ * One cue of a transcript. Offsets are whole seconds; `end_offset_seconds` is always set for an
+ * srt/vtt cue and always NULL for a pasted-text paragraph, which has no timing at all.
+ */
+export const videoTranscriptSegment = pgTable(
+  "video_transcript_segment",
+  {
+    videoId: text("video_id")
+      .notNull()
+      .references(() => videoTranscript.videoId, { onDelete: "cascade" }),
+    segmentOrder: integer("segment_order").notNull(),
+    startOffsetSeconds: integer("start_offset_seconds").notNull(),
+    endOffsetSeconds: integer("end_offset_seconds"),
+    segmentText: text("segment_text").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.videoId, table.segmentOrder] }),
+    check(
+      "video_transcript_segment_offsets_ck",
+      sql`segment_order >= 0
+          AND start_offset_seconds >= 0
+          AND (end_offset_seconds IS NULL OR end_offset_seconds >= start_offset_seconds)`,
+    ),
+    check("video_transcript_segment_text_ck", sql`char_length(segment_text) BETWEEN 1 AND 2000`),
+  ],
+);
+
 // Shoppable products. Ownership of each product is re-verified against
 // product.sellerId before a row lands here (§0) — the client only ever sends ids.
 export const videoAttachedProduct = pgTable(

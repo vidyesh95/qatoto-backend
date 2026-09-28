@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
-import sharp from "sharp";
 
 import { db } from "#src/db/index.js";
 import {
@@ -20,6 +19,7 @@ import {
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { parseHttpsUrl, type ExternalUrlError } from "#src/lib/external-url.js";
+import { buildBlurPlaceholderDataUrl } from "#src/lib/image-blur-placeholder.js";
 import {
   validateAndNormalizeImage,
   type ImageValidationError,
@@ -59,7 +59,6 @@ const HEADING_IMAGE_SQUARE_TOLERANCE = 0.01;
  * screenshot at a bigger size.
  */
 const WRITE_UP_IMAGE_OUTPUT_MAX_DIMENSION_PX = 1600;
-const BLUR_PLACEHOLDER_DIMENSION_PX = 16;
 
 export type ShowcaseWriteUpImageError =
   | ImageValidationError
@@ -128,33 +127,6 @@ export interface ShowcaseSubmissionView {
   readonly submittedAt: Date;
   readonly publicSlug: string | null;
   readonly moderatorNote: string | null;
-}
-
-/**
- * A 16px WebP, base64, for the reserved box to paint until the real file loads.
- *
- * Made from the RAW upload with the same auto-orientation the normalizer applies, rather than by
- * re-decoding the stored AVIF: that would depend on this deployment's libvips carrying an AV1
- * decoder as well as an encoder. The raw bytes already decoded once inside
- * `validateAndNormalizeImage`, so a failure here is not a bad upload — it is still answered as
- * one rather than as a 500, because the caller can do nothing else with it.
- */
-async function buildBlurPlaceholderDataUrl(
-  rawImageBytes: Buffer,
-): Promise<Result<string, ImageValidationError>> {
-  try {
-    const placeholderBuffer = await sharp(rawImageBytes)
-      .rotate()
-      .resize(BLUR_PLACEHOLDER_DIMENSION_PX, BLUR_PLACEHOLDER_DIMENSION_PX, { fit: "inside" })
-      .webp({ quality: 50 })
-      .toBuffer();
-    return {
-      success: true,
-      value: `data:image/webp;base64,${placeholderBuffer.toString("base64")}`,
-    };
-  } catch {
-    return { success: false, error: { type: "NOT_AN_IMAGE" } };
-  }
 }
 
 /**

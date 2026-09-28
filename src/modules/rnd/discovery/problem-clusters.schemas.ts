@@ -86,6 +86,9 @@ export const CreateClusterProjectLinkSchema = z
   })
   .strict();
 
+/** Photos one report may carry. The report sheet enforces the same number. */
+export const MAX_PROBLEM_REPORT_PHOTOS = 3;
+
 /**
  * ABSENT BY CONSTRUCTION, each rejected by `.strict()` as a 422: `countryCode`
  * (server-geocoded — CLAUDE.md §0 names client-supplied country as untrustworthy, and here
@@ -138,6 +141,23 @@ export const CreateProblemReportSchema = z
       .int()
       .min(-MAXIMUM_LONGITUDE_MICRODEGREES)
       .max(MAXIMUM_LONGITUDE_MICRODEGREES)
+      .optional(),
+    /**
+     * Staged uploads from `POST /discovery/problem-reports/photos`, claimed by the submit.
+     *
+     * ⚠️ DISTINCT, AND REFUSED HERE RATHER THAN DEDUPED IN THE SERVICE. The claim compares the
+     * rows it locked with the number of ids sent; `[a, a]` locks one row against two ids and would
+     * read as "a photo is unavailable" when the reporter did nothing wrong. Refusing duplicates at
+     * the boundary keeps that comparison exact.
+     */
+    photoIds: z
+      .array(z.uuid())
+      .max(MAX_PROBLEM_REPORT_PHOTOS)
+      .refine((photoIds) => new Set(photoIds).size === photoIds.length, {
+        message: "Each photo may be attached once.",
+      })
+      // Optional, not `.default([])`: absent means "no photos", and a body without the key parses
+      // to exactly what it parsed to before photos existed.
       .optional(),
   })
   .strict()

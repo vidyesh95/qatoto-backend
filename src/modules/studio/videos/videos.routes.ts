@@ -9,11 +9,13 @@ import {
   videoDocumentDownloadLimiter,
   videoDocumentUploadLimiter,
   videoThumbnailUploadLimiter,
+  videoTranscriptWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import { uploadVideoDocumentFile } from "#src/modules/studio/videos/upload-video-document.js";
 import { uploadVideoThumbnail } from "#src/modules/studio/videos/upload-video-thumbnail.js";
+import { uploadVideoTranscriptFile } from "#src/modules/studio/videos/upload-video-transcript.js";
 import * as videosController from "#src/modules/studio/videos/videos.controller.js";
 
 const router = express.Router();
@@ -126,6 +128,28 @@ router.post(
   collaborationResponseLimiter,
   longFormBody,
   videosController.respondToCollaboration,
+);
+
+/**
+ * PUT /videos/:videoId/transcript — multipart `transcript`, replaces the whole transcript.
+ *
+ * NO JSON BODY PARSER in this chain: `uploadVideoTranscriptFile` IS the parser, and the file can
+ * exceed the 128 KB JSON ceiling. The creator's own subtitle file — no speech-to-text runs here.
+ */
+router.put(
+  "/:videoId/transcript",
+  requireAuth,
+  videoTranscriptWriteLimiter,
+  uploadVideoTranscriptFile,
+  videosController.replaceTranscript,
+);
+
+/** DELETE /videos/:videoId/transcript — idempotent; answers the updated video either way. */
+router.delete(
+  "/:videoId/transcript",
+  requireAuth,
+  videoTranscriptWriteLimiter,
+  videosController.deleteTranscript,
 );
 
 /** PUT /videos/:videoId/chapters — replaces the whole chapter set. */

@@ -270,6 +270,10 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
       };
     case "INVALID_PDF":
       return { statusCode: 422, message: describePdfRejection(error.reason) };
+    // The parser's own message, which already names the line ("Line 214: expected a timestamp
+    // like …"). Keyed `transcript`, the multipart field, so the studio shows it under that control.
+    case "TRANSCRIPT_INVALID":
+      return { statusCode: 422, message: error.message, errors: { transcript: [error.message] } };
 
     // ⚠️ THESE THREE ARE NOT THE CLOUDINARY THREE BELOW, despite naming the same failures.
     // `ObjectStorageError`'s literals collide exactly with `CloudinaryError`'s, so the document
