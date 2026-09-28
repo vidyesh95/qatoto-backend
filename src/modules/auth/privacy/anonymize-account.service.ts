@@ -7,6 +7,7 @@ import {
   anonymizationStepLog,
   handleReservation,
   showcaseLaunch,
+  showcaseLaunchHeadingImage,
   showcaseLaunchWriteUpImage,
   problemSubmissionPhoto,
   user,
@@ -652,9 +653,11 @@ export async function anonymizeAccount(
   /**
    * --- 1.6. Showcase launch images, before the loop below deletes the rows that name them.
    *
-   * THE SAME POSITION ARGUMENT AS 1.5. `showcase_launch` and `showcase_launch_write_up_image` are
-   * `delete_rows` in the manifest, so after the loop no row is left carrying these public ids and
-   * the heading images and write-up screenshots would sit on Cloudinary forever.
+   * THE SAME POSITION ARGUMENT AS 1.5. `showcase_launch`, `showcase_launch_write_up_image` and
+   * `showcase_launch_heading_image` are `delete_rows` in the manifest, so after the loop no row is
+   * left carrying these public ids and the heading images and write-up screenshots would sit on
+   * Cloudinary forever. The third is the STAGED heading upload, which a draft can hold without any
+   * launch naming it — reading only `showcase_launch` would miss exactly those.
    *
    * NOT THE `deleteUserAvatar` SHAPE, although that is also a Cloudinary delete: an avatar's
    * public id is derived from the user id, so it can be found after the rows are gone. These
@@ -903,7 +906,7 @@ async function purgeShowcaseLaunchImages(
   userId: string,
   isEnabled: boolean,
 ): Promise<number> {
-  const [headingImageRows, writeUpImageRows] = await Promise.all([
+  const [headingImageRows, writeUpImageRows, stagedHeadingImageRows] = await Promise.all([
     db
       .select({ publicId: showcaseLaunch.headingImagePublicId })
       .from(showcaseLaunch)
@@ -912,10 +915,19 @@ async function purgeShowcaseLaunchImages(
       .select({ publicId: showcaseLaunchWriteUpImage.publicId })
       .from(showcaseLaunchWriteUpImage)
       .where(eq(showcaseLaunchWriteUpImage.uploadedByUserId, userId)),
+    db
+      .select({ publicId: showcaseLaunchHeadingImage.publicId })
+      .from(showcaseLaunchHeadingImage)
+      .where(eq(showcaseLaunchHeadingImage.uploadedByUserId, userId)),
   ]);
-  const imagePublicIds = [...headingImageRows, ...writeUpImageRows].map(
-    (imageRow) => imageRow.publicId,
-  );
+  // De-duplicated: a claimed staged upload can be the same asset as its launch's heading image.
+  const imagePublicIds = [
+    ...new Set(
+      [...headingImageRows, ...writeUpImageRows, ...stagedHeadingImageRows].map(
+        (imageRow) => imageRow.publicId,
+      ),
+    ),
+  ];
 
   if (!isEnabled) return imagePublicIds.length;
 

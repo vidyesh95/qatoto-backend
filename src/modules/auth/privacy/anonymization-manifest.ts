@@ -651,7 +651,8 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
     },
     "session.user_id": { kind: "delete_rows" },
     // Deleting an account deletes its launches (owner decision). The team rows cascade with the
-    // launch; the images are removed from Cloudinary by `purge_showcase_launch_images` first.
+    // launch; the images — the launch's heading image, its write-up screenshots and any STAGED
+    // heading uploads — are removed from Cloudinary by `purge_showcase_launch_images` first.
     "showcase_launch.author_user_id": { kind: "delete_rows" },
     "showcase_launch.reviewed_by_user_id": {
       kind: "retain",
@@ -659,6 +660,10 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
     },
     "showcase_launch_write_up_image.uploaded_by_user_id": { kind: "delete_rows" },
+    // The staged heading-image upload — the maker's own file, uploaded before the launch existed
+    // so a draft could keep its cover. Nobody else's record depends on it; same disposition and
+    // the same Cloudinary-first purge as the write-up images above.
+    "showcase_launch_heading_image.uploaded_by_user_id": { kind: "delete_rows" },
     /*
      * The comment author is `null_out` and NOT `delete_rows`, unlike the like and the upvote:
      * closing an account must not erase a thread other people replied to, and a NULL author renders
@@ -801,9 +806,9 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
      * person. `null_out` would orphan that text with nobody to attribute it to; deleting the row is
      * the only operation that provably reaches it.
      *
-     * ⚠️ IT ALSO FREES THE SHOWCASE IMAGES A DRAFT WAS HOLDING. `showcase_launch_write_up_image.
-     * draft_id` is `set null`, so the sweeper reaps them within a day rather than them becoming
-     * permanently unreferenced rows nothing can find.
+     * ⚠️ IT ALSO FREES THE SHOWCASE IMAGES A DRAFT WAS HOLDING. `draft_id` is `set null` on both
+     * `showcase_launch_write_up_image` and `showcase_launch_heading_image`, so the sweeper reaps
+     * them within a day rather than them becoming permanently unreferenced rows nothing can find.
      */
     "blueprint_draft.owner_user_id": { kind: "delete_rows" },
     "teardown_submission.reviewed_by_user_id": {
