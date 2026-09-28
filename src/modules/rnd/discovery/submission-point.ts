@@ -13,9 +13,10 @@ import { isWithinRadius, type GeoPointMicrodegrees } from "#src/modules/rnd/geo.
 /**
  * Two reports within this distance MAY describe the same problem.
  *
- * ⚠️ **IT IS NOT ON THE WIRE AND MUST NOT BE HARDCODED IN A CLIENT** (`todo.md` §19.10). A pin on
- * the public map marks the middle of a catchment this wide; drawing a ring for it would be the most
- * honest possible rendering, and also a lie the day this constant is tuned.
+ * ⚠️ **IT IS ON THE WIRE, AND A CLIENT MUST READ IT RATHER THAN HARDCODE IT** (`todo.md` §19.10).
+ * `GET /discovery/problem-clusters` carries it as `matchRadiusMeters` on the list envelope. A pin on
+ * the public map marks the middle of a catchment this wide, and a ring drawn from a copied 25 km
+ * becomes a lie the day this constant is tuned — which is why it ships as data.
  */
 export const CLUSTER_RADIUS_MILLIMETRES = 25_000_000; // 25 km
 

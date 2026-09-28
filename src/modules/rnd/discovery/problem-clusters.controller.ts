@@ -17,6 +17,7 @@ import {
   SubmissionIdParamSchema,
 } from "#src/modules/rnd/discovery/problem-clusters.schemas.js";
 import * as clustersService from "#src/modules/rnd/discovery/problem-clusters.service.js";
+import { CLUSTER_RADIUS_MILLIMETRES } from "#src/modules/rnd/discovery/submission-point.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** GET /discovery/problem-clusters — the map and the landing teaser. */
@@ -52,11 +53,24 @@ export async function listProblemClusters(req: Request, res: Response): Promise<
     minLongitudeMicrodegrees: filter.minLongitudeMicrodegrees,
     maxLongitudeMicrodegrees: filter.maxLongitudeMicrodegrees,
     sort: filter.sort,
+    // The schema guarantees both halves or neither, and only with `sort=distance`.
+    ...(filter.centreLatitudeMicrodegrees !== undefined &&
+    filter.centreLongitudeMicrodegrees !== undefined
+      ? {
+          centre: {
+            latitudeMicrodegrees: filter.centreLatitudeMicrodegrees,
+            longitudeMicrodegrees: filter.centreLongitudeMicrodegrees,
+          },
+        }
+      : {}),
     page: filter.page,
     limit: filter.limit,
   });
 
-  const response: PaginatedResponse = {
+  // `matchRadiusMeters` is how far apart two reports may be and still join one cluster — so a pin
+  // marks the middle of a catchment this wide. On the ENVELOPE, not per row: it is one constant for
+  // every cluster, and a client must read it rather than copy 25 km (`submission-point.ts`).
+  const response: PaginatedResponse & { readonly matchRadiusMeters: number } = {
     status: "success",
     statusCode: 200,
     message: "Problem clusters retrieved successfully",
@@ -67,6 +81,7 @@ export async function listProblemClusters(req: Request, res: Response): Promise<
       total: page.total,
       totalPages: Math.ceil(page.total / filter.limit),
     },
+    matchRadiusMeters: CLUSTER_RADIUS_MILLIMETRES / 1000,
   };
   res.status(200).json(response);
 }

@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-const PROBLEM_CLUSTER_SORTS = ["opportunity", "recent", "reporters"] as const;
+const PROBLEM_CLUSTER_SORTS = ["opportunity", "recent", "reporters", "distance"] as const;
 
 const MAXIMUM_LATITUDE_MICRODEGREES = 90_000_000;
 
@@ -57,12 +57,58 @@ export const ListProblemClustersQuerySchema = z
       .max(MAXIMUM_LONGITUDE_MICRODEGREES)
       .optional(),
     sort: z.enum(PROBLEM_CLUSTER_SORTS).default("opportunity"),
+    /**
+     * The point `sort=distance` orders from — the centre of the reader's map, never their own
+     * location. Both halves or neither, only with `sort=distance`, and required by it (below).
+     */
+    centreLatitudeMicrodegrees: z.coerce
+      .number()
+      .int()
+      .min(-MAXIMUM_LATITUDE_MICRODEGREES)
+      .max(MAXIMUM_LATITUDE_MICRODEGREES)
+      .optional(),
+    centreLongitudeMicrodegrees: z.coerce
+      .number()
+      .int()
+      .min(-MAXIMUM_LONGITUDE_MICRODEGREES)
+      .max(MAXIMUM_LONGITUDE_MICRODEGREES)
+      .optional(),
     // Deep offsets are a scan amplifier on a public, unauthenticated read, so the page
     // number is capped rather than unbounded.
     page: z.coerce.number().int().min(1).max(500).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })
-  .strict();
+  .strict()
+  .superRefine((query, context) => {
+    // A centre is a point: half of one is not a latitude with the longitude to follow, it is a
+    // point that does not exist (the `CreateProblemReportSchema` pin rule, below).
+    const hasCentreLatitude = query.centreLatitudeMicrodegrees !== undefined;
+    const hasCentreLongitude = query.centreLongitudeMicrodegrees !== undefined;
+    if (hasCentreLatitude !== hasCentreLongitude) {
+      context.addIssue({
+        code: "custom",
+        path: [hasCentreLatitude ? "centreLongitudeMicrodegrees" : "centreLatitudeMicrodegrees"],
+        message: "A centre needs both a latitude and a longitude, or neither.",
+      });
+      return;
+    }
+    // Distance from nowhere has no order, and a centre with any other sort would be silently
+    // ignored — the partial-viewport failure (`VIEWPORT_INCOMPLETE`) in another shape.
+    if (query.sort === "distance" && !hasCentreLatitude) {
+      context.addIssue({
+        code: "custom",
+        path: ["centreLatitudeMicrodegrees"],
+        message: "Sorting by distance needs a centre.",
+      });
+    }
+    if (query.sort !== "distance" && hasCentreLatitude) {
+      context.addIssue({
+        code: "custom",
+        path: ["sort"],
+        message: "A centre is only used with sort=distance.",
+      });
+    }
+  });
 
 export const ClusterIdParamSchema = z.object({ clusterId: z.uuid() }).strict();
 

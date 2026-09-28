@@ -557,15 +557,36 @@ const handWrittenSpec = {
           {
             name: "sort",
             in: "query",
-            schema: { type: "string", enum: ["opportunity", "recent", "reporters"] },
+            schema: { type: "string", enum: ["opportunity", "recent", "reporters", "distance"] },
+            description:
+              "`distance` orders nearest-first from the centre below, measured to the published " +
+              "(quantized) centroid.",
+          },
+          {
+            name: "centreLatitudeMicrodegrees",
+            in: "query",
+            schema: { type: "integer" },
+            description: "With its longitude: required by, and only accepted with, sort=distance.",
+          },
+          {
+            name: "centreLongitudeMicrodegrees",
+            in: "query",
+            schema: { type: "integer" },
+            description: "With its latitude: required by, and only accepted with, sort=distance.",
           },
           { name: "page", in: "query", schema: { type: "integer", minimum: 1, maximum: 500 } },
           { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
         ],
         responses: {
-          "200": { description: "A page of clusters." },
+          "200": {
+            description:
+              "A page of clusters. The envelope also carries `matchRadiusMeters`: how far apart " +
+              "two reports may be and still join one cluster.",
+          },
           "422": {
-            description: "Unknown query key, or a PARTIAL viewport — all four bounds or none.",
+            description:
+              "Unknown query key; a PARTIAL viewport (all four bounds or none); half a centre; " +
+              "sort=distance without a centre; or a centre with any other sort.",
           },
         },
       },

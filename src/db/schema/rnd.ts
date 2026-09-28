@@ -1448,7 +1448,9 @@ export const problemSubmission = pgTable(
  * picked and lands here unclaimed (`submission_id` NULL); the report's submit transaction claims
  * the ids it names. `POST /discovery/problem-reports` therefore stays a JSON route with no
  * idempotency key, which is the property `createProblemSubmission` documents. A photo nobody
- * claims within 24 hours is deleted by `sweep-orphan-problem-photos`, asset first, then row.
+ * claims within 24 hours is deleted by `sweep-orphan-problem-photos`, row first, then asset.
+ * Every photo, claimed or not, is deleted by that same daily sweep two years after upload
+ * (`DATA_RETENTION.md` §3.2).
  *
  * ⚠️ **PUBLIC ON THE CLUSTER PAGE, AND NOTHING REVIEWS IT.** The bytes are re-encoded by
  * `validateAndNormalizeImage`, which drops every EXIF field including GPS, but no one blurs or

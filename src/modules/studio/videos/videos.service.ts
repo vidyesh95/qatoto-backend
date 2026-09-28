@@ -1807,19 +1807,42 @@ export async function replaceVideoThumbnail(
   return { success: true, value: await toPublicVideo(updated, Date.now()) };
 }
 
-/** Replaces the whole chapter set. Position is the array index — the client's order. */
+/** What the locked chapter replace decided, so the transaction can report three outcomes. */
+type ChapterReplaceOutcome =
+  | { readonly kind: "video_not_found" }
+  | { readonly kind: "chapters_invalid"; readonly error: InvalidChaptersError }
+  | { readonly kind: "replaced" };
+
+/**
+ * Replaces the whole chapter set. Position is the array index — the client's order.
+ *
+ * ⚠️ **THE VIDEO ROW IS LOCKED FIRST, FOR THE SAME REASON `replaceVideoTranscript` LOCKS IT.**
+ * Delete-then-insert under READ COMMITTED lets two concurrent PUTs each delete and then each
+ * insert, so the second violates `video_chapter_position_unq` or the two sets interleave.
+ * `SELECT … FOR UPDATE` on the owned video row serializes every chapter replace on that video and
+ * doubles as the ownership check — no row, no lock, a 404.
+ *
+ * The chapter set is validated UNDER the lock because the rules read `duration_seconds`, which
+ * `recompute-video-durations` rewrites with a plain UPDATE; that UPDATE waits on this lock, so the
+ * duration checked is the duration in force when the chapters are written.
+ */
 export async function replaceChapters(
   creatorId: string,
   videoId: string,
   chapters: readonly ChapterInput[],
 ): Promise<Result<PublicVideo, VideoError>> {
-  const existing = await loadOwnedVideoRow(creatorId, videoId);
-  if (!existing) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+  const replaceOutcome = await db.transaction(async (tx): Promise<ChapterReplaceOutcome> => {
+    const [lockedVideo] = await tx
+      .select({ id: video.id, durationSeconds: video.durationSeconds })
+      .from(video)
+      .where(ownedVideoPredicate(creatorId, videoId))
+      .for("update")
+      .limit(1);
+    if (!lockedVideo) return { kind: "video_not_found" };
 
-  const chapterError = validateChapterSet(chapters, existing.durationSeconds);
-  if (chapterError) return { success: false, error: chapterError };
+    const chapterError = validateChapterSet(chapters, lockedVideo.durationSeconds);
+    if (chapterError) return { kind: "chapters_invalid", error: chapterError };
 
-  await db.transaction(async (tx) => {
     await tx.delete(videoChapter).where(eq(videoChapter.videoId, videoId));
     if (chapters.length > 0) {
       await tx.insert(videoChapter).values(
@@ -1834,7 +1857,14 @@ export async function replaceChapters(
         })),
       );
     }
+    return { kind: "replaced" };
   });
+  if (replaceOutcome.kind === "video_not_found") {
+    return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+  }
+  if (replaceOutcome.kind === "chapters_invalid") {
+    return { success: false, error: replaceOutcome.error };
+  }
 
   const updated = await loadOwnedVideoRow(creatorId, videoId);
   if (!updated) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
@@ -1852,9 +1882,7 @@ const TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE = 1000;
  * set and then each insert, and the second then violates the `(video_id, segment_order)` key or
  * leaves the two sets interleaved. `SELECT … FOR UPDATE` on the owned video row serializes every
  * PUT and DELETE on that video, and doubles as the ownership check — no row, no lock, a 404.
- *
- * (`replaceChapters` above has the same delete-then-insert shape WITHOUT the lock. Recorded in the
- * frontend `todo.md`; not changed here because it is a different surface.)
+ * `replaceChapters` above takes the same lock for the same reason.
  *
  * The parse runs BEFORE the transaction opens: a refused file costs no lock and no connection.
  */

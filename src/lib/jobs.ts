@@ -1707,8 +1707,9 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // Nothing waits on it: an unclaimed upload is invisible to readers, so a late run only costs
   // storage for a few more hours.
   [JOB_NAMES.sweepOrphanShowcaseImagesTick]: "25 4 * * *",
-  // CIVIC PULSE — the problem-photo sweep. 04:35 UTC, clear of the showcase sweep at 04:25 so the
-  // two never spend the Cloudinary Admin API budget in the same minute.
+  // CIVIC PULSE — the problem-photo sweep and 2-year retention purge. 04:35 UTC, clear of the
+  // showcase sweep at 04:25 so the two never spend the Cloudinary Admin API budget in the same
+  // minute.
   [JOB_NAMES.sweepOrphanProblemPhotosTick]: "35 4 * * *",
   // STORE Phase 9 — nightly relation derivation. 02:40 UTC sits after the 01:xx
   // recompute chain and well before the 04:55 prune, so a night's completed orders are

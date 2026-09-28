@@ -28,6 +28,7 @@ import {
   type DiscoveryCategoryRef,
   type DiscoveryRegionRef,
 } from "#src/modules/rnd/discovery/discovery-catalog.service.js";
+import { COSINE_SCALE, cosineScaledForLatitudeBand } from "#src/modules/rnd/geo.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -396,7 +397,7 @@ export interface ProblemClusterView {
   readonly mergedIntoClusterId: string | null;
 }
 
-const PROBLEM_CLUSTER_SORTS = ["opportunity", "recent", "reporters"] as const;
+const PROBLEM_CLUSTER_SORTS = ["opportunity", "recent", "reporters", "distance"] as const;
 export type ProblemClusterSort = (typeof PROBLEM_CLUSTER_SORTS)[number];
 
 export interface ProblemClusterFilter {
@@ -408,6 +409,11 @@ export interface ProblemClusterFilter {
   readonly minLongitudeMicrodegrees?: number;
   readonly maxLongitudeMicrodegrees?: number;
   readonly sort: ProblemClusterSort;
+  /** Required by `sort=distance` and ignored otherwise; the query schema refuses a mismatch. */
+  readonly centre?: {
+    readonly latitudeMicrodegrees: number;
+    readonly longitudeMicrodegrees: number;
+  };
   readonly page: number;
   readonly limit: number;
 }
@@ -487,6 +493,38 @@ function toProblemClusterView(row: ProblemClusterQueryRow): ProblemClusterView {
 }
 
 /**
+ * The `sort=distance` key: an ORDERING of the squared distance from `centre`, never a distance.
+ *
+ * ⚠️ **IT MEASURES FROM THE PUBLISHED, QUANTIZED CENTROID — NEVER THE STORED ONE.** The stored
+ * centroid of a one-report cluster is that reporter's own point; the published one is rounded onto
+ * `CENTROID_PUBLIC_GRID_MICRODEGREES` (~111 m) precisely so it is not a street address. Ordering by
+ * the stored value would let a caller choose centres and read the ranking back until they had
+ * trilaterated the point below that grid. `round(x::numeric / g) * g` is Postgres's half-away-from-
+ * zero, the same rounding `quantizePublishedMicrodegrees` does by hand; without `::numeric` the
+ * integer division would truncate and the `round` would do nothing.
+ *
+ * The metric is `geo.ts`'s equirectangular one with the CENTRE as the anchor, so the east-west
+ * scale is one cosine, passed as a parameter, for every row. The shared `11132` factor is dropped —
+ * it scales every key alike — and longitude wraps at the antimeridian with `least(d, 360e6 − d)`.
+ * The key reaches ~3e24, past `bigint`, so every term is `numeric`.
+ */
+function buildDistanceSortKey(centre: {
+  readonly latitudeMicrodegrees: number;
+  readonly longitudeMicrodegrees: number;
+}) {
+  const publishedLatitude = sql`(round(${problemCluster.centroidLatitudeMicrodegrees}::numeric / ${CENTROID_PUBLIC_GRID_MICRODEGREES}) * ${CENTROID_PUBLIC_GRID_MICRODEGREES})`;
+  const publishedLongitude = sql`(round(${problemCluster.centroidLongitudeMicrodegrees}::numeric / ${CENTROID_PUBLIC_GRID_MICRODEGREES}) * ${CENTROID_PUBLIC_GRID_MICRODEGREES})`;
+  const northSouthMicrodegrees = sql`abs(${publishedLatitude} - ${centre.latitudeMicrodegrees}::numeric)`;
+  const rawEastWestMicrodegrees = sql`abs(${publishedLongitude} - ${centre.longitudeMicrodegrees}::numeric)`;
+  const eastWestMicrodegrees = sql`least(${rawEastWestMicrodegrees}, 360000000 - ${rawEastWestMicrodegrees})`;
+  const centreCosineScaled = Number(cosineScaledForLatitudeBand(centre.latitudeMicrodegrees));
+  // North-south needs no cosine; `COSINE_SCALE` is cos(0) on the same fixed-point scale.
+  const northSouthScaled = sql`(${northSouthMicrodegrees} * ${Number(COSINE_SCALE)}::numeric)`;
+  const eastWestScaled = sql`(${eastWestMicrodegrees} * ${centreCosineScaled}::numeric)`;
+  return sql`(${northSouthScaled} * ${northSouthScaled} + ${eastWestScaled} * ${eastWestScaled})`;
+}
+
+/**
  * The public map + landing teaser.
  *
  * ONLY `active` CLUSTERS. A merged cluster's rows now live on its survivor, and a hidden
@@ -552,19 +590,21 @@ export async function listProblemClusters(
   // float every UNSCORED cluster to the top of the map, which is exactly the set with
   // the least evidence behind it. Every branch ends in the unique id (§4c rule 4).
   const orderBy =
-    filter.sort === "opportunity"
-      ? [
-          sql`${problemCluster.currentOpportunityScorePoints} DESC NULLS LAST`,
-          desc(problemCluster.lastReportedAt),
-          desc(problemCluster.id),
-        ]
-      : filter.sort === "reporters"
+    filter.sort === "distance" && filter.centre !== undefined
+      ? [sql`${buildDistanceSortKey(filter.centre)} ASC`, desc(problemCluster.id)]
+      : filter.sort === "opportunity"
         ? [
-            desc(problemCluster.distinctReporterCount),
+            sql`${problemCluster.currentOpportunityScorePoints} DESC NULLS LAST`,
             desc(problemCluster.lastReportedAt),
             desc(problemCluster.id),
           ]
-        : [desc(problemCluster.lastReportedAt), desc(problemCluster.id)];
+        : filter.sort === "reporters"
+          ? [
+              desc(problemCluster.distinctReporterCount),
+              desc(problemCluster.lastReportedAt),
+              desc(problemCluster.id),
+            ]
+          : [desc(problemCluster.lastReportedAt), desc(problemCluster.id)];
 
   const [rows, [totalRow]] = await Promise.all([
     db
