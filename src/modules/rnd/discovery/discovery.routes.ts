@@ -136,6 +136,8 @@ router.get("/market-insights", attachOptionalUser, catalogController.listMarketI
 // `/market-insights/<something>` added later MUST be declared above this line.
 router.get("/market-insights/:insightId", attachOptionalUser, catalogController.getMarketInsight);
 router.get("/demand-signals", attachOptionalUser, catalogController.listDemandSignals);
+// The feasibility readout: three pillars per (country, domain), never summed.
+router.get("/feasibility-readouts", attachOptionalUser, catalogController.getFeasibilityReadout);
 
 // --- Talent. `/talent/me` and its sub-paths are literals; all declared before `/talent`.
 router.get("/talent/me", requireAuth, talentController.getMyTalentProfile);

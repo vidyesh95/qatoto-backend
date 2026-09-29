@@ -858,6 +858,30 @@ const handWrittenSpec = {
         responses: { "200": { description: "A page of leaderboard rows, plus `asOf`." } },
       },
     },
+    "/discovery/feasibility-readouts": {
+      get: {
+        tags: ["Discovery"],
+        summary: "A country's feasibility readout: three pillars per problem domain, never summed",
+        description:
+          "Need density (Qatoto problem reports, /30), purchasing power (World Bank GDP per " +
+          "capita PPP, /25, country-level so sent once) and manufacturing (UN Comtrade exports " +
+          "plus the supplier directory, /25). Each pillar carries its own source and date and " +
+          "is `null` when there is no data — never 0. There is no total and no verdict. Pinned " +
+          "to this country's latest snapshot. `data: null` for an unknown or unscored country.",
+        parameters: [
+          {
+            name: "countryCode",
+            in: "query",
+            required: true,
+            schema: { type: "string", pattern: "^[A-Z]{2}$" },
+          },
+        ],
+        responses: {
+          "200": { description: "The readout, or null." },
+          "422": { description: "countryCode missing or not two uppercase letters." },
+        },
+      },
+    },
     "/discovery/talent": {
       get: {
         tags: ["Discovery"],

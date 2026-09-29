@@ -5,9 +5,13 @@ import {
   demandSignalSnapshot,
   discoveryRegion,
   discoverySkill,
+  feasibilityReadoutSnapshot,
   marketInsight,
   researchCategory,
+  researchCategoryDomainEnum,
 } from "#src/db/schema.js";
+import { FEASIBILITY_PILLAR_BUDGETS } from "#src/modules/rnd/discovery/feasibility-readout-score.js";
+import { WORLD_BANK_GDP_PPP_SOURCE_NAME } from "#src/modules/rnd/discovery/sync-world-bank-indicators.js";
 
 /**
  * The knowledge hub's read side: the region and skill lookups, the market-insight cards,
@@ -365,5 +369,171 @@ export async function listDemandSignals(filter: DemandSignalFilter): Promise<Dem
     rows: rows.map((row) => ({ ...row, asOf: row.asOf.toISOString() })),
     total: totalRow?.total ?? 0,
     asOf: latestRun.asOf.toISOString(),
+  };
+}
+
+// --- The feasibility readout (FE docs/FEASIBILITY_MODEL.md).
+
+type ResearchCategoryDomain = (typeof researchCategoryDomainEnum.enumValues)[number];
+
+export const NEED_DENSITY_SOURCE_NAME = "Qatoto problem reports";
+export const MANUFACTURING_SOURCE_NAME = "UN Comtrade exports and the Qatoto supplier directory";
+/** UN Comtrade reports every value in current US dollars (`comtrade.ts`). */
+const MANUFACTURING_EXPORT_CURRENCY = "USD";
+
+export interface NeedDensityReadout {
+  readonly points: number;
+  readonly budget: number;
+  readonly distinctReporterCount: number;
+  readonly activeClusterCount: number;
+  readonly sourceName: string;
+  /** Qatoto's own data is as fresh as the snapshot. */
+  readonly asOf: Date;
+}
+
+export interface PurchasingPowerReadout {
+  readonly points: number;
+  readonly budget: number;
+  readonly valueInWholeInternationalDollars: number;
+  readonly dataYear: number;
+  readonly sourceName: string;
+  readonly sourceRetrievedAt: Date;
+}
+
+export interface ManufacturingReadout {
+  readonly points: number;
+  readonly budget: number;
+  readonly exportValueInCents: number;
+  readonly currency: string;
+  readonly tradeDataYear: number;
+  readonly domesticProducerCount: number;
+  readonly sourceName: string;
+  readonly sourceRetrievedAt: Date;
+}
+
+export interface FeasibilityDomainReadout {
+  readonly domain: ResearchCategoryDomain;
+  readonly needDensity: NeedDensityReadout | null;
+  readonly manufacturing: ManufacturingReadout | null;
+}
+
+export interface FeasibilityReadoutView {
+  readonly country: DiscoveryRegionRef;
+  readonly asOf: Date;
+  readonly modelVersion: number;
+  /** Country-level: the same for every domain, so it is sent once rather than per row. */
+  readonly purchasingPower: PurchasingPowerReadout | null;
+  /** Only domains with need density or manufacturing. Order is the pgEnum's. */
+  readonly domains: readonly FeasibilityDomainReadout[];
+}
+
+/**
+ * A country's latest feasibility readout, or `null` when the country is unknown or has never
+ * been scored.
+ *
+ * ⚠️ THE LATEST `asOf` FOR THIS COUNTRY, not the table's global maximum. A global max would
+ * blank a country the moment another country's newer snapshot landed without it — the exact
+ * mistake the localization leaderboard makes.
+ *
+ * ⚠️ NOTHING HERE ADDS PILLARS. Each arrives as its own object with its own budget, source and
+ * date, and a pillar with no data is `null` — the client renders nothing for it.
+ */
+export async function findFeasibilityReadout(
+  countryCode: string,
+): Promise<FeasibilityReadoutView | null> {
+  const [country] = await db
+    .select(DISCOVERY_REGION_REF_COLUMNS)
+    .from(discoveryRegion)
+    .where(and(eq(discoveryRegion.countryCode, countryCode), eq(discoveryRegion.kind, "country")))
+    .limit(1);
+  if (!country) return null;
+
+  const [latest] = await db
+    .select({
+      asOf: sql<Date>`max(${feasibilityReadoutSnapshot.asOf})`.mapWith(
+        feasibilityReadoutSnapshot.asOf,
+      ),
+    })
+    .from(feasibilityReadoutSnapshot)
+    .where(eq(feasibilityReadoutSnapshot.regionId, country.id));
+  if (!latest?.asOf) return null;
+
+  const rows = await db
+    .select()
+    .from(feasibilityReadoutSnapshot)
+    .where(
+      and(
+        eq(feasibilityReadoutSnapshot.regionId, country.id),
+        eq(feasibilityReadoutSnapshot.asOf, latest.asOf),
+      ),
+    )
+    .orderBy(asc(feasibilityReadoutSnapshot.domain));
+
+  const firstRow = rows[0];
+  if (!firstRow) return null;
+
+  let purchasingPower: PurchasingPowerReadout | null = null;
+  const domains: FeasibilityDomainReadout[] = [];
+  for (const row of rows) {
+    if (
+      purchasingPower === null &&
+      row.purchasingPowerPoints !== null &&
+      row.purchasingPowerValueInWholeInternationalDollars !== null &&
+      row.purchasingPowerDataYear !== null &&
+      row.purchasingPowerSourceRetrievedAt !== null
+    ) {
+      purchasingPower = {
+        points: row.purchasingPowerPoints,
+        budget: FEASIBILITY_PILLAR_BUDGETS.purchasingPower,
+        valueInWholeInternationalDollars: row.purchasingPowerValueInWholeInternationalDollars,
+        dataYear: row.purchasingPowerDataYear,
+        sourceName: WORLD_BANK_GDP_PPP_SOURCE_NAME,
+        sourceRetrievedAt: row.purchasingPowerSourceRetrievedAt,
+      };
+    }
+
+    const needDensity: NeedDensityReadout | null =
+      row.needDensityPoints !== null &&
+      row.needDistinctReporterCount !== null &&
+      row.needActiveClusterCount !== null
+        ? {
+            points: row.needDensityPoints,
+            budget: FEASIBILITY_PILLAR_BUDGETS.needDensity,
+            distinctReporterCount: row.needDistinctReporterCount,
+            activeClusterCount: row.needActiveClusterCount,
+            sourceName: NEED_DENSITY_SOURCE_NAME,
+            asOf: row.asOf,
+          }
+        : null;
+
+    const manufacturing: ManufacturingReadout | null =
+      row.manufacturingPoints !== null &&
+      row.manufacturingExportValueInCents !== null &&
+      row.manufacturingTradeDataYear !== null &&
+      row.manufacturingDomesticProducerCount !== null &&
+      row.manufacturingSourceRetrievedAt !== null
+        ? {
+            points: row.manufacturingPoints,
+            budget: FEASIBILITY_PILLAR_BUDGETS.manufacturing,
+            exportValueInCents: row.manufacturingExportValueInCents,
+            currency: MANUFACTURING_EXPORT_CURRENCY,
+            tradeDataYear: row.manufacturingTradeDataYear,
+            domesticProducerCount: row.manufacturingDomesticProducerCount,
+            sourceName: MANUFACTURING_SOURCE_NAME,
+            sourceRetrievedAt: row.manufacturingSourceRetrievedAt,
+          }
+        : null;
+
+    if (needDensity !== null || manufacturing !== null) {
+      domains.push({ domain: row.domain, needDensity, manufacturing });
+    }
+  }
+
+  return {
+    country,
+    asOf: latest.asOf,
+    modelVersion: firstRow.modelVersion,
+    purchasingPower,
+    domains,
   };
 }

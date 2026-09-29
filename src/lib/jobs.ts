@@ -199,6 +199,13 @@ export const JOB_NAMES = {
   recomputeLocalizationAssessmentsTick: "recompute-localization-assessments-tick",
   recomputeLocalizationAssessments: "recompute-localization-assessments",
   generateLocalizationNarrative: "generate-localization-narrative",
+  // The feasibility readout (FE docs/FEASIBILITY_MODEL.md). A WEEKLY World Bank pull for the
+  // purchasing-power pillar, and a nightly recompute that reads it beside Qatoto's clusters and
+  // the Comtrade flows — three pillars written side by side, never summed.
+  syncWorldBankIndicatorsTick: "sync-world-bank-indicators-tick",
+  syncWorldBankIndicators: "sync-world-bank-indicators",
+  recomputeFeasibilityReadoutsTick: "recompute-feasibility-readouts-tick",
+  recomputeFeasibilityReadouts: "recompute-feasibility-readouts",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -1599,6 +1606,54 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.generateLocalizationNarrative),
     },
   },
+  [JOB_NAMES.syncWorldBankIndicatorsTick]: {
+    name: JOB_NAMES.syncWorldBankIndicatorsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.syncWorldBankIndicatorsTick),
+    },
+  },
+  [JOB_NAMES.syncWorldBankIndicators]: {
+    name: JOB_NAMES.syncWorldBankIndicators,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // One request covers every country, and two concurrent runs would upsert the same rows.
+      policy: "singleton",
+      ...STANDARD_RETRY,
+      // MUST exceed WORLD_BANK_TIMEOUT_MS (180 s) with room for ~90 upserts.
+      expireInSeconds: 600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.syncWorldBankIndicators),
+    },
+  },
+  [JOB_NAMES.recomputeFeasibilityReadoutsTick]: {
+    name: JOB_NAMES.recomputeFeasibilityReadoutsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeFeasibilityReadoutsTick),
+    },
+  },
+  [JOB_NAMES.recomputeFeasibilityReadouts]: {
+    name: JOB_NAMES.recomputeFeasibilityReadouts,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeFeasibilityReadouts),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -1682,6 +1737,11 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // nightly pull would spend seven times the request budget to observe the same numbers.
   // It runs BEFORE the daily assessment that reads what it wrote.
   [JOB_NAMES.syncComtradeTradeFlowsTick]: "20 1 * * 1",
+  // WEEKLY, Monday, after Comtrade. GDP estimates are revised a few times a year.
+  [JOB_NAMES.syncWorldBankIndicatorsTick]: "40 1 * * 1",
+  // Nightly, AFTER 03:50 localization — it reads the same trade flows and the clusters the
+  // 02:15 / 02:45 jobs settle, so it runs last in the §10A chain.
+  [JOB_NAMES.recomputeFeasibilityReadoutsTick]: "10 4 * * *",
 
   // --- Home feed ranking (HOME_BACKEND_STRUCTURE.md §6).
   //
@@ -2165,6 +2225,10 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.recomputeLocalizationAssessmentsTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeLocalizationAssessments]: RecomputeLocalizationAssessmentsPayloadSchema,
   [JOB_NAMES.generateLocalizationNarrative]: GenerateLocalizationNarrativePayloadSchema,
+  [JOB_NAMES.syncWorldBankIndicatorsTick]: TickPayloadSchema,
+  [JOB_NAMES.syncWorldBankIndicators]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputeFeasibilityReadoutsTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeFeasibilityReadouts]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.reconcileCommercePaymentsTick]: TickPayloadSchema,
   [JOB_NAMES.reconcileCommercePayments]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.deriveProductRelationsTick]: TickPayloadSchema,
@@ -2318,6 +2382,10 @@ export const idempotencyKeyFor = {
    */
   generateLocalizationNarrative: (assessmentId: string): string =>
     `${JOB_NAMES.generateLocalizationNarrative}:${assessmentId}`,
+  syncWorldBankIndicators: (asOfIso: string): string =>
+    `${JOB_NAMES.syncWorldBankIndicators}:${asOfIso}`,
+  recomputeFeasibilityReadouts: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeFeasibilityReadouts}:${asOfIso}`,
   anonymizeDueAccounts: (asOfIso: string): string => `${JOB_NAMES.anonymizeDueAccounts}:${asOfIso}`,
   /**
    * SCOPED TO THE ATTEMPT, for the reason `dispatchCommerceWebhookEvent` below spells out:

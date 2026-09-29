@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import {
   CreateCategorySchema,
+  FeasibilityReadoutQuerySchema,
   ListCategoriesQuerySchema,
   ListDemandSignalsQuerySchema,
   ListMarketInsightsQuerySchema,
@@ -218,6 +219,31 @@ export async function listDemandSignals(req: Request, res: Response): Promise<vo
     // NULL when no run has ever completed: the leaderboard is EMPTY, not zeroed, and the
     // client must be able to tell those apart.
     asOf: page.asOf,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * GET /discovery/feasibility-readouts?countryCode=IN — one country's latest readout.
+ *
+ * `data: null` when the country is unknown or has never been scored. That is a 200, not a 404:
+ * the client renders nothing either way, and a 404 on an unscored-but-seeded country would read
+ * as "no such country" (the facet-404 reasoning at the top of the service).
+ */
+export async function getFeasibilityReadout(req: Request, res: Response): Promise<void> {
+  const parsedQuery = FeasibilityReadoutQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const readout = await catalogService.findFeasibilityReadout(parsedQuery.data.countryCode);
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Feasibility readout retrieved successfully",
+    data: readout,
   };
   res.status(200).json(response);
 }

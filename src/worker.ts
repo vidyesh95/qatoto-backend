@@ -39,12 +39,14 @@ import {
   handleRollupCommerceProductDailySignalTick,
   handleReconcileCommercePaymentsTick,
   handleReconcileConnectorStateTick,
+  handleRecomputeFeasibilityReadoutsTick,
   handleRecomputeLocalizationAssessmentsTick,
   handleSweepOrphanShowcaseImagesTick,
   handleSweepExpiredRightsClaimDetailsTick,
   handleSweepOrphanProblemPhotosTick,
   handleSweepPendingDocumentScansTick,
   handleSyncComtradeTradeFlowsTick,
+  handleSyncWorldBankIndicatorsTick,
 } from "#src/jobs/scheduled-ticks.js";
 import {
   createPgBossDbAdapter,
@@ -73,9 +75,11 @@ import { handleCloseCompensationPeriod } from "#src/modules/rnd/compensation/clo
 import { handleRecomputeCompensationDraft } from "#src/modules/rnd/compensation/recompute-compensation-draft.js";
 import { handleGeocodeAndClusterSubmission } from "#src/modules/rnd/discovery/geocode-and-cluster-submission.js";
 import { handleRecomputeDemandSignals } from "#src/modules/rnd/discovery/recompute-demand-signals.js";
+import { handleRecomputeFeasibilityReadouts } from "#src/modules/rnd/discovery/recompute-feasibility-readouts.js";
 import { handleRecomputeOpportunityScores } from "#src/modules/rnd/discovery/recompute-opportunity-scores.js";
 import { handleRefreshTalentProjections } from "#src/modules/rnd/discovery/refresh-talent-projections.js";
 import { handleSweepOrphanProblemPhotos } from "#src/modules/rnd/discovery/sweep-orphan-problem-photos.js";
+import { handleSyncWorldBankIndicators } from "#src/modules/rnd/discovery/sync-world-bank-indicators.js";
 import { handleRecomputeEquitySnapshot } from "#src/modules/rnd/funding/recompute-equity-snapshot.js";
 import { handleRecomputeInvestorConfidence } from "#src/modules/rnd/funding/recompute-investor-confidence.js";
 import { handleGenerateLocalizationNarrative } from "#src/modules/rnd/import-intelligence/generate-localization-narrative.js";
@@ -727,6 +731,28 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.generateLocalizationNarrative,
     workOptions,
     runJob(JOB_NAMES.generateLocalizationNarrative, handleGenerateLocalizationNarrative),
+  );
+
+  // The feasibility readout: the weekly World Bank pull and the nightly three-pillar recompute.
+  await boss.work(
+    JOB_NAMES.syncWorldBankIndicatorsTick,
+    workOptions,
+    runJob(JOB_NAMES.syncWorldBankIndicatorsTick, handleSyncWorldBankIndicatorsTick),
+  );
+  await boss.work(
+    JOB_NAMES.syncWorldBankIndicators,
+    workOptions,
+    runJob(JOB_NAMES.syncWorldBankIndicators, handleSyncWorldBankIndicators),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeFeasibilityReadoutsTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeFeasibilityReadoutsTick, handleRecomputeFeasibilityReadoutsTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeFeasibilityReadouts,
+    workOptions,
+    runJob(JOB_NAMES.recomputeFeasibilityReadouts, handleRecomputeFeasibilityReadouts),
   );
 
   // STORE Phase 9 (§15.9) — nightly co-occurrence mining into the relation graph.

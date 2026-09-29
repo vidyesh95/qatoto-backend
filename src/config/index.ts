@@ -329,6 +329,13 @@ const envSchema = z.object({
   // because a hung fetch holds a worker slot, and the job's `expireInSeconds` is set above
   // this so pg-boss cannot reclaim a call that is still legitimately in flight.
   COMTRADE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(120_000),
+  // --- The feasibility readout's purchasing-power pillar. The World Bank Indicators API is
+  //     KEYLESS, so there is no key to be absent and nothing to switch off: one call a week
+  //     returns every seeded country. Bounded for the Comtrade reason — a hung fetch holds a
+  //     worker slot. ⚠️ NOT A MINUTE: measured 2026-09-29, the 18-country query took 86 s cold
+  //     (a few seconds once their cache is warm), so a 60 s default timed out on first contact.
+  //     The job's `expireInSeconds` (600) stays above this.
+  WORLD_BANK_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(180_000),
 
   // --- §9 integration consent (docs/R_AND_D_BACKEND_STRUCTURE.md §9.10).
   //

@@ -61,3 +61,14 @@ export const ListDemandSignalsQuerySchema = z
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })
   .strict();
+
+/**
+ * `GET /discovery/feasibility-readouts?countryCode=IN`.
+ *
+ * REQUIRED and NOT upper-cased, unlike `ListRegionsQuerySchema`: the readout is a per-country
+ * read with no "all countries" form, and `in` is a 422 rather than a silent fold, so a client
+ * sending the wrong casing learns it instead of caching a coincidence.
+ */
+export const FeasibilityReadoutQuerySchema = z
+  .object({ countryCode: z.string().regex(/^[A-Z]{2}$/) })
+  .strict();

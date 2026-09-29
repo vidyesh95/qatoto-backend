@@ -78,6 +78,8 @@
     "db:smoke-import-intelligence": "tsx --conditions=development scripts/smoke-import-intelligence.ts",
     "db:sync-comtrade": "tsx --conditions=development scripts/sync-comtrade-backfill.ts",
     "db:recompute-localization": "tsx --conditions=development scripts/recompute-localization-assessments.ts",
+    "db:sync-world-bank": "tsx --conditions=development scripts/sync-world-bank.ts",
+    "db:recompute-feasibility": "tsx --conditions=development scripts/recompute-feasibility-readouts.ts",
     "db:verify-workshop-constraints": "tsx --conditions=development scripts/verify-workshop-constraints.ts",
     "db:verify-proof-of-effort-constraints": "tsx --conditions=development scripts/verify-proof-of-effort-constraints.ts",
     "db:verify-escrow-constraints": "tsx --conditions=development scripts/verify-escrow-constraints.ts",

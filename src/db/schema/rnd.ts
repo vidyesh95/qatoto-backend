@@ -9388,6 +9388,170 @@ export const localizationAssessment = pgTable(
 );
 
 /**
+ * One country-level economic fact from an external public dataset — today only the World Bank's
+ * GDP per capita at purchasing-power parity (`NY.GDP.PCAP.PP.CD`), the input to the feasibility
+ * readout's purchasing-power pillar (FE docs/FEASIBILITY_MODEL.md).
+ *
+ * A DURABLE INGEST, NOT A CACHE. Each (country, indicator, year) is written once per publication
+ * and kept, so a readout computed last year can be reproduced from the value it actually read.
+ * The World Bank revises recent years; a revision overwrites the same `(region, indicator, year)`
+ * row and advances `source_retrieved_at`, which is what the readout carries forward.
+ *
+ * A `null` from the World Bank means "not published for that year" and writes NO row — it is not
+ * a zero-income country. The indicator CHECK is a closed list of one on purpose: a second
+ * indicator is a schema decision, not a string somebody types into a job payload.
+ */
+export const countryEconomicIndicator = pgTable(
+  "country_economic_indicator",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    regionId: text("region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    indicatorCode: text("indicator_code").notNull(),
+    dataYear: integer("data_year").notNull(),
+    // Current international dollars, rounded to whole dollars. Whole dollars rather than cents:
+    // the source publishes a modelled estimate, and two decimals would claim a precision it does
+    // not have.
+    valueInWholeInternationalDollars: bigint("value_in_whole_international_dollars", {
+      mode: "number",
+    }).notNull(),
+    sourceName: text("source_name").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    // The dataset's own `lastupdated` date — when the World Bank last revised the series.
+    sourceLastUpdatedDate: date("source_last_updated_date", { mode: "string" }),
+    sourceRetrievedAt: timestamp("source_retrieved_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("country_economic_indicator_cell_unq").on(
+      table.regionId,
+      table.indicatorCode,
+      table.dataYear,
+    ),
+    check(
+      "country_economic_indicator_shape_ck",
+      sql`indicator_code = 'NY.GDP.PCAP.PP.CD'
+          AND data_year BETWEEN 1960 AND 2200
+          AND value_in_whole_international_dollars > 0
+          AND source_url LIKE 'https://%'`,
+    ),
+  ],
+);
+
+/**
+ * The feasibility readout: one row per (asOf, country, problem domain), THREE SEPARATE PILLARS.
+ *
+ * ⚠️ THERE IS NO TOTAL, AND THAT ABSENCE IS THE DESIGN. Need density is Qatoto's own cluster data;
+ * purchasing power is the World Bank; manufacturing is UN Comtrade plus the supplier directory.
+ * `R_AND_D_STRUCTURE.md` §7 rules that evidence bases like these are never merged into one
+ * number, and FE docs/FEASIBILITY_MODEL.md's correction header rejects the spec's weighted
+ * composite and its verdict enum for exactly that reason. So unlike `localization_assessment`
+ * there is no total column and no CHECK that sums anything — only a per-pillar bound.
+ *
+ * ⚠️ EVERY PILLAR IS NULLABLE AS A GROUP. A pillar with no source data for this cell is NULL in
+ * every one of its columns — never 0, which would read as a measured finding about a country.
+ * Each group's CHECK makes "points without their inputs" and "inputs without points"
+ * unwritable. A row whose three pillars are all NULL is never inserted.
+ *
+ * Regulatory ease (the spec's fourth pillar) is NOT a column yet: nothing can write it until
+ * the B-READY import exists, and a column nothing writes is unverified schema.
+ *
+ * Purchasing power is per COUNTRY, so it repeats on each of a country's domain rows. Stored per
+ * row anyway so one snapshot row is self-contained and reproducible.
+ */
+export const feasibilityReadoutSnapshot = pgTable(
+  "feasibility_readout_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    asOf: timestamp("as_of").notNull(),
+    regionId: text("region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    domain: researchCategoryDomainEnum("domain").notNull(),
+    // Set explicitly by the job from the scorer's constant, never left to a default.
+    modelVersion: integer("model_version").notNull(),
+    // --- Need density (0..30): Qatoto's own problem reports.
+    needDensityPoints: integer("need_density_points"),
+    needDistinctReporterCount: integer("need_distinct_reporter_count"),
+    needActiveClusterCount: integer("need_active_cluster_count"),
+    // --- Purchasing power (0..25): World Bank GDP per capita, PPP.
+    purchasingPowerPoints: integer("purchasing_power_points"),
+    purchasingPowerValueInWholeInternationalDollars: bigint(
+      "purchasing_power_value_in_whole_international_dollars",
+      { mode: "number" },
+    ),
+    purchasingPowerDataYear: integer("purchasing_power_data_year"),
+    purchasingPowerSourceRetrievedAt: timestamp("purchasing_power_source_retrieved_at"),
+    // --- Manufacturing (0..25): UN Comtrade exports + domestic producers.
+    manufacturingPoints: integer("manufacturing_points"),
+    manufacturingExportValueInCents: bigint("manufacturing_export_value_in_cents", {
+      mode: "number",
+    }),
+    manufacturingTradeDataYear: integer("manufacturing_trade_data_year"),
+    manufacturingDomesticProducerCount: integer("manufacturing_domestic_producer_count"),
+    manufacturingSourceRetrievedAt: timestamp("manufacturing_source_retrieved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("feasibility_readout_snapshot_cell_unq").on(
+      table.asOf,
+      table.regionId,
+      table.domain,
+    ),
+    index("feasibility_readout_snapshot_region_asOf_idx").on(table.regionId, table.asOf),
+    check("feasibility_readout_snapshot_version_ck", sql`model_version >= 1`),
+    check(
+      "feasibility_readout_snapshot_need_density_ck",
+      sql`(need_density_points IS NULL
+           AND need_distinct_reporter_count IS NULL
+           AND need_active_cluster_count IS NULL)
+          OR (need_density_points BETWEEN 0 AND 30
+              AND need_distinct_reporter_count >= 0
+              AND need_active_cluster_count >= 1)`,
+    ),
+    check(
+      "feasibility_readout_snapshot_purchasing_power_ck",
+      sql`(purchasing_power_points IS NULL
+           AND purchasing_power_value_in_whole_international_dollars IS NULL
+           AND purchasing_power_data_year IS NULL
+           AND purchasing_power_source_retrieved_at IS NULL)
+          OR (purchasing_power_points BETWEEN 0 AND 25
+              AND purchasing_power_value_in_whole_international_dollars > 0
+              AND purchasing_power_data_year BETWEEN 1960 AND 2200
+              AND purchasing_power_source_retrieved_at IS NOT NULL)`,
+    ),
+    check(
+      "feasibility_readout_snapshot_manufacturing_ck",
+      sql`(manufacturing_points IS NULL
+           AND manufacturing_export_value_in_cents IS NULL
+           AND manufacturing_trade_data_year IS NULL
+           AND manufacturing_domestic_producer_count IS NULL
+           AND manufacturing_source_retrieved_at IS NULL)
+          OR (manufacturing_points BETWEEN 0 AND 25
+              AND manufacturing_export_value_in_cents >= 0
+              AND manufacturing_trade_data_year BETWEEN 1960 AND 2200
+              AND manufacturing_domestic_producer_count >= 0
+              AND manufacturing_source_retrieved_at IS NOT NULL)`,
+    ),
+    check(
+      "feasibility_readout_snapshot_not_empty_ck",
+      sql`need_density_points IS NOT NULL
+          OR purchasing_power_points IS NOT NULL
+          OR manufacturing_points IS NOT NULL`,
+    ),
+  ],
+);
+
+/**
  * The LLM's localization pathway, written OVER a score it did not compute.
  *
  * `optimization_suggestion`'s shape exactly, for the same reason: it suggests, it never

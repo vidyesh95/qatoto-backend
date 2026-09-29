@@ -1054,3 +1054,44 @@ export async function handleRecomputeLocalizationAssessmentsTick(
     );
   }
 }
+
+/**
+ * The weekly World Bank pull for the feasibility readout's purchasing-power pillar.
+ *
+ * Quantized to the UTC day, so a retried tick on the same Monday collapses onto one sync.
+ * The handler resolves the country list itself; the tick stays a pure enqueuer.
+ */
+export async function handleSyncWorldBankIndicatorsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+  const enqueueResult = await sendJob(
+    JOB_NAMES.syncWorldBankIndicators,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.syncWorldBankIndicators(asOfIso) },
+  );
+  if (!enqueueResult.success) {
+    throw new Error(
+      `sync-world-bank-indicators-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/** The nightly feasibility readout. One snapshot per UTC day, every country at once. */
+export async function handleRecomputeFeasibilityReadoutsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeFeasibilityReadouts,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeFeasibilityReadouts(asOfIso) },
+  );
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-feasibility-readouts-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
