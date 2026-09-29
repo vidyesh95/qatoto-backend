@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { researchCategory } from "#src/db/schema.js";
@@ -25,6 +25,14 @@ export interface ResearchCategoryView {
   /** Which pin asset the §6 problem map renders for this category. */
   readonly pinIconKey: (typeof researchCategory.$inferSelect)["pinIconKey"];
   readonly status: (typeof researchCategory.$inferSelect)["status"];
+  /**
+   * The cross-country comparability domain, or NULL when no moderator has assigned one.
+   * NULL is ordinary: the category still pins and clusters, it only stays out of the
+   * country matrix.
+   */
+  readonly domain: (typeof researchCategory.$inferSelect)["domain"];
+  /** Optional one-level nesting. NULL for a top-level category. */
+  readonly parentCategoryId: string | null;
 }
 
 const CATEGORY_VIEW_COLUMNS = {
@@ -33,6 +41,8 @@ const CATEGORY_VIEW_COLUMNS = {
   displayLabel: researchCategory.label,
   pinIconKey: researchCategory.pinIconKey,
   status: researchCategory.status,
+  domain: researchCategory.domain,
+  parentCategoryId: researchCategory.parentCategoryId,
 } as const;
 
 /**
@@ -125,6 +135,7 @@ export async function applyCategoryDecision(input: {
     "approved" | "rejected"
   >;
   readonly pinIconKey?: (typeof researchCategory.$inferSelect)["pinIconKey"];
+  readonly domain?: NonNullable<(typeof researchCategory.$inferSelect)["domain"]>;
 }): Promise<ResearchCategoryView | null> {
   const [updated] = await db
     .update(researchCategory)
@@ -133,6 +144,8 @@ export async function applyCategoryDecision(input: {
       // Only overwrite the pin when the moderator actually chose one — omitting it must
       // leave the existing value rather than resetting it to the column default.
       ...(input.pinIconKey === undefined ? {} : { pinIconKey: input.pinIconKey }),
+      // Same rule for the domain: omitted means "not decided here", never "clear it".
+      ...(input.domain === undefined ? {} : { domain: input.domain }),
     })
     .where(and(eq(researchCategory.id, input.categoryId), eq(researchCategory.status, "pending")))
     .returning(CATEGORY_VIEW_COLUMNS);
@@ -149,4 +162,122 @@ export async function findCategoryStatusById(
     .from(researchCategory)
     .where(eq(researchCategory.id, categoryId));
   return row?.status ?? null;
+}
+
+/** Why a classification was refused. Each is a 422: the request is well-formed, the tree is not. */
+export type CategoryClassificationInvalidReason =
+  | "self_parent"
+  | "parent_not_found"
+  | "parent_not_approved"
+  | "parent_is_nested"
+  | "category_has_children"
+  | "domain_mismatch";
+
+type CategoryTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export type CategoryClassificationResult =
+  | { readonly kind: "not_found" }
+  | { readonly kind: "not_approved"; readonly status: ResearchCategoryView["status"] }
+  | { readonly kind: "invalid"; readonly reason: CategoryClassificationInvalidReason }
+  | { readonly kind: "unchanged"; readonly category: ResearchCategoryView }
+  | {
+      readonly kind: "classified";
+      readonly previous: Pick<ResearchCategoryView, "domain" | "parentCategoryId">;
+      readonly category: ResearchCategoryView;
+    };
+
+/**
+ * Sets an approved category's domain and parent, as a REPLACE of both (`null` clears).
+ *
+ * THE TREE IS ONE LEVEL DEEP, AND THAT IS WHAT MAKES A CYCLE UNWRITABLE. A parent must be
+ * top-level and a child must have no children, so no chain longer than one edge can exist
+ * and there is nothing to walk. Both rows are locked `FOR UPDATE` inside one transaction,
+ * because two moderators nesting A under B and B under A at the same moment would each pass
+ * the check against the other's pre-write state.
+ *
+ * A PARENT AND CHILD MAY NOT DISAGREE ON DOMAIN when both carry one. A child whose domain
+ * differs from its parent's would roll up into one country-matrix column while being filed
+ * under another, which is exactly the incomparability the domain exists to prevent. A NULL
+ * on either side is allowed — assignment is incremental.
+ *
+ * The CAPABILITY CHECK is the caller's job, as with `applyCategoryDecision`. The caller also
+ * owns the TRANSACTION, so the locks, the write and the audit entry commit together — pass the
+ * `tx` that `recordPlatformAction` hands its work callback.
+ */
+export async function applyCategoryClassification(
+  transaction: CategoryTransaction,
+  input: {
+    readonly categoryId: string;
+    readonly domain: ResearchCategoryView["domain"];
+    readonly parentCategoryId: string | null;
+  },
+): Promise<CategoryClassificationResult> {
+  const [current] = await transaction
+    .select(CATEGORY_VIEW_COLUMNS)
+    .from(researchCategory)
+    .where(eq(researchCategory.id, input.categoryId))
+    .for("update");
+  if (!current) return { kind: "not_found" };
+  if (current.status !== "approved") return { kind: "not_approved", status: current.status };
+
+  if (input.parentCategoryId !== null) {
+    if (input.parentCategoryId === input.categoryId) {
+      return { kind: "invalid", reason: "self_parent" };
+    }
+    const [parent] = await transaction
+      .select({
+        status: researchCategory.status,
+        domain: researchCategory.domain,
+        parentCategoryId: researchCategory.parentCategoryId,
+      })
+      .from(researchCategory)
+      .where(eq(researchCategory.id, input.parentCategoryId))
+      .for("update");
+    if (!parent) return { kind: "invalid", reason: "parent_not_found" };
+    if (parent.status !== "approved") return { kind: "invalid", reason: "parent_not_approved" };
+    if (parent.parentCategoryId !== null) return { kind: "invalid", reason: "parent_is_nested" };
+    if (input.domain !== null && parent.domain !== null && parent.domain !== input.domain) {
+      return { kind: "invalid", reason: "domain_mismatch" };
+    }
+
+    const [anyChild] = await transaction
+      .select({ id: researchCategory.id })
+      .from(researchCategory)
+      .where(eq(researchCategory.parentCategoryId, input.categoryId))
+      .limit(1);
+    if (anyChild) return { kind: "invalid", reason: "category_has_children" };
+  }
+
+  // A parent's new domain must not contradict a child that already carries a different one.
+  if (input.domain !== null) {
+    const [disagreeingChild] = await transaction
+      .select({ id: researchCategory.id })
+      .from(researchCategory)
+      .where(
+        and(
+          eq(researchCategory.parentCategoryId, input.categoryId),
+          ne(researchCategory.domain, input.domain),
+        ),
+      )
+      .limit(1);
+    if (disagreeingChild) return { kind: "invalid", reason: "domain_mismatch" };
+  }
+
+  if (current.domain === input.domain && current.parentCategoryId === input.parentCategoryId) {
+    return { kind: "unchanged", category: current };
+  }
+
+  const [updated] = await transaction
+    .update(researchCategory)
+    .set({ domain: input.domain, parentCategoryId: input.parentCategoryId })
+    .where(eq(researchCategory.id, input.categoryId))
+    .returning(CATEGORY_VIEW_COLUMNS);
+  if (!updated) {
+    throw new Error("applyCategoryClassification: locked row vanished before update");
+  }
+  return {
+    kind: "classified",
+    previous: { domain: current.domain, parentCategoryId: current.parentCategoryId },
+    category: updated,
+  };
 }

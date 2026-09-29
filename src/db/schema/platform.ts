@@ -105,6 +105,9 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // Taxonomy and vocabulary — `discovery-moderation` and `discovery-vocabulary`.
   "taxonomy_category_approved",
   "taxonomy_category_rejected",
+  // A moderator set or changed an approved category's domain or parent. Separate from the
+  // two above because it is not a verdict: it happens after approval, and repeatedly.
+  "taxonomy_category_classified",
   "cluster_merge_approved",
   "cluster_merge_rejected",
   "problem_cluster_resolved",

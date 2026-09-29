@@ -28,6 +28,18 @@ const CATEGORY_PIN_ICON_KEYS = [
   "other",
 ] as const;
 
+/** Copied inline for the same reason as the pin keys; must byte-match `research_category_domain`. */
+const RESEARCH_CATEGORY_DOMAINS = [
+  "infrastructure",
+  "water_sanitation",
+  "energy_utilities",
+  "agriculture_rural",
+  "transportation_mobility",
+  "health_care",
+  "housing_shelter",
+  "industry_manufacturing",
+] as const;
+
 /**
  * A DISCRIMINATED UNION on `decision`, not `{ decision, note? }`.
  *
@@ -46,6 +58,8 @@ export const DecideCategorySchema = z.discriminatedUnion("decision", [
     .object({
       decision: z.literal("approve"),
       pinIconKey: z.enum(CATEGORY_PIN_ICON_KEYS).optional(),
+      // Optional: approval may file the category in a domain, or leave that for later.
+      domain: z.enum(RESEARCH_CATEGORY_DOMAINS).optional(),
       note: z.string().trim().max(2_000).optional(),
     })
     .strict(),
@@ -56,6 +70,19 @@ export const DecideCategorySchema = z.discriminatedUnion("decision", [
     })
     .strict(),
 ]);
+
+/**
+ * A REPLACE of both fields, so both keys are REQUIRED and clearing one is an explicit `null`.
+ * An omitted key meaning "leave it alone" would make `{}` a valid request that does nothing,
+ * and would make "clear the parent" inexpressible without a second verb.
+ */
+export const ClassifyCategorySchema = z
+  .object({
+    domain: z.enum(RESEARCH_CATEGORY_DOMAINS).nullable(),
+    parentCategoryId: z.uuid().nullable(),
+    note: z.string().trim().max(2_000).optional(),
+  })
+  .strict();
 
 export const DecideMergeProposalSchema = z
   .object({

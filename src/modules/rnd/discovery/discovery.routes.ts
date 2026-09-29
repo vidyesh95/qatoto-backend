@@ -197,6 +197,13 @@ router.post(
   compactBody,
   moderationController.decideCategory,
 );
+router.post(
+  "/admin/categories/:categoryId/classification",
+  requireAuth,
+  discoveryModerationLimiter,
+  compactBody,
+  moderationController.classifyCategory,
+);
 /**
  * Market-insight AUTHORING (§11j.4) — what makes `market_insight` writable at all.
  *

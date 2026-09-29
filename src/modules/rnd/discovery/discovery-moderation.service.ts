@@ -16,8 +16,10 @@ import {
   type PlatformAccessError,
 } from "#src/modules/platform/roles/platform-role.service.js";
 import {
+  applyCategoryClassification,
   applyCategoryDecision,
   findCategoryStatusById,
+  type CategoryClassificationInvalidReason,
   type ResearchCategoryView,
 } from "#src/modules/rnd/programs/research-categories.service.js";
 import type { Result } from "#src/types/index.js";
@@ -37,6 +39,8 @@ export type DiscoveryModerationError =
   | PlatformAccessError
   | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
   | { type: "CATEGORY_ALREADY_DECIDED"; status: string }
+  | { type: "CATEGORY_NOT_APPROVED"; status: string }
+  | { type: "CATEGORY_CLASSIFICATION_INVALID"; reason: CategoryClassificationInvalidReason }
   | { type: "MERGE_PROPOSAL_NOT_FOUND"; proposalId: string }
   | { type: "MERGE_PROPOSAL_ALREADY_DECIDED"; status: string }
   | {
@@ -50,6 +54,7 @@ export type CategoryDecisionInput =
   | {
       readonly decision: "approve";
       readonly pinIconKey?: ResearchCategoryView["pinIconKey"];
+      readonly domain?: NonNullable<ResearchCategoryView["domain"]>;
       readonly note?: string;
     }
   | { readonly decision: "reject"; readonly note: string };
@@ -90,6 +95,7 @@ export async function decideCategory(
         // Only set on approval, and only when the moderator chose one — the write skips
         // the column entirely otherwise rather than resetting it to the default.
         pinIconKey: input.decision === "approve" ? input.pinIconKey : undefined,
+        domain: input.decision === "approve" ? input.domain : undefined,
       }),
     (row) =>
       row === null
@@ -112,6 +118,7 @@ export async function decideCategory(
               decision: input.decision,
               // Present only on the approve arm of the union — a reject has no pin to set.
               pinIconKey: input.decision === "approve" ? (input.pinIconKey ?? null) : null,
+              domain: input.decision === "approve" ? (input.domain ?? null) : null,
             },
             occurredAt: decidedAt,
           },
@@ -124,6 +131,83 @@ export async function decideCategory(
   }
 
   return { success: true, value: updated };
+}
+
+export interface CategoryClassificationInput {
+  readonly domain: ResearchCategoryView["domain"];
+  readonly parentCategoryId: string | null;
+  readonly note?: string;
+}
+
+/**
+ * Sets an approved category's domain and parent (`POST /discovery/admin/categories/:id/
+ * classification`). Moderated SEPARATELY from approval because assignment is incremental: the
+ * baseline rows predate the column, and a moderator may nest or re-file a category long after
+ * it was approved.
+ *
+ * Same check order as `decideCategory` — capability before any id is read.
+ *
+ * A request that changes nothing answers 200 with the row and writes NO audit entry: a trail
+ * entry for a write that changed nothing is a false trail, and re-saving an unchanged row is
+ * the ordinary double-click.
+ */
+export async function classifyCategory(
+  actorUserId: string,
+  categoryId: string,
+  input: CategoryClassificationInput,
+): Promise<Result<ResearchCategoryView, DiscoveryModerationError>> {
+  const capabilityResult = await requirePlatformCapability(actorUserId, "moderate_taxonomy");
+  if (!capabilityResult.success) {
+    return { success: false, error: capabilityResult.error };
+  }
+
+  const classifiedAt = new Date();
+  const outcome = await recordPlatformAction(
+    (tx) =>
+      applyCategoryClassification(tx, {
+        categoryId,
+        domain: input.domain,
+        parentCategoryId: input.parentCategoryId,
+      }),
+    (result) =>
+      result.kind !== "classified"
+        ? null
+        : {
+            eventKind: "taxonomy_category_classified",
+            actorUserId,
+            actorRoleSnapshot: capabilityResult.value.platformRole,
+            actionLabel: "Classified a category",
+            targetLabel: `category ${categoryId}`,
+            ...(input.note === undefined ? {} : { detailNote: input.note }),
+            payload: {
+              categoryId,
+              previousDomain: result.previous.domain,
+              domain: result.category.domain,
+              previousParentCategoryId: result.previous.parentCategoryId,
+              parentCategoryId: result.category.parentCategoryId,
+            },
+            occurredAt: classifiedAt,
+          },
+  );
+
+  switch (outcome.kind) {
+    case "not_found":
+      return { success: false, error: { type: "CATEGORY_NOT_FOUND", categoryId } };
+    case "not_approved":
+      return { success: false, error: { type: "CATEGORY_NOT_APPROVED", status: outcome.status } };
+    case "invalid":
+      return {
+        success: false,
+        error: { type: "CATEGORY_CLASSIFICATION_INVALID", reason: outcome.reason },
+      };
+    case "unchanged":
+    case "classified":
+      return { success: true, value: outcome.category };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      return exhaustiveCheck;
+    }
+  }
 }
 
 export interface MergeProposalView {

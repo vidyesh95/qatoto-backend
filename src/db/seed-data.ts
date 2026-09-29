@@ -24,7 +24,11 @@
  * agriculture, E-Waste & Recycling → waste-recycling, Medical Logistics → healthcare or
  * logistics (genuinely ambiguous, which is exactly what the `pending` mechanism is for).
  */
-import type { categoryPinIconKeyEnum, discoveryRegionKindEnum } from "#src/db/schema.js";
+import type {
+  categoryPinIconKeyEnum,
+  discoveryRegionKindEnum,
+  researchCategoryDomainEnum,
+} from "#src/db/schema.js";
 
 /**
  * Derived from the pgEnum rather than hand-written, so adding a pin key is a one-line
@@ -32,6 +36,7 @@ import type { categoryPinIconKeyEnum, discoveryRegionKindEnum } from "#src/db/sc
  * from inference, never a parallel duplicate).
  */
 export type CategoryPinIconKey = (typeof categoryPinIconKeyEnum.enumValues)[number];
+export type ResearchCategoryDomain = (typeof researchCategoryDomainEnum.enumValues)[number];
 export type DiscoveryRegionKind = (typeof discoveryRegionKindEnum.enumValues)[number];
 
 export interface BaselineResearchCategory {
@@ -46,6 +51,14 @@ export interface BaselineResearchCategory {
    * silently drops every pin to the default icon with no error anywhere.
    */
   readonly pinIconKey: CategoryPinIconKey;
+  /**
+   * The cross-country comparability domain. Only a FRESH database gets this from the seed:
+   * the script is ON CONFLICT DO NOTHING, so an existing row keeps whatever a moderator
+   * assigned (or NULL) and is classified through the audited moderator verb instead.
+   * `waste-recycling` sits under `water_sanitation` because the taxonomy spec files
+   * solid waste there.
+   */
+  readonly domain: ResearchCategoryDomain;
 }
 
 export const BASELINE_RESEARCH_CATEGORIES: readonly BaselineResearchCategory[] = [
@@ -54,48 +67,56 @@ export const BASELINE_RESEARCH_CATEGORIES: readonly BaselineResearchCategory[] =
     slug: "agriculture",
     label: "Agriculture",
     pinIconKey: "agriculture",
+    domain: "agriculture_rural",
   },
   {
     id: "a7e1c6b2-0f3d-4a58-9c21-1b0e6d4f8a02",
     slug: "clean-energy",
     label: "Clean Energy",
     pinIconKey: "energy",
+    domain: "energy_utilities",
   },
   {
     id: "a7e1c6b2-0f3d-4a58-9c21-1b0e6d4f8a03",
     slug: "healthcare",
     label: "Healthcare",
     pinIconKey: "health",
+    domain: "health_care",
   },
   {
     id: "a7e1c6b2-0f3d-4a58-9c21-1b0e6d4f8a04",
     slug: "housing",
     label: "Housing",
     pinIconKey: "housing",
+    domain: "housing_shelter",
   },
   {
     id: "a7e1c6b2-0f3d-4a58-9c21-1b0e6d4f8a05",
     slug: "logistics",
     label: "Logistics",
     pinIconKey: "transport",
+    domain: "transportation_mobility",
   },
   {
     id: "a7e1c6b2-0f3d-4a58-9c21-1b0e6d4f8a06",
     slug: "manufacturing",
     label: "Manufacturing",
     pinIconKey: "manufacturing",
+    domain: "industry_manufacturing",
   },
   {
     id: "a7e1c6b2-0f3d-4a58-9c21-1b0e6d4f8a07",
     slug: "water-sanitation",
     label: "Water & Sanitation",
     pinIconKey: "water",
+    domain: "water_sanitation",
   },
   {
     id: "a7e1c6b2-0f3d-4a58-9c21-1b0e6d4f8a08",
     slug: "waste-recycling",
     label: "Waste & Recycling",
     pinIconKey: "waste",
+    domain: "water_sanitation",
   },
 ];
 

@@ -17,6 +17,7 @@ import { z } from "zod";
 const PLATFORM_AUDIT_EVENT_KINDS = [
   "taxonomy_category_approved",
   "taxonomy_category_rejected",
+  "taxonomy_category_classified",
   "cluster_merge_approved",
   "cluster_merge_rejected",
   "discovery_skill_created",

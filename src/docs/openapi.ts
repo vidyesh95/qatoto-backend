@@ -993,6 +993,28 @@ const handWrittenSpec = {
         },
       },
     },
+    "/discovery/admin/categories/{categoryId}/classification": {
+      post: {
+        tags: ["Discovery"],
+        summary: "Set an approved category's domain and parent",
+        description:
+          "Requires `moderate_taxonomy`. A REPLACE of both fields: `domain` and " +
+          "`parentCategoryId` are both required and `null` clears one. Nesting is one level " +
+          "deep — the parent must be approved and top-level, the category must have no " +
+          "children — and a nested category must share its parent's domain. A request that " +
+          "changes nothing answers 200 and writes no audit entry.",
+        parameters: [
+          { name: "categoryId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": { description: "Classification recorded (or already in that state)." },
+          "403": { description: "Not platform staff." },
+          "404": { description: "No such category." },
+          "409": { description: "The category is pending or rejected." },
+          "422": { description: "Invalid body, or the nesting/domain rules refuse it." },
+        },
+      },
+    },
     "/discovery/admin/merge-proposals/{proposalId}/decide": {
       post: {
         tags: ["Discovery"],

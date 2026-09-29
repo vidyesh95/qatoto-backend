@@ -255,6 +255,29 @@ export const categoryPinIconKeyEnum = pgEnum("category_pin_icon_key", [
   "other",
 ]);
 
+// The COMPARABILITY LAYER over the user-creatable category list (FE docs/PROBLEM_TAXONOMY.md).
+//
+// A CLOSED enum, not a FK and not user-creatable: it is what lets one country's
+// `cold-storage-loss` roll up beside another country's `post-harvest-rot`. Categories stay
+// user-mintable because no fixed list predicts every problem type; the domain is assigned by
+// a `moderate_taxonomy` holder, separately from creation, so local specificity is immediate
+// and cross-country comparability is curated. NULL on the column means "not assigned yet",
+// and such a category still pins and clusters — it only stays out of the country matrix.
+//
+// NOT the pin art. `category_pin_icon_key` has an `other` default because a pin must render
+// something; a domain has no `other`, because a catch-all bucket is exactly the thing that
+// would make two countries' rows look comparable when they are not.
+export const researchCategoryDomainEnum = pgEnum("research_category_domain", [
+  "infrastructure",
+  "water_sanitation",
+  "energy_utilities",
+  "agriculture_rural",
+  "transportation_mobility",
+  "health_care",
+  "housing_shelter",
+  "industry_manufacturing",
+]);
+
 // The lifecycle of ONE person's raw report, from submission to cluster attachment.
 //
 // Geocoding and clustering both run in the async job (§4e), never in the request, so a
@@ -425,6 +448,17 @@ export const researchCategory = pgTable(
     // without waiting on a moderator. Absent from every create schema — a minter must not
     // be able to choose their own map iconography — and assigned on approval instead.
     pinIconKey: categoryPinIconKeyEnum("pin_icon_key").default("other").notNull(),
+    // Moderator-assigned, NULL until then (see `researchCategoryDomainEnum`). Absent from
+    // every create schema for the same reason `pinIconKey` is.
+    domain: researchCategoryDomainEnum("domain"),
+    // Optional nesting, ONE LEVEL DEEP. The service refuses a parent that itself has a
+    // parent and a child that itself has children, so a cycle cannot be written; the CHECK
+    // below only closes the one case a single row can express. `restrict`, because
+    // deleting a parent out from under its children would silently flatten them.
+    parentCategoryId: text("parent_category_id").references(
+      (): AnyPgColumn => researchCategory.id,
+      { onDelete: "restrict" },
+    ),
     // NULL for seeded rows. `set null`, NOT cascade (§4f) — deleting a user must not
     // delete a taxonomy every other project points at.
     createdByUserId: text("created_by_user_id").references(() => user.id, {
@@ -436,6 +470,9 @@ export const researchCategory = pgTable(
     uniqueIndex("research_category_slug_unq").on(table.slug),
     index("research_category_status_idx").on(table.status),
     index("research_category_createdByUserId_idx").on(table.createdByUserId),
+    index("research_category_domain_idx").on(table.domain),
+    index("research_category_parentCategoryId_idx").on(table.parentCategoryId),
+    check("research_category_no_self_parent_ck", sql`parent_category_id IS DISTINCT FROM id`),
   ],
 );
 

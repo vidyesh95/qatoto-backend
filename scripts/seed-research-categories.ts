@@ -30,6 +30,7 @@ async function main(): Promise<void> {
         // user-minted categories land in.
         status: "approved" as const,
         pinIconKey: category.pinIconKey,
+        domain: category.domain,
         createdByUserId: null,
       })),
     )

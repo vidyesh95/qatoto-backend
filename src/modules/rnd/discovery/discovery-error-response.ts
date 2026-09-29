@@ -10,7 +10,10 @@ import type {
   ProblemPhotoUploadError,
 } from "#src/modules/rnd/discovery/problem-clusters.service.js";
 import type { TalentProfileError } from "#src/modules/rnd/discovery/talent-profiles.service.js";
-import type { ResearchCategoryError } from "#src/modules/rnd/programs/research-categories.service.js";
+import type {
+  CategoryClassificationInvalidReason,
+  ResearchCategoryError,
+} from "#src/modules/rnd/programs/research-categories.service.js";
 import type { SupplierError } from "#src/modules/rnd/suppliers/suppliers.service.js";
 
 /**
@@ -75,6 +78,20 @@ export type DiscoveryDomainError =
  * Maps a discovery error to its HTTP shape. Does NOT touch `res` — a pure function, so it
  * is testable without a request, mirroring `mapProjectErrorToResponse`.
  */
+/** A `Record`, so a new refusal reason is a compile error here until it has a sentence. */
+const CATEGORY_CLASSIFICATION_INVALID_MESSAGES: Record<
+  CategoryClassificationInvalidReason,
+  string
+> = {
+  self_parent: "A category cannot be its own parent.",
+  parent_not_found: "That parent category does not exist.",
+  parent_not_approved: "The parent must be an approved category.",
+  parent_is_nested: "That parent is itself nested. Categories nest one level deep only.",
+  category_has_children:
+    "This category has categories nested under it, so it cannot be nested itself.",
+  domain_mismatch: "A nested category must share its parent's domain.",
+};
+
 function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
   readonly statusCode: number;
   readonly message: string;
@@ -211,6 +228,18 @@ function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
               ? "The target cluster is resolved. Reopen it before merging into it."
               : "The target cluster has already been merged into another.",
       };
+    // One message per reason: each names the fix, because the moderator is looking at a
+    // picker and needs to know which of the two selects to change.
+    case "CATEGORY_CLASSIFICATION_INVALID":
+      return {
+        statusCode: 422,
+        message: CATEGORY_CLASSIFICATION_INVALID_MESSAGES[error.reason],
+        errors: {
+          [error.reason === "domain_mismatch" ? "domain" : "parentCategoryId"]: [
+            CATEGORY_CLASSIFICATION_INVALID_MESSAGES[error.reason],
+          ],
+        },
+      };
     // NOTE: there is deliberately no COORDINATES_OUT_OF_RANGE arm. Coordinates never
     // arrive from a client at all — `POST /discovery/problem-reports` takes `locationText`
     // and the server geocodes it — so there is no client-supplied coordinate left to
@@ -235,6 +264,12 @@ function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       };
     case "CATEGORY_ALREADY_DECIDED":
       return { statusCode: 409, message: `That category is already ${error.status}.` };
+    // A pending category takes its domain on approval; a rejected one is not in the taxonomy.
+    case "CATEGORY_NOT_APPROVED":
+      return {
+        statusCode: 409,
+        message: `That category is ${error.status}. Only an approved category can be classified.`,
+      };
     case "MERGE_PROPOSAL_ALREADY_DECIDED":
       return { statusCode: 409, message: `That proposal is already ${error.status}.` };
     // Resolve needs `active`, reopen needs `resolved`. The current state is named so a moderator

@@ -7,6 +7,7 @@ import {
   respondValidationFailed,
 } from "#src/modules/rnd/discovery/discovery-error-response.js";
 import {
+  ClassifyCategorySchema,
   DecideCategorySchema,
   DecideMergeProposalSchema,
   ListMergeProposalsQuerySchema,
@@ -45,6 +46,38 @@ export async function decideCategory(req: Request, res: Response): Promise<void>
     statusCode: 200,
     message: "Category decision recorded",
     data: decideResult.value,
+  };
+  res.status(200).json(response);
+}
+
+/** POST /discovery/admin/categories/:categoryId/classification */
+export async function classifyCategory(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedBody = ClassifyCategorySchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const classifyResult = await moderationService.classifyCategory(
+    req.user.id,
+    firstParam(req.params.categoryId ?? ""),
+    parsedBody.data,
+  );
+  if (!classifyResult.success) {
+    respondDiscoveryError(res, classifyResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Category classification recorded",
+    data: classifyResult.value,
   };
   res.status(200).json(response);
 }

@@ -33,6 +33,7 @@ import {
 } from "#src/modules/rnd/workshop/daily-logs.schemas.js";
 import { CreateCategorySchema } from "#src/modules/rnd/discovery/discovery-catalog.schemas.js";
 import {
+  ClassifyCategorySchema,
   DecideCategorySchema,
   DecideMergeProposalSchema,
   ReopenProblemClusterSchema,
@@ -284,6 +285,10 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
     required: true,
   },
   "patch /suppliers/{supplierId}": { schema: UpdateSupplierSchema, required: true },
+  "post /discovery/admin/categories/{categoryId}/classification": {
+    schema: ClassifyCategorySchema,
+    required: true,
+  },
   "post /discovery/admin/categories/{categoryId}/decide": {
     schema: DecideCategorySchema,
     required: true,
