@@ -264,8 +264,9 @@ sending a non-moderator a request that is ALSO malformed and requiring **403, no
   the three audit labels this bullet predicted, in their own enum-only migration. The bullet is kept
   struck through rather than deleted because its reasoning is what kept a label from being added
   before its lever existed, and the same rule still governs the next one.
-- **No rights-claim intake.** `claim-targets` serves a picker for a flow that prepares a `mailto:`
-  notice on the frontend; nothing posts to Qatoto, by that flow's own explicit decision.
+- ~~**No rights-claim intake.**~~ **IT LANDED — see §10.8.** `claim-targets` still serves the
+  picker; the claim it builds now posts to `blueprint_rights_claim`, with the `mailto:` notice kept
+  on the frontend as the fallback when the API cannot be reached.
 
 ---
 
@@ -671,6 +672,37 @@ audit entry; the **dismissal** did write one, because that is a staff action; an
 note stayed **off** the hash-linked chain.
 
 ---
+
+### 10.8 Rights claims — a sibling queue, not a report reason
+
+`POST /blueprints/teardowns/:teardownSlug/claims` → `blueprint_rights_claim` → `GET
+/blueprints/admin/rights-claims`. A claim is a sworn notice by an identified claimant naming one
+document, fabrication file or part (or the whole teardown), and it has its own table for §10.2's
+reason: its columns, its audience and its retention are its own.
+
+- **Filing moves nothing and audits nothing** — §10.1 unchanged. A moderator answers a claim either
+  by dismissing it (`POST /admin/rights-claims/:claimId/dismiss`, audit label
+  `blueprint_rights_claim_dismissed`) or by flagging or quarantining the teardown with
+  `rightsClaimId` on the existing `moderation-state` command. That sets the claim `actioned` with the
+  resolver, instant and note, and writes `blueprint_moderation_action.rights_claim_id`. A decision
+  answers a report or a claim, never both (`blueprint_moderation_action_answered_ck`).
+- **Teardown-level, whatever the target.** No verb acts on one file; a quarantine withholds them
+  all. A claim naming one part is answered on its teardown, and the target is shown so the moderator
+  can judge it.
+- **Authenticated and identified, with a required idempotency key** — one OPEN claim per claimant
+  per target (`blueprint_rights_claim_open_claimant_target_uidx`), so a dismissal frees the target
+  for a better-evidenced claim. `sworn_at` is the server's instant; the body carries only which of
+  the three clauses were accepted, and the schema refuses anything short of all three.
+- **The claimant is visible to staff only.** The admin queue is the one read that selects the
+  claimant columns or a claim-linked `reason_note`; no public, studio or `/mine` serializer may.
+- **Retention: six years after resolution, then purged.** Art. 17(3)(e) keeps the notice through an
+  account erasure (`text-pii-register.ts`, `retain`); `sweep-expired-rights-claim-details` (daily,
+  04:45 UTC) nulls the claimant columns and the resolution note six years after `resolved_at` and
+  stamps `claimant_details_purged_at`. `blueprint_rights_claim_purge_ck` refuses a half-purged row
+  and a purged open one.
+- ⚠️ **Not a statutory filing.** No designated DMCA agent, no counter-notice path, no
+  repeat-infringer policy. Storing the claim changed where it lands, not what it is.
+- Proven against Postgres in `db:verify-teardown-constraints` §14.
 
 ## 11. Uploaded documents and fabrication files
 

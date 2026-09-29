@@ -424,6 +424,7 @@ export async function setShowcaseLaunchModerationState(req: Request, res: Respon
     verb: parsedCommand.data.verb,
     reasonNote: parsedCommand.data.reasonNote,
     reportId: parsedCommand.data.reportId,
+    rightsClaimId: parsedCommand.data.rightsClaimId,
     staff,
   });
 

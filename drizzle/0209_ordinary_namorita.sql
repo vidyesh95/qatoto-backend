@@ -1,0 +1,1 @@
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'blueprint_rights_claim_dismissed' BEFORE 'commerce_content_hidden';

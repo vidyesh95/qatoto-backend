@@ -47,18 +47,59 @@ const ReasonNoteSchema = z
  */
 const ReportIdSchema = z.uuid("A report id is a UUID.").nullable().default(null);
 
-export const BlueprintModerationCommandSchema = z.discriminatedUnion("verb", [
+/**
+ * The rights claim this decision answers, when there is one — `reportId`'s sibling, and never both.
+ *
+ * ⚠️ ACCEPTED ON EVERY ARM'S BODY, REFUSED BY THE SERVICE OFF THE TEARDOWN ARM. A claim only exists
+ * on a teardown, so a case study or showcase decision naming one answers "claim not found" — the
+ * same bytes as a claim about a different teardown. Splitting the command schema per arm to refuse
+ * it earlier would fork a union three routes share.
+ *
+ * ⚠️ ONE CLAIM ANSWERS FOR ALL OF A TEARDOWN'S FILES. A claim may name a single document or part,
+ * but no verb acts on a single file — a quarantine withholds them all — so the decision is taken on
+ * the teardown and the claim records which file prompted it.
+ */
+const RightsClaimIdSchema = z.uuid("A rights claim id is a UUID.").nullable().default(null);
+
+const BlueprintModerationVerbCommandSchema = z.discriminatedUnion("verb", [
   z
-    .object({ verb: z.literal("flag"), reasonNote: ReasonNoteSchema, reportId: ReportIdSchema })
+    .object({
+      verb: z.literal("flag"),
+      reasonNote: ReasonNoteSchema,
+      reportId: ReportIdSchema,
+      rightsClaimId: RightsClaimIdSchema,
+    })
     .strict(),
   z
     .object({
       verb: z.literal("quarantine"),
       reasonNote: ReasonNoteSchema,
       reportId: ReportIdSchema,
+      rightsClaimId: RightsClaimIdSchema,
     })
     .strict(),
   z
-    .object({ verb: z.literal("restore"), reasonNote: ReasonNoteSchema, reportId: ReportIdSchema })
+    .object({
+      verb: z.literal("restore"),
+      reasonNote: ReasonNoteSchema,
+      reportId: ReportIdSchema,
+      rightsClaimId: RightsClaimIdSchema,
+    })
     .strict(),
 ]);
+
+/**
+ * ⚠️ A REPORT OR A CLAIM, NEVER BOTH. `blueprint_moderation_action_answered_ck` says the same in
+ * SQL; refusing here names the field instead of surfacing a 23514.
+ */
+export const BlueprintModerationCommandSchema = BlueprintModerationVerbCommandSchema.superRefine(
+  (command, context) => {
+    if (command.reportId !== null && command.rightsClaimId !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["rightsClaimId"],
+        message: "A decision answers a report or a rights claim, not both.",
+      });
+    }
+  },
+);

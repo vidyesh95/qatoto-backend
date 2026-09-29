@@ -239,6 +239,16 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
    * with the report queue that makes it reachable.
    */
   "blueprint_content_report_dismissed",
+  /**
+   * A moderator dismissing a rights claim filed through `POST /blueprints/teardowns/:slug/claims`.
+   *
+   * ⚠️ ITS OWN LABEL, NOT A REUSE OF `blueprint_content_report_dismissed`. A claim is a different
+   * row in a different table (`blueprint_rights_claim`), and an audit entry whose label names the
+   * wrong table is one a later reader follows to the wrong place. Actioning a claim needs no label
+   * of its own: it rides on the flag or quarantine entry that did the actioning, as
+   * `answeredRightsClaimId` in its payload.
+   */
+  "blueprint_rights_claim_dismissed",
   // Commerce content moderation — `commerce-content-reports` (Appendix A12). Staff
   // decisions only. An AUTOMATIC threshold hide never reaches this chain: this table's
   // `actorUserId` is NOT NULL because every entry must name an accountable human, and

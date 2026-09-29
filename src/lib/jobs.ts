@@ -183,6 +183,10 @@ export const JOB_NAMES = {
   // day, and any showcase asset left with no row naming it.
   sweepOrphanShowcaseImagesTick: "sweep-orphan-showcase-images-tick",
   sweepOrphanShowcaseImages: "sweep-orphan-showcase-images",
+  // BLUEPRINTS — rights claims. Daily: nulls a claimant's details six years after their claim was
+  // resolved (the retention period the privacy policy states).
+  sweepExpiredRightsClaimDetailsTick: "sweep-expired-rights-claim-details-tick",
+  sweepExpiredRightsClaimDetails: "sweep-expired-rights-claim-details",
   // R&D §6 CIVIC PULSE — problem-report photos. Daily: deletes photos no report claimed within a
   // day, and any problem-photo asset left with no row naming it.
   sweepOrphanProblemPhotosTick: "sweep-orphan-problem-photos-tick",
@@ -1385,6 +1389,30 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanShowcaseImages),
     },
   },
+  [JOB_NAMES.sweepExpiredRightsClaimDetailsTick]: {
+    name: JOB_NAMES.sweepExpiredRightsClaimDetailsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepExpiredRightsClaimDetailsTick),
+    },
+  },
+  [JOB_NAMES.sweepExpiredRightsClaimDetails]: {
+    name: JOB_NAMES.sweepExpiredRightsClaimDetails,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // `singleton`: the purge is idempotent, and one run at a time keeps the batches ordered.
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepExpiredRightsClaimDetails),
+    },
+  },
   [JOB_NAMES.sweepOrphanProblemPhotosTick]: {
     name: JOB_NAMES.sweepOrphanProblemPhotosTick,
     payloadSchema: TickPayloadSchema,
@@ -1751,6 +1779,10 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // Nothing waits on it: an unclaimed upload is invisible to readers, so a late run only costs
   // storage for a few more hours.
   [JOB_NAMES.sweepOrphanShowcaseImagesTick]: "25 4 * * *",
+  // BLUEPRINTS — the rights-claim retention purge. 04:45 UTC, a free slot. Nothing waits on it:
+  // a claim reaches its six years at some point in a day, and a purge a few hours late is still
+  // inside any honest reading of "then deleted".
+  [JOB_NAMES.sweepExpiredRightsClaimDetailsTick]: "45 4 * * *",
   // CIVIC PULSE — the problem-photo sweep and 2-year retention purge. 04:35 UTC, clear of the
   // showcase sweep at 04:25 so the two never spend the Cloudinary Admin API budget in the same
   // minute.
@@ -2124,6 +2156,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.sweepPendingDocumentScans]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.sweepOrphanShowcaseImagesTick]: TickPayloadSchema,
   [JOB_NAMES.sweepOrphanShowcaseImages]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.sweepExpiredRightsClaimDetailsTick]: TickPayloadSchema,
+  [JOB_NAMES.sweepExpiredRightsClaimDetails]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.sweepOrphanProblemPhotosTick]: TickPayloadSchema,
   [JOB_NAMES.sweepOrphanProblemPhotos]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.syncComtradeTradeFlowsTick]: TickPayloadSchema,
@@ -2326,6 +2360,8 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.sweepPendingDocumentScans}:${asOfIso}`,
   sweepOrphanShowcaseImages: (asOfIso: string): string =>
     `${JOB_NAMES.sweepOrphanShowcaseImages}:${asOfIso}`,
+  sweepExpiredRightsClaimDetails: (asOfIso: string): string =>
+    `${JOB_NAMES.sweepExpiredRightsClaimDetails}:${asOfIso}`,
   sweepOrphanProblemPhotos: (asOfIso: string): string =>
     `${JOB_NAMES.sweepOrphanProblemPhotos}:${asOfIso}`,
   reconcileCommercePayments: (asOfIso: string): string =>

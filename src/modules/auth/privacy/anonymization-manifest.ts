@@ -766,6 +766,23 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
      * enforcement action cannot be appealed or defended. Same verdict, same basis, as
      * `user_moderation_action.moderator_user_id` and `case_study.reviewed_by_user_id`.
      */
+    /**
+     * The claimant: `null_out`, on the reporter's reasoning and more strongly. A rights claim is a
+     * sworn legal notice about somebody else's work, and it may be the basis of a quarantine that
+     * is still in force; a departing claimant must not be able to erase it. What they wrote is
+     * free text and sits in the text-PII register as `retain`, bounded by the six-year purge in
+     * `sweep-expired-rights-claim-details`.
+     *
+     * Nulling it releases that account's slot in `blueprint_rights_claim_open_claimant_target_uidx`,
+     * which is partial on `claimant_user_id IS NOT NULL` — the report index's side effect, and
+     * harmless for the same reason: it costs an erasure.
+     */
+    "blueprint_rights_claim.claimant_user_id": { kind: "null_out" },
+    "blueprint_rights_claim.resolved_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "Names the moderator who dismissed or actioned a rights claim; an unattributable decision on a legal notice cannot be appealed or defended.",
+    },
     "blueprint_moderation_action.moderator_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",

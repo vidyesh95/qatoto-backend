@@ -4,11 +4,9 @@ The `/blueprints` backend is substantially complete and already wired end-to-end
 
 Below is a breakdown of the current operational status, what was recently completed, and the deliberate architectural boundaries or potential next-phase items remaining.
 
-⚠️ **FOUR OF THE FIVE ITEMS IN §2 HAVE SINCE SHIPPED** — A, B, C and D. They are struck through
-rather than deleted, because the reasoning under each is what kept it from being built before its
-lever existed, and the same rule governs whatever is proposed next. **E (in-platform rights-claim
-intake) remains deliberately unbuilt**; the `mailto:` flow behind `claim-targets` is still the
-design.
+⚠️ **ALL FIVE ITEMS IN §2 HAVE SINCE SHIPPED** — A, B, C, D and, last, E (in-platform rights-claim
+intake). They are struck through rather than deleted, because the reasoning under each is what kept
+it from being built before its lever existed, and the same rule governs whatever is proposed next.
 
 ---
 
@@ -80,9 +78,14 @@ If you are planning the next phase of capabilities, the following features are n
 - ⚠️ **No staff draft route, ever.** A draft can hold a withheld company name, and §6's guarantee is
   that exactly one route serves such a name. See `BLUEPRINTS_BACKEND_STRUCTURE.md` §13.
 
-### E. Direct Rights-Claim / DMCA Intake
-- **Current State:** `GET /teardowns/:teardownSlug/claim-targets` provides the list of items for an IP claim. The frontend `/report` route generates a structured `mailto:` notice.
-- **What's Missing:** There is no in-platform database table or submission endpoint for submitting formal legal rights claims.
+### ~~E. Direct Rights-Claim / DMCA Intake~~ — SHIPPED, as a moderator queue and NOT as a DMCA process
+- `POST /teardowns/:teardownSlug/claims` stores a sworn claim in `blueprint_rights_claim` (migrations
+  0209–0210); `GET /admin/rights-claims` and `POST /admin/rights-claims/:claimId/dismiss` are its
+  queue, and a flag or quarantine answers one through `rightsClaimId`. See
+  `BLUEPRINTS_BACKEND_STRUCTURE.md` §10.8.
+- ⚠️ **Still not a statutory filing.** No DMCA agent is designated, and there is still no
+  counter-notice path or repeat-infringer policy. The frontend keeps the `mailto:` notice as a
+  fallback when the API cannot be reached.
 
 ---
 

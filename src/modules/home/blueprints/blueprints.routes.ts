@@ -13,6 +13,7 @@ import {
   blueprintHeroWriteLimiter,
   blueprintLikeLimiter,
   blueprintReportModerationLimiter,
+  blueprintRightsClaimLimiter,
   blueprintSaveLimiter,
   blueprintUpvoteLimiter,
   blueprintViewBeaconBurstLimiter,
@@ -34,6 +35,7 @@ import * as blueprintContentReportController from "#src/modules/home/blueprints/
 import * as blueprintDraftController from "#src/modules/home/blueprints/blueprint-draft.controller.js";
 import * as blueprintEngagementController from "#src/modules/home/blueprints/blueprint-engagement.controller.js";
 import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
+import * as blueprintRightsClaimController from "#src/modules/home/blueprints/blueprint-rights-claim.controller.js";
 import * as caseStudyController from "#src/modules/home/blueprints/case-study.controller.js";
 import * as showcaseLaunchController from "#src/modules/home/blueprints/showcase-launch.controller.js";
 import * as teardownController from "#src/modules/home/blueprints/teardown.controller.js";
@@ -648,6 +650,29 @@ router.post(
   blueprintContentReportController.makeCreateReportHandler("teardown", "teardownSlug"),
 );
 
+/*
+ * RIGHTS CLAIMS — a sworn IP notice against one teardown, into `/admin/rights-claims`.
+ *
+ * ⚠️ NOT A REPORT, and not a statutory filing either: Qatoto has designated no DMCA agent, so this
+ * reaches a moderator and nothing more. Authenticated and identified for the report route's reason —
+ * one OPEN claim per claimant per target is the dedup, and an anonymous claim cannot be deduplicated.
+ *
+ * ⚠️ IDEMPOTENCY IS REQUIRED HERE WHERE THE REPORT ROUTE DOES WITHOUT, because the unique index is
+ * scoped to `open` claims per TARGET: a double-submit that raced a dismissal, or one whose client
+ * rotated the target between retries, is not something the index alone makes a 409.
+ *
+ * `longFormBody`: the claim runs to 5,000 characters, which can pass 16 KB in multi-byte text.
+ */
+router.post(
+  "/teardowns/:teardownSlug/claims",
+  requireAuth,
+  blueprintRightsClaimLimiter,
+  requireIdentifiedUser,
+  longFormBody,
+  idempotency({ required: true }),
+  blueprintRightsClaimController.createRightsClaim,
+);
+
 router.post(
   "/case-studies/:caseStudySlug/reports",
   requireAuth,
@@ -753,6 +778,30 @@ router.post(
   compactBody,
   idempotency({ required: true }),
   blueprintContentReportController.dismissBlueprintReport,
+);
+
+/**
+ * GET /blueprints/admin/rights-claims — the claim queue, oldest first.
+ *
+ * ⚠️ THE ONE READ IN THIS ROUTER THAT SERVES A CLAIMANT'S NAME AND EMAIL. Kept apart from
+ * `/admin/content-reports` so that exposure stays on one route. Acting on a claim goes through the
+ * existing `/admin/teardowns/:teardownId/moderation-state` with `rightsClaimId`; only the dismissal
+ * is claim-specific.
+ */
+router.get(
+  "/admin/rights-claims",
+  requireAuth,
+  blueprintRightsClaimController.listRightsClaimQueue,
+);
+
+router.post(
+  "/admin/rights-claims/:claimId/dismiss",
+  requireAuth,
+  blueprintReportModerationLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  idempotency({ required: true }),
+  blueprintRightsClaimController.dismissRightsClaim,
 );
 
 router.patch(

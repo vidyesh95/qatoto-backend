@@ -4,6 +4,7 @@ import { db } from "#src/db/index.js";
 import {
   blueprintContentReport,
   blueprintModerationAction,
+  blueprintRightsClaim,
   caseStudy,
   showcaseLaunch,
   teardown,
@@ -74,7 +75,10 @@ export type BlueprintModerationError =
    * guessing ids, and the queue already tells them everything they are meant to know.
    */
   | { readonly type: "BLUEPRINT_REPORT_NOT_FOUND" }
-  | { readonly type: "BLUEPRINT_REPORT_ALREADY_RESOLVED" };
+  | { readonly type: "BLUEPRINT_REPORT_ALREADY_RESOLVED" }
+  /** The same two answers for a rights claim, for the same reasons. */
+  | { readonly type: "BLUEPRINT_RIGHTS_CLAIM_NOT_FOUND" }
+  | { readonly type: "BLUEPRINT_RIGHTS_CLAIM_ALREADY_RESOLVED" };
 
 export interface BlueprintModerationView {
   readonly targetId: string;
@@ -90,12 +94,18 @@ interface ApplyVerbInput {
   /**
    * The open report this decision answers, when there is one.
    *
-   * ⚠️ NULL IS THE ORDINARY CASE. The primary quarantine path is an emailed rights claim that
-   * never touches the queue (§3.7), so a decision with no report id is a complete decision — not
-   * a missing link. What a non-null id buys is that the reporter's own list stops saying `open`
+   * ⚠️ NULL IS THE ORDINARY CASE. A quarantine usually answers a filed rights claim, which is
+   * `rightsClaimId` below, or an email sent by the frontend's fallback notice, which reaches no
+   * queue at all — so a decision with no report id is a complete decision, not a missing link. What a non-null id buys is that the reporter's own list stops saying `open`
    * about a complaint somebody already acted on.
    */
   readonly reportId: string | null;
+  /**
+   * The open rights claim this decision answers, when there is one. Never set together with
+   * `reportId` — the command schema and `blueprint_moderation_action_answered_ck` both refuse it.
+   * Only a teardown can carry one; on the other arms it answers "claim not found".
+   */
+  readonly rightsClaimId: string | null;
   readonly staff: PlatformStaffContext;
 }
 
@@ -244,6 +254,8 @@ type TransactionOutcome =
     }
   | { readonly kind: "report_missing" }
   | { readonly kind: "report_already_resolved" }
+  | { readonly kind: "rights_claim_missing" }
+  | { readonly kind: "rights_claim_already_resolved" }
   | {
       readonly kind: "applied";
       readonly nextState: BlueprintModerationState;
@@ -293,6 +305,10 @@ function toResult(
       return { success: false, error: { type: "BLUEPRINT_REPORT_NOT_FOUND" } };
     case "report_already_resolved":
       return { success: false, error: { type: "BLUEPRINT_REPORT_ALREADY_RESOLVED" } };
+    case "rights_claim_missing":
+      return { success: false, error: { type: "BLUEPRINT_RIGHTS_CLAIM_NOT_FOUND" } };
+    case "rights_claim_already_resolved":
+      return { success: false, error: { type: "BLUEPRINT_RIGHTS_CLAIM_ALREADY_RESOLVED" } };
     case "applied":
       return {
         success: true,
@@ -418,6 +434,32 @@ async function applyVerb(
       }
 
       /*
+       * 3c. THE RIGHTS CLAIM THIS DECISION ANSWERS — 3b's rules exactly: locked and checked before
+       * the first write, and a claim about a different teardown answers "not found".
+       *
+       * ⚠️ TEARDOWN-ONLY, AND THAT COVERS EVERY CLAIM TARGET. `arm` is the blueprint type, not the
+       * claim's target; a claim naming one document or part lives on its teardown, and the verb acts
+       * on the teardown because no verb acts on a single file.
+       */
+      if (input.rightsClaimId !== null) {
+        if (arm !== "teardown") return { kind: "rights_claim_missing" };
+
+        const [claimRow] = await transaction
+          .select({
+            id: blueprintRightsClaim.id,
+            status: blueprintRightsClaim.status,
+            teardownId: blueprintRightsClaim.teardownId,
+          })
+          .from(blueprintRightsClaim)
+          .where(eq(blueprintRightsClaim.id, input.rightsClaimId))
+          .for("update");
+
+        if (!claimRow) return { kind: "rights_claim_missing" };
+        if (claimRow.teardownId !== input.targetId) return { kind: "rights_claim_missing" };
+        if (claimRow.status !== "open") return { kind: "rights_claim_already_resolved" };
+      }
+
+      /*
        * 4. THE MOVE, guarded on the state the lock observed.
        *
        * The per-arm `nextState` re-checks are not redundant with the matrix. They are what lets
@@ -497,10 +539,12 @@ async function applyVerb(
           /*
            * ⚠️ THE REPORT ID IS AN ID, SO IT TRAVELS; THE NOTE IS NOT, SO IT DOES NOT. The chain
            * carries `hasReasonNote: true` and never the text — and `answeredReportId` is null on
-           * the ordinary emailed-claim path rather than absent, so a reader of the chain can tell
+           * a claim-answering or unprompted decision rather than absent, so a reader of the chain can tell
            * "no report" from "field added later".
            */
           answeredReportId: input.reportId,
+          // An id, so it travels; null rather than absent, for the same reason as the report's.
+          answeredRightsClaimId: input.rightsClaimId,
         },
         occurredAt: decidedAt,
       });
@@ -537,11 +581,34 @@ async function applyVerb(
           );
       }
 
+      /*
+       * 6b. THE RIGHTS CLAIM, ANSWERED, with the resolver, the instant and the note set exactly as
+       * a dismissal sets them — so the queue's Actioned tab can say who decided and why, and the
+       * retention sweep's six years start from this `resolved_at`.
+       */
+      if (input.rightsClaimId !== null) {
+        await transaction
+          .update(blueprintRightsClaim)
+          .set({
+            status: "actioned",
+            resolvedByUserId: input.staff.staffUserId,
+            resolvedAt: decidedAt,
+            resolutionNote: input.reasonNote,
+          })
+          .where(
+            and(
+              eq(blueprintRightsClaim.id, input.rightsClaimId),
+              eq(blueprintRightsClaim.status, "open"),
+            ),
+          );
+      }
+
       // 7. The decision record, which is where the note lives.
       await transaction.insert(blueprintModerationAction).values({
         actionKind: actionKindForVerb(input.verb),
         targetKind: arm,
         reportId: input.reportId,
+        rightsClaimId: input.rightsClaimId,
         ...targetColumnsForArm(arm, input.targetId),
         moderatorUserId: input.staff.staffUserId,
         moderatorRoleSnapshot: input.staff.platformRole,

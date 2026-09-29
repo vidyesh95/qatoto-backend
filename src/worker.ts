@@ -41,6 +41,7 @@ import {
   handleReconcileConnectorStateTick,
   handleRecomputeLocalizationAssessmentsTick,
   handleSweepOrphanShowcaseImagesTick,
+  handleSweepExpiredRightsClaimDetailsTick,
   handleSweepOrphanProblemPhotosTick,
   handleSweepPendingDocumentScansTick,
   handleSyncComtradeTradeFlowsTick,
@@ -61,6 +62,7 @@ import {
   handleAssembleDataExport,
   handlePruneExpiredDataExports,
 } from "#src/modules/auth/privacy/data-export.job.js";
+import { handleSweepExpiredRightsClaimDetails } from "#src/modules/home/blueprints/sweep-expired-rights-claim-details.js";
 import { handleSweepOrphanShowcaseImages } from "#src/modules/home/blueprints/sweep-orphan-showcase-images.js";
 import { handlePruneEngagementData } from "#src/modules/home/engagement/prune-engagement-data.js";
 import { handleRecomputeUserAffinities } from "#src/modules/home/engagement/recompute-user-affinities.js";
@@ -668,6 +670,19 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.sweepOrphanShowcaseImages,
     workOptions,
     runJob(JOB_NAMES.sweepOrphanShowcaseImages, handleSweepOrphanShowcaseImages),
+  );
+
+  // Blueprints rights claims — the daily retention purge of claimant details six years after a
+  // claim was resolved.
+  await boss.work(
+    JOB_NAMES.sweepExpiredRightsClaimDetailsTick,
+    workOptions,
+    runJob(JOB_NAMES.sweepExpiredRightsClaimDetailsTick, handleSweepExpiredRightsClaimDetailsTick),
+  );
+  await boss.work(
+    JOB_NAMES.sweepExpiredRightsClaimDetails,
+    workOptions,
+    runJob(JOB_NAMES.sweepExpiredRightsClaimDetails, handleSweepExpiredRightsClaimDetails),
   );
 
   // Civic Pulse — the daily sweep of unclaimed problem-report photos and of any problem-photo

@@ -424,6 +424,7 @@ async function main(): Promise<void> {
       verb: "flag",
       reasonNote: "A reader reported this as not the stated product.",
       reportId: answeredReport?.id ?? null,
+      rightsClaimId: null,
       staff: { staffUserId: moderatorUserId, platformRole: "admin" },
     });
     check(
@@ -474,6 +475,7 @@ async function main(): Promise<void> {
         verb: "restore",
         reasonNote: "Trying to answer a report that is already closed.",
         reportId: answeredReport.id,
+        rightsClaimId: null,
         staff: { staffUserId: moderatorUserId, platformRole: "admin" },
       });
       check(
@@ -541,6 +543,7 @@ async function main(): Promise<void> {
       reasonNote: "A rights holder emailed about the hero image.",
       // ⚠️ NULL — the emailed rights claim is exactly the case this field must not require.
       reportId: null,
+      rightsClaimId: null,
       staff: { staffUserId: moderatorUserId, platformRole: "admin" },
     });
     check(
@@ -639,6 +642,7 @@ async function main(): Promise<void> {
       verb: "restore",
       reasonNote: "Reviewed the report; the build is the makers' own.",
       reportId: null,
+      rightsClaimId: null,
       staff: { staffUserId: moderatorUserId, platformRole: "admin" },
     });
     check(

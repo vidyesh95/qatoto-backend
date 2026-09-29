@@ -118,6 +118,25 @@ export function respondBlueprintModerationError(
         message: "That report was already resolved by another moderator.",
       });
       return;
+    /*
+     * The rights-claim siblings of the two report arms, with the same reasoning — including that a
+     * claim id sent on a case study or showcase decision is "not found", because no claim is about
+     * one.
+     */
+    case "BLUEPRINT_RIGHTS_CLAIM_NOT_FOUND":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "No open rights claim with that id is about this teardown.",
+      });
+      return;
+    case "BLUEPRINT_RIGHTS_CLAIM_ALREADY_RESOLVED":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "That rights claim was already answered by another moderator.",
+      });
+      return;
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled blueprint moderation error: ${JSON.stringify(exhaustiveCheck)}`);

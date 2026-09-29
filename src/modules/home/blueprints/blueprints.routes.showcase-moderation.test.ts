@@ -157,6 +157,7 @@ describe("blueprints showcase moderation routes", () => {
       reasonNote: "A reader reported fabricated results.",
       // ⚠️ NULL, NOT ABSENT. `.default(null)` means the service never sees `undefined`.
       reportId: null,
+      rightsClaimId: null,
       staff: MODERATOR_CONTEXT.value,
     });
   });

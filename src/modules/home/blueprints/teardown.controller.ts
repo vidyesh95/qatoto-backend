@@ -364,6 +364,7 @@ export async function setTeardownModerationState(req: Request, res: Response): P
     verb: parsedCommand.data.verb,
     reasonNote: parsedCommand.data.reasonNote,
     reportId: parsedCommand.data.reportId,
+    rightsClaimId: parsedCommand.data.rightsClaimId,
     staff,
   });
 

@@ -114,7 +114,9 @@ export const userReportStatusEnum = pgEnum("user_report_status", ["open", "actio
  * whose only honest answer is "we cannot do that here" belongs in a queue that says so, and a
  * reason nothing can act on should not be offered at all.
  *
- *   `rights_claim`             the reason QUARANTINE exists, and the only value that can reach it
+ *   `rights_claim`             the reason QUARANTINE exists, and the only REPORT reason that can
+ *                              reach it. A sworn claim is filed separately, into
+ *                              `blueprint_rights_claim`; this reason is a reader's one-line flag
  *   `fabricated_measurements`  the survey IS the claim; telemetry nobody took is the core failure
  *   `dangerous_procedure`      a disassembly step that will injure somebody
  *   `not_the_stated_product`   the write-up is not about the unit it names

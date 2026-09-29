@@ -369,6 +369,7 @@ export async function setCaseStudyModerationState(req: Request, res: Response): 
     verb: parsedCommand.data.verb,
     reasonNote: parsedCommand.data.reasonNote,
     reportId: parsedCommand.data.reportId,
+    rightsClaimId: parsedCommand.data.rightsClaimId,
     staff,
   });
 

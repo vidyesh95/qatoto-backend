@@ -14,6 +14,10 @@ import {
 } from "#src/modules/home/blueprints/blueprint-draft.schemas.js";
 import { BlueprintModerationCommandSchema } from "#src/modules/home/blueprints/blueprint-moderation.schemas.js";
 import {
+  CreateBlueprintRightsClaimSchema,
+  DismissBlueprintRightsClaimSchema,
+} from "#src/modules/home/blueprints/blueprint-rights-claim.schemas.js";
+import {
   CountersignPeriodSchema,
   DeclineAgreementSchema,
   FinalizePeriodSchema,
@@ -649,6 +653,19 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   },
   "post /blueprints/admin/content-reports/{reportId}/dismiss": {
     schema: DismissBlueprintReportSchema,
+    required: true,
+  },
+
+  /*
+   * THE RIGHTS-CLAIM INTAKE AND ITS DISMISSAL. `GET /blueprints/admin/rights-claims` is absent for
+   * the report queue's reason: a GET never touches `req.body`.
+   */
+  "post /blueprints/teardowns/{teardownSlug}/claims": {
+    schema: CreateBlueprintRightsClaimSchema,
+    required: true,
+  },
+  "post /blueprints/admin/rights-claims/{claimId}/dismiss": {
+    schema: DismissBlueprintRightsClaimSchema,
     required: true,
   },
   "post /research-programs/{programSlug}/papers/{paperId}/file": {

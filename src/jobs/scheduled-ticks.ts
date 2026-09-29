@@ -825,6 +825,29 @@ export async function handleSweepOrphanShowcaseImagesTick(
 }
 
 /**
+ * The daily rights-claim retention purge tick. Day-quantized for the showcase tick's reason: the
+ * six-year cutoff is measured from a stable instant, and a double cron fire collapses into one job.
+ */
+export async function handleSweepExpiredRightsClaimDetailsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.sweepExpiredRightsClaimDetails,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.sweepExpiredRightsClaimDetails(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `sweep-expired-rights-claim-details-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/**
  * The daily problem-photo sweep tick (Civic Pulse). Day-quantized for the showcase tick's reason.
  */
 export async function handleSweepOrphanProblemPhotosTick(

@@ -1443,7 +1443,30 @@ export const blueprintDraftSaveLimiter = createLimiter({
   limit: 600,
 });
 
-/** POST /blueprints/admin/content-reports/:reportId/dismiss — a moderator working the queue. */
+/**
+ * POST /blueprints/teardowns/:teardownSlug/claims — a rights holder filing an IP claim.
+ *
+ * ⚠️ ITS OWN NAMESPACE, NOT `blueprintContentReport`'s. A claim is a sworn notice with an identity
+ * on it, not a one-line reader report, and a claimant who has already reported a teardown must not
+ * find their claim budget spent by it.
+ *
+ * FIVE SUCCESSFUL CLAIMS PER FIFTEEN MINUTES, failures uncounted, on `teardownSubmitLimiter`'s
+ * reasoning: the partial unique index already caps one account at one OPEN claim per target, so
+ * this bounds somebody walking the catalogue filing against many teardowns, and a claimant refused
+ * over a field they then fix has filed nothing and must not be locked out.
+ */
+export const blueprintRightsClaimLimiter = createLimiter({
+  namespace: "blueprintRightsClaim",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 5,
+  skipFailedRequests: true,
+});
+
+/**
+ * POST /blueprints/admin/content-reports/:reportId/dismiss and
+ * POST /blueprints/admin/rights-claims/:claimId/dismiss — a moderator working either queue. One
+ * budget for both: it bounds one moderator's dismissal rate, which does not change with the queue.
+ */
 export const blueprintReportModerationLimiter = createLimiter({
   namespace: "blueprintReportModeration",
   windowMs: FIFTEEN_MINUTES_MS,

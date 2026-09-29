@@ -3912,9 +3912,9 @@ export const blueprintModerationAction = pgTable(
     /**
      * The report this decision answered, when there was one.
      *
-     * ⚠️ NULLABLE, AND THE COMMONEST CASE IS NULL. The primary quarantine path is an EMAILED rights
-     * claim — blueprints doc §3.7: "nothing posts to Qatoto, by that flow's own explicit decision"
-     * — so a NOT NULL column here would make the case this lever exists for unrecordable.
+     * ⚠️ NULLABLE, AND THE COMMONEST CASE IS NULL. A quarantine usually answers a rights claim,
+     * which has its own column (`rights_claim_id`, below), or an emailed notice that reaches no
+     * queue — so a NOT NULL column here would make the case this lever exists for unrecordable.
      * `set null` so a purged report does not take the decision with it.
      *
      * ⚠️ IT SHIPPED EMPTY AND IS WRITTEN NOW. This column arrived with the reader-report intake
@@ -3924,6 +3924,16 @@ export const blueprintModerationAction = pgTable(
      * report `open` forever. `applyVerb` now sets both, in the transaction that moves the state.
      */
     reportId: text("report_id").references(() => blueprintContentReport.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * The rights claim this decision answered, when there was one. A sibling of `report_id`, never
+     * both — `blueprint_moderation_action_answered_ck`. `set null` for the same reason.
+     *
+     * ⚠️ THIS ROW'S `reason_note` MAY QUOTE THE CLAIMANT, and like the claim it is read by the admin
+     * console only. No public, studio or `/mine` serializer may select it.
+     */
+    rightsClaimId: text("rights_claim_id").references(() => blueprintRightsClaim.id, {
       onDelete: "set null",
     }),
     /** `unique`: one decision, one entry in the hash-linked chain. */
@@ -3972,6 +3982,18 @@ export const blueprintModerationAction = pgTable(
     check(
       "blueprint_moderation_action_quarantine_arm_ck",
       sql`action_kind <> 'content_quarantined' OR target_kind = 'teardown'`,
+    ),
+    index("blueprint_moderation_action_rights_claim_idx")
+      .on(table.rightsClaimId)
+      .where(sql`rights_claim_id IS NOT NULL`),
+    /**
+     * One decision answers at most one complaint, a report OR a claim. A claim only exists on a
+     * teardown, so a claim-linked action on another arm is refused here too.
+     */
+    check(
+      "blueprint_moderation_action_answered_ck",
+      sql`num_nonnulls(report_id, rights_claim_id) <= 1
+          AND (rights_claim_id IS NULL OR target_kind = 'teardown')`,
     ),
   ],
 );
@@ -4173,6 +4195,177 @@ export const blueprintContentReport = pgTable(
       sql`(resolved_by_user_id IS NULL) = (resolved_at IS NULL)
           AND (status = 'open') = (resolved_at IS NULL)
           AND (resolution_note IS NULL OR char_length(resolution_note) BETWEEN 1 AND 2000)`,
+    ),
+  ],
+);
+
+/**
+ * What a rights holder says a teardown infringes.
+ *
+ * ⚠️ BYTE-MATCHES THE FRONTEND'S `RIGHTS_CLAIM_KINDS` (`rights-claim.schemas.ts`), which named this
+ * enum before it existed. Beside its table rather than in `_primitives.ts`, because nothing outside
+ * this file reads it — that file's own rule.
+ */
+export const blueprintRightsClaimKindEnum = pgEnum("blueprint_rights_claim_kind", [
+  "patent",
+  "trade_secret",
+  "copyright_cad",
+  "trademark",
+]);
+
+/**
+ * Which part of a teardown a claim names.
+ *
+ * ⚠️ ONE SPELLING FOR THE WHOLE EXCHANGE: these are the `kind` arms of the frontend's
+ * `RightsClaimTargetSchema` and of this module's request schema. A claim that names one file is
+ * still answered at teardown level — no moderation verb acts on a single file — and this column is
+ * what lets the moderator see which file it was.
+ */
+export const blueprintRightsClaimTargetKindEnum = pgEnum("blueprint_rights_claim_target_kind", [
+  "whole_teardown",
+  "document",
+  "manufacturing_file",
+  "part",
+]);
+
+/**
+ * An intellectual-property claim about one teardown, filed by a signed-in rights holder.
+ *
+ * ⚠️ NOT A `blueprint_content_report` ROW, and the frontend's `reports.schemas.ts` says the two must
+ * not be merged. A reader report is one reason and a sentence; a claim is a sworn statement by an
+ * identified claimant naming a specific file. Their columns, their audience and their retention are
+ * different, which is this codebase's standing rule for giving a queue its own table.
+ *
+ * ⚠️ IT IS NOT A STATUTORY FILING. Qatoto has designated no DMCA agent, so this is a way to reach a
+ * moderator, and nothing about storing it changes that.
+ *
+ * ⚠️ FILING ONE MOVES NO STATE AND WRITES NO AUDIT ENTRY — `blueprint_content_report`'s three rules,
+ * unchanged. A moderator reads it and, if they act, the flag or quarantine names it through
+ * `blueprint_moderation_action.rights_claim_id`.
+ *
+ * ⚠️ THE CLAIMANT COLUMNS ARE READ BY THE ADMIN QUEUE AND NOTHING ELSE. The teardown's publisher
+ * never sees who claimed or what they wrote: no public, studio or `/mine` read may select them.
+ *
+ * ⚠️ RETAINED, THEN PURGED. The five claimant columns and the resolution note are kept while the
+ * claim is open and for six years after it is resolved (Art. 17(3)(e): a legal notice is evidence
+ * for establishing and defending a claim), then `sweep-expired-rights-claim-details` nulls them and
+ * stamps `claimant_details_purged_at`. The record that a claim existed and how it was answered
+ * survives the purge.
+ */
+export const blueprintRightsClaim = pgTable(
+  "blueprint_rights_claim",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /** `cascade`, as a report's target is: a claim about a deleted teardown has nothing to act on. */
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    /** `set null`: a departing claimant must not erase a legal notice about somebody else's work. */
+    claimantUserId: text("claimant_user_id").references(() => user.id, { onDelete: "set null" }),
+    claimKind: blueprintRightsClaimKindEnum("claim_kind").notNull(),
+    targetKind: blueprintRightsClaimTargetKindEnum("target_kind").notNull(),
+    /**
+     * The document, fabrication file or part id, from `GET /teardowns/:slug/claim-targets`.
+     * NULL exactly when the claim names the whole teardown. Not a foreign key: the three kinds live
+     * in three tables, and a file removed later must not take the claim with it.
+     */
+    targetId: text("target_id"),
+    /** The target's title when the claim was filed, so the card stays readable after a removal. */
+    targetTitleSnapshot: text("target_title_snapshot").notNull(),
+    /** Nullable ONLY after the retention purge — `blueprint_rights_claim_purge_ck`. */
+    claimantFullName: text("claimant_full_name"),
+    claimantOrganizationName: text("claimant_organization_name"),
+    claimantEmail: text("claimant_email"),
+    relationshipToRightsHolder: text("relationship_to_rights_holder"),
+    claimSubstance: text("claim_substance"),
+    /**
+     * ⚠️ SERVER-SET, NEVER CLIENT-SUPPLIED. The body carries which clauses were accepted and the
+     * service refuses anything short of all three; the instant is the server's.
+     */
+    swornAt: timestamp("sworn_at", { precision: 3 }).notNull(),
+    status: blueprintContentReportStatusEnum("status").default("open").notNull(),
+    /** `restrict`: a moderator cannot be deleted out from under a decision they made. */
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    resolvedAt: timestamp("resolved_at", { precision: 3 }),
+    /** A moderator may quote the claimant here, so the purge nulls it too. */
+    resolutionNote: text("resolution_note"),
+    claimantDetailsPurgedAt: timestamp("claimant_details_purged_at", { precision: 3 }),
+    /** `precision: 3` — the queue is keyset-paged on `(created_at, id)` with a millisecond cursor. */
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    /**
+     * ⚠️ ONE OPEN CLAIM PER CLAIMANT PER TARGET. Scoped to `open` so a claimant whose claim was
+     * dismissed can file again with better evidence. The `coalesce` folds the whole-teardown arm's
+     * NULL target into one key, which is honest only because `target_ck` forbids an empty id.
+     */
+    uniqueIndex("blueprint_rights_claim_open_claimant_target_uidx")
+      .on(
+        table.teardownId,
+        table.claimantUserId,
+        table.targetKind,
+        sql`coalesce(${table.targetId}, '')`,
+      )
+      .where(sql`status = 'open' AND claimant_user_id IS NOT NULL`),
+    /** The queue, oldest first: the claim that has waited longest is the one owed an answer. */
+    index("blueprint_rights_claim_queue_idx").on(table.status, table.createdAt, table.id),
+    index("blueprint_rights_claim_teardown_idx").on(table.teardownId, table.status),
+    /** The retention sweep's scan: resolved rows not yet purged. */
+    index("blueprint_rights_claim_purge_idx")
+      .on(table.resolvedAt)
+      .where(sql`resolved_at IS NOT NULL AND claimant_details_purged_at IS NULL`),
+    /**
+     * ⚠️ EVERY ARM IS NULL-GUARDED. `false OR NULL` is NULL, and a CHECK treats NULL as a pass —
+     * migration 0172's lesson — so each comparison below is written so that no arm can evaluate
+     * to NULL.
+     */
+    check(
+      "blueprint_rights_claim_target_ck",
+      sql`(target_kind = 'whole_teardown') = (target_id IS NULL)
+          AND (target_id IS NULL OR char_length(target_id) BETWEEN 1 AND 200)
+          AND char_length(target_title_snapshot) BETWEEN 1 AND 500`,
+    ),
+    check(
+      "blueprint_rights_claim_claimant_ck",
+      sql`(claimant_full_name IS NULL OR char_length(claimant_full_name) BETWEEN 2 AND 200)
+          AND (claimant_organization_name IS NULL OR char_length(claimant_organization_name) BETWEEN 1 AND 200)
+          AND (claimant_email IS NULL OR char_length(claimant_email) BETWEEN 3 AND 320)
+          AND (relationship_to_rights_holder IS NULL OR char_length(relationship_to_rights_holder) BETWEEN 3 AND 500)
+          AND (claim_substance IS NULL OR char_length(claim_substance) BETWEEN 60 AND 5000)`,
+    ),
+    check(
+      "blueprint_rights_claim_resolution_ck",
+      sql`(resolved_by_user_id IS NULL) = (resolved_at IS NULL)
+          AND (status = 'open') = (resolved_at IS NULL)
+          AND (resolution_note IS NULL OR char_length(resolution_note) BETWEEN 1 AND 2000)`,
+    ),
+    /**
+     * ⚠️ BOTH DIRECTIONS. Unpurged, the four required claimant columns are present; purged, all
+     * five and the note are gone and the claim was resolved first. Either half alone lets a row
+     * claim to be one thing while holding the other.
+     */
+    check(
+      "blueprint_rights_claim_purge_ck",
+      sql`(
+            claimant_details_purged_at IS NULL
+            AND claimant_full_name IS NOT NULL
+            AND claimant_email IS NOT NULL
+            AND relationship_to_rights_holder IS NOT NULL
+            AND claim_substance IS NOT NULL
+          ) OR (
+            claimant_details_purged_at IS NOT NULL
+            AND resolved_at IS NOT NULL
+            AND claimant_full_name IS NULL
+            AND claimant_organization_name IS NULL
+            AND claimant_email IS NULL
+            AND relationship_to_rights_holder IS NULL
+            AND claim_substance IS NULL
+            AND resolution_note IS NULL
+          )`,
     ),
   ],
 );

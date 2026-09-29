@@ -1402,6 +1402,201 @@ async function main(): Promise<void> {
       );
       await client.query(`ROLLBACK TO SAVEPOINT rejected_probe`);
     }
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 14. rights claims, and the decision that answers one ---");
+
+    /*
+     * `blueprint_rights_claim`. Its CHECKs are the only thing holding three rules no TypeScript
+     * sees: the target arm and its id agree, a claim is purged only whole and only after it was
+     * resolved, and a claimant has one OPEN claim per target. Needs an account for the claimant.
+     */
+    const claimantRow = await client.query<{ id: string }>(`SELECT id FROM "user" LIMIT 1`);
+    const claimantUserId = claimantRow.rows[0]?.id;
+
+    if (claimantUserId === undefined) {
+      check(
+        "the rights-claim probes need an account",
+        false,
+        "no user rows — sign someone up first",
+      );
+    } else {
+      const claimStatement = `INSERT INTO blueprint_rights_claim (
+            id, teardown_id, claimant_user_id, claim_kind, target_kind, target_id,
+            target_title_snapshot, claimant_full_name, claimant_organization_name, claimant_email,
+            relationship_to_rights_holder, claim_substance, sworn_at, status, resolved_by_user_id,
+            resolved_at, resolution_note, claimant_details_purged_at)
+          VALUES ($1, $2, $3, 'copyright_cad', $4, $5, 'Verify target', $6, NULL, $13, $14, $7,
+            now(), $8, $9, $10, $11, $12)`;
+      const CLAIM_SUBSTANCE =
+        "I own the drawings this teardown republishes, and the files here are copies of mine rather than new measurements.";
+
+      /** An open, unpurged claim; override by position to probe one rule at a time. */
+      function claimParameters(overrides: {
+        readonly id?: string;
+        readonly targetKind?: string;
+        readonly targetId?: string | null;
+        readonly fullName?: string | null;
+        readonly substance?: string | null;
+        readonly status?: string;
+        readonly resolvedBy?: string | null;
+        readonly resolvedAt?: Date | null;
+        readonly resolutionNote?: string | null;
+        readonly purgedAt?: Date | null;
+        /** Nulls the email and the standing too — the whole claimant, as the sweep does. */
+        readonly isClaimantPurged?: boolean;
+      }): unknown[] {
+        return [
+          overrides.id ?? randomUUID(),
+          teardownId,
+          claimantUserId,
+          overrides.targetKind ?? "whole_teardown",
+          overrides.targetId === undefined ? null : overrides.targetId,
+          overrides.fullName === undefined ? "Rights Holder" : overrides.fullName,
+          overrides.substance === undefined ? CLAIM_SUBSTANCE : overrides.substance,
+          overrides.status ?? "open",
+          overrides.resolvedBy === undefined ? null : overrides.resolvedBy,
+          overrides.resolvedAt === undefined ? null : overrides.resolvedAt,
+          overrides.resolutionNote === undefined ? null : overrides.resolutionNote,
+          overrides.purgedAt === undefined ? null : overrides.purgedAt,
+          overrides.isClaimantPurged === true ? null : "claimant@example.com",
+          overrides.isClaimantPurged === true ? null : "I am the rights holder",
+        ];
+      }
+
+      await expectAccepted("an open whole-teardown claim", claimStatement, claimParameters({}));
+      await expectAccepted(
+        "an open claim naming one document",
+        claimStatement,
+        claimParameters({ targetKind: "document", targetId: "doc-verify" }),
+      );
+      await expectRefused(
+        "a whole-teardown claim cannot carry a target id (blueprint_rights_claim_target_ck)",
+        PG_CHECK_VIOLATION,
+        claimStatement,
+        claimParameters({ targetId: "doc-verify" }),
+      );
+      await expectRefused(
+        "a document claim must name its document (blueprint_rights_claim_target_ck)",
+        PG_CHECK_VIOLATION,
+        claimStatement,
+        claimParameters({ targetKind: "document", targetId: null }),
+      );
+      await expectRefused(
+        "an empty target id is refused, so coalesce(target_id, '') is unambiguous",
+        PG_CHECK_VIOLATION,
+        claimStatement,
+        claimParameters({ targetKind: "part", targetId: "" }),
+      );
+      await expectRefused(
+        "a short claim is refused (blueprint_rights_claim_claimant_ck)",
+        PG_CHECK_VIOLATION,
+        claimStatement,
+        claimParameters({ substance: "Too short." }),
+      );
+      await expectRefused(
+        "an unpurged claim cannot lose its claimant (blueprint_rights_claim_purge_ck)",
+        PG_CHECK_VIOLATION,
+        claimStatement,
+        claimParameters({ fullName: null }),
+      );
+      await expectRefused(
+        "an open claim cannot be purged (blueprint_rights_claim_purge_ck)",
+        PG_CHECK_VIOLATION,
+        claimStatement,
+        claimParameters({
+          fullName: null,
+          substance: null,
+          isClaimantPurged: true,
+          purgedAt: new Date(),
+        }),
+      );
+      await expectRefused(
+        "a resolved claim cannot be half-purged (blueprint_rights_claim_purge_ck)",
+        PG_CHECK_VIOLATION,
+        claimStatement,
+        claimParameters({
+          status: "dismissed",
+          resolvedBy: claimantUserId,
+          resolvedAt: new Date(),
+          resolutionNote: "Not a claim.",
+          purgedAt: new Date(),
+        }),
+      );
+      await expectAccepted(
+        "a resolved claim purged whole is accepted",
+        claimStatement,
+        claimParameters({
+          status: "dismissed",
+          resolvedBy: claimantUserId,
+          resolvedAt: new Date(),
+          fullName: null,
+          substance: null,
+          isClaimantPurged: true,
+          purgedAt: new Date(),
+        }),
+      );
+      await expectRefused(
+        "a resolved claim must name its resolver (blueprint_rights_claim_resolution_ck)",
+        PG_CHECK_VIOLATION,
+        claimStatement,
+        claimParameters({ status: "dismissed", resolvedAt: new Date(), resolutionNote: "Why." }),
+      );
+
+      await client.query(`SAVEPOINT claim_uniqueness_probe`);
+      await client.query(claimStatement, claimParameters({}));
+      await expectRefused(
+        "one OPEN claim per claimant per target (blueprint_rights_claim_open_claimant_target_uidx)",
+        PG_UNIQUE_VIOLATION,
+        claimStatement,
+        claimParameters({}),
+      );
+      await client.query(`ROLLBACK TO SAVEPOINT claim_uniqueness_probe`);
+
+      await client.query(`SAVEPOINT claim_refile_probe`);
+      await client.query(
+        claimStatement,
+        claimParameters({
+          status: "dismissed",
+          resolvedBy: claimantUserId,
+          resolvedAt: new Date(),
+          resolutionNote: "Dismissed for the probe.",
+        }),
+      );
+      await expectAccepted(
+        "a dismissed claim frees the target for a fresh one",
+        claimStatement,
+        claimParameters({}),
+      );
+      await client.query(`ROLLBACK TO SAVEPOINT claim_refile_probe`);
+
+      /*
+       * `blueprint_moderation_action_answered_ck`: one decision answers a report OR a claim, and a
+       * claim-linked decision is about a teardown.
+       */
+      const answeredClaimId = randomUUID();
+      await client.query(`SAVEPOINT answered_probe`);
+      await client.query(claimStatement, claimParameters({ id: answeredClaimId }));
+      const actionStatement = `INSERT INTO blueprint_moderation_action (
+            id, action_kind, target_kind, teardown_id, moderator_user_id, moderator_role_snapshot,
+            reason_note, audit_entry_id, rights_claim_id)
+          VALUES ($1, 'content_flagged', $2, $3, $4, 'moderator', 'Verify note', $5, $6)`;
+      await expectAccepted("a flag may answer a rights claim", actionStatement, [
+        randomUUID(),
+        "teardown",
+        teardownId,
+        claimantUserId,
+        randomUUID(),
+        answeredClaimId,
+      ]);
+      await expectRefused(
+        "a claim-linked decision must be about a teardown (blueprint_moderation_action_answered_ck)",
+        PG_CHECK_VIOLATION,
+        actionStatement,
+        [randomUUID(), "case_study", null, claimantUserId, randomUUID(), answeredClaimId],
+      );
+      await client.query(`ROLLBACK TO SAVEPOINT answered_probe`);
+    }
   } finally {
     // THE ROLLBACK IS THE CLEANUP, and it cannot be skipped by a failed assertion or a throw.
     await client.query("ROLLBACK");

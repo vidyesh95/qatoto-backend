@@ -110,6 +110,9 @@ const TRANSACTION_RECORD_NOTE =
 const PLATFORM_ARTWORK_NOTE =
   "A hosted image asset on platform-authored merchandising, not a person's photo.";
 
+const RIGHTS_CLAIM_RETENTION_NOTE =
+  "A sworn legal notice about another person's work, kept as evidence while the claim is open and for six years after it is resolved, then nulled by `sweep-expired-rights-claim-details`.";
+
 export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposition>> = {
   // -------------------------------------------------------------------------
   // THE IDENTITY ITSELF — `scrubUserAndComplete`, the last step of the run.
@@ -191,6 +194,47 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
     kind: "scrub",
     stepName: "scrub:blueprint_content_report_detail",
     note: "Nulled. The report survives as evidence about another person's work; the reporter's own free text does not.",
+  },
+  /**
+   * ⚠️ A RIGHTS CLAIM IS A LEGAL RECORD, SO THE CLAIMANT'S OWN ACCOUNT ERASURE DOES NOT REACH IT —
+   * but it is not kept forever either. Six years after the claim is resolved,
+   * `sweep-expired-rights-claim-details` nulls every column below and stamps
+   * `claimant_details_purged_at`; `blueprint_rights_claim_purge_ck` holds the two together. Open
+   * claims are never purged. The privacy policy states the same period.
+   */
+  "blueprint_rights_claim.claimant_full_name": {
+    kind: "retain",
+    lawfulBasis: "Art. 17(3)(e)",
+    note: RIGHTS_CLAIM_RETENTION_NOTE,
+  },
+  "blueprint_rights_claim.claimant_organization_name": {
+    kind: "retain",
+    lawfulBasis: "Art. 17(3)(e)",
+    note: RIGHTS_CLAIM_RETENTION_NOTE,
+  },
+  "blueprint_rights_claim.claimant_email": {
+    kind: "retain",
+    lawfulBasis: "Art. 17(3)(e)",
+    note: RIGHTS_CLAIM_RETENTION_NOTE,
+  },
+  "blueprint_rights_claim.relationship_to_rights_holder": {
+    kind: "retain",
+    lawfulBasis: "Art. 17(3)(e)",
+    note: RIGHTS_CLAIM_RETENTION_NOTE,
+  },
+  "blueprint_rights_claim.claim_substance": {
+    kind: "retain",
+    lawfulBasis: "Art. 17(3)(e)",
+    note: RIGHTS_CLAIM_RETENTION_NOTE,
+  },
+  "blueprint_rights_claim.resolution_note": {
+    kind: "retain",
+    lawfulBasis: "Art. 17(3)(e)",
+    note: "A moderator's reason for answering a rights claim, which may quote the claimant. Purged with the claimant's details six years after resolution.",
+  },
+  "blueprint_rights_claim.target_title_snapshot": {
+    kind: "not_personal_data",
+    note: "The title of the teardown, document, fabrication file or part the claim names, copied at filing so the queue stays readable after a removal.",
   },
   "community_forum_reply.body": {
     kind: "scrub",
