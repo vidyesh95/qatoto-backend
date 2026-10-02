@@ -5,10 +5,12 @@
  * Monday — nor should it require the worker process to be running. This calls the job
  * HANDLER directly, in sequence, which is exactly what the worker would do.
  *
- * IT SPENDS ONE COMTRADE REQUEST PER CELL. The default plan is India, six years, both
- * directions — twelve requests against a 500/day free tier. Override with arguments:
+ * IT SPENDS ONE COMTRADE REQUEST PER CELL. The default plan is the weekly tick's own
+ * (`comtrade-ingest-plan.ts`): India, six years, both directions — twelve requests against
+ * a 500/day free tier. Override with arguments:
  *
  *   pnpm db:sync-comtrade                       # the default plan
+ *   pnpm db:sync-comtrade IN                    # one country, every year and direction
  *   pnpm db:sync-comtrade IN 2023 import        # one cell
  *
  * Idempotent: every cell upserts on its partial unique, so re-running replaces figures
@@ -16,11 +18,12 @@
  */
 import "dotenv/config";
 import { pool } from "#src/db/index.js";
+import {
+  COMTRADE_INGEST_COUNTRY_CODES,
+  COMTRADE_INGEST_FLOW_KINDS,
+  COMTRADE_INGEST_PERIOD_YEARS,
+} from "#src/modules/rnd/import-intelligence/comtrade-ingest-plan.js";
 import { handleSyncComtradeTradeFlows } from "#src/modules/rnd/import-intelligence/sync-comtrade-trade-flows.js";
-
-const DEFAULT_COUNTRY_CODES = ["IN"] as const;
-const DEFAULT_PERIOD_YEARS = [2019, 2020, 2021, 2022, 2023, 2024] as const;
-const DEFAULT_FLOW_KINDS = ["import", "export"] as const;
 
 /** Comtrade rate-limits per minute as well as per day, and the limit is undocumented. */
 const PAUSE_BETWEEN_CALLS_MS = 1_500;
@@ -32,7 +35,7 @@ interface Cell {
 }
 
 function parseFlowKinds(argument: string | undefined): readonly ("import" | "export")[] {
-  if (argument === undefined) return DEFAULT_FLOW_KINDS;
+  if (argument === undefined) return COMTRADE_INGEST_FLOW_KINDS;
   if (argument === "import" || argument === "export") return [argument];
   throw new Error(`flow kind must be "import" or "export", got "${argument}"`);
 }
@@ -40,9 +43,9 @@ function parseFlowKinds(argument: string | undefined): readonly ("import" | "exp
 function planFromArguments(): readonly Cell[] {
   const [countryCode, periodYear, flowKind] = process.argv.slice(2);
 
-  const countryCodes = countryCode === undefined ? DEFAULT_COUNTRY_CODES : [countryCode];
+  const countryCodes = countryCode === undefined ? COMTRADE_INGEST_COUNTRY_CODES : [countryCode];
   const periodYears =
-    periodYear === undefined ? DEFAULT_PERIOD_YEARS : [Number.parseInt(periodYear, 10)];
+    periodYear === undefined ? COMTRADE_INGEST_PERIOD_YEARS : [Number.parseInt(periodYear, 10)];
   // Narrowed by a guard rather than asserted: an argv value is a string until something
   // checks it, and `as` would let `pnpm db:sync-comtrade IN 2023 reexport` reach the API.
   const flowKinds = parseFlowKinds(flowKind);

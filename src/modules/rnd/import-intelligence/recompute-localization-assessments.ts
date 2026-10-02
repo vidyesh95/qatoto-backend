@@ -2,7 +2,8 @@
  * The nightly localization assessment (§10A).
  *
  * ONE ROW PER (commodity, country, asOf), with its five component sub-scores, every raw
- * input it was computed from, and a dense rank within the country.
+ * input it was computed from, and a dense rank within the country — for the countries in
+ * `LOCALIZATION_ASSESSMENT_COUNTRY_CODES` only, not every ingested one.
  *
  * WHAT IT SCORES, and the one modelling decision worth knowing: the trade inputs are the
  * MOST RECENT ANNUAL figure per cell, not a sum across the window. Comtrade revises years
@@ -27,6 +28,7 @@ import {
   parseJobPayload,
   sendJob,
 } from "#src/lib/jobs.js";
+import { LOCALIZATION_ASSESSMENT_COUNTRY_CODES } from "#src/modules/rnd/import-intelligence/comtrade-ingest-plan.js";
 import {
   computeLocalizationScorePoints,
   deriveTrendDirection,
@@ -135,13 +137,23 @@ export async function handleRecomputeLocalizationAssessments(rawPayload: unknown
   const windowEndsAt = new Date(payload.windowEndsAt);
   const regionFilter = payload.regionId;
 
-  // --- 1. The newest annual figure per (commodity, country, direction).
+  // --- 1. The newest annual figure per (commodity, country, direction), for the RANKED
+  //        countries only. Every later read fills cells this one created, so this filter is
+  //        what keeps the other ingested countries out of the ranking and the narratives.
   const latestFlows = await db.execute<LatestFlowRow>(sql`
     SELECT DISTINCT ON (commodity_id, reporter_region_id, flow_kind)
       commodity_id, reporter_region_id, flow_kind::text AS flow_kind, trade_value_in_cents
     FROM commodity_trade_flow
     WHERE period_kind = 'annual'
       AND partner_region_id IS NULL
+      AND reporter_region_id IN (
+        SELECT id FROM discovery_region
+        WHERE kind = 'country'
+          AND country_code IN (${sql.join(
+            LOCALIZATION_ASSESSMENT_COUNTRY_CODES.map((countryCode) => sql`${countryCode}`),
+            sql`, `,
+          )})
+      )
       ${regionFilter === null ? sql`` : sql`AND reporter_region_id = ${regionFilter}`}
     ORDER BY commodity_id, reporter_region_id, flow_kind, period_starts_date DESC
   `);

@@ -2651,7 +2651,20 @@ everywhere else in §6.
 
 `comtradeapi.un.org`, one call per (reporting country, year, direction), authenticated with
 an Azure APIM `Ocp-Apim-Subscription-Key` header. The free tier allows 500 calls a day and
-100,000 records a call; the whole ingest plan is **twelve calls a week**.
+100,000 records a call; the whole ingest plan is **twelve calls a week** (India × six years ×
+two directions), in `comtrade-ingest-plan.ts`, which the tick and the backfill script share.
+
+⚠️ **THE CEILING IS DISK, NOT THE QUOTA.** US, CN, DE, JP and KR were added and backfilled on
+2026-10-02. Each country is ~60k rows and ~50 MB of `commodity_trade_flow` before WAL, and the
+shared Aiven free-tier database (1 GB) went read-only during the fifth. They were removed the same
+day. Their M49 codes are verified for later: US is 842 (not 840), CN 156, DE 276 (not 280),
+JP 392, KR 410 (408 is the DPRK).
+
+⚠️ **RANKING IS AN ALLOWLIST, SEPARATE FROM INGEST.** `LOCALIZATION_ASSESSMENT_COUNTRY_CODES`
+(`["IN"]`) decides which countries get `localization_assessment` rows and narratives. The ladders
+are calibrated on India, two-way trade in an exporter is not a substitution gap, and every
+ranked country costs ~25 Gemini calls a night. `GET /import-reporters` carries
+`isLocalizationRanked` so the client can say which of the two an empty leaderboard means.
 
 ⚠️ **`partnerCode=0` ALONE DOES NOT RETURN ONE ROW PER COMMODITY.** It returns a
 `partner2Code` breakdown — one row per country of consignment — and summing those

@@ -132,9 +132,10 @@ export const BASELINE_RESEARCH_CATEGORIES: readonly BaselineResearchCategory[] =
  *
  * The country list is deliberately partial — it covers the regions the mock data and the
  * launch markets use. Adding a country later is an append here plus
- * `pnpm db:seed-discovery-regions`, never a migration.
+ * `pnpm db:seed-discovery-lookups`, never a migration.
  *
- * MUST stay byte-identical to the INSERT in migration 0011.
+ * The rows migration 0011 inserted MUST stay byte-identical to that INSERT. A row appended
+ * after it exists only here and reaches a database through the seed script.
  */
 export interface BaselineDiscoveryRegion {
   readonly id: string;

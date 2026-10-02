@@ -19,7 +19,12 @@
  * would silently miss both. These are keyed on ISO-2 precisely to avoid that.
  */
 
-/** The eighteen countries seeded in `src/db/seed-data.ts`, and nothing else. */
+/**
+ * The eighteen countries seeded in `src/db/seed-data.ts`, and nothing else.
+ *
+ * Verified 2026-10-02 for a later expansion that was reverted for disk (`comtrade-ingest-plan.ts`):
+ * US is 842 (not 840), CN 156, DE 276 (not 280), JP 392, KR 410 (408 is the DPRK).
+ */
 const COMTRADE_REPORTER_CODE_BY_ISO2: Readonly<Record<string, number>> = {
   BD: 50, // Bangladesh
   BR: 76, // Brazil

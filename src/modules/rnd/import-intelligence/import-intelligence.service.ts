@@ -30,6 +30,7 @@ import {
   requirePlatformCapability,
   type PlatformAccessError,
 } from "#src/modules/platform/roles/platform-role.service.js";
+import { LOCALIZATION_ASSESSMENT_COUNTRY_CODES } from "#src/modules/rnd/import-intelligence/comtrade-ingest-plan.js";
 import {
   MANUFACTURED_COMMODITY_KINDS,
   type CreateDomesticSubstituteInput,
@@ -186,10 +187,15 @@ function offsetFor(page: number, limit: number): number {
 /**
  * One country that actually has trade data, and how much of it.
  *
- * WHY IT EXISTS: eighteen countries are seeded in `discovery_region` and exactly one has been
- * ingested. A picker built off the region taxonomy would offer seventeen dead ends, so this
- * read answers "which countries can I actually ask about" rather than "which countries exist".
- * The counts ride along so a chip can say how much is behind it before it is clicked.
+ * WHY IT EXISTS: eighteen countries are seeded in `discovery_region` and one is in the
+ * Comtrade plan. A picker built off the region taxonomy would offer seventeen dead ends, so
+ * this read answers "which countries can I actually ask about" rather than "which countries
+ * exist". The counts ride along so a chip can say how much is behind it before it is clicked.
+ *
+ * `isLocalizationRanked` says whether the import-substitution ranking is computed for this
+ * country at all (`LOCALIZATION_ASSESSMENT_COUNTRY_CODES`). It is POLICY, not data: a ranked
+ * country with no rows yet is "not scored yet", an unranked one will never be scored, and the
+ * client needs to tell the reader which of the two an empty leaderboard means.
  */
 export interface ImportReporterView {
   readonly countryCode: string;
@@ -199,6 +205,7 @@ export interface ImportReporterView {
   readonly flowCount: number;
   readonly earliestPeriodYear: number;
   readonly latestPeriodYear: number;
+  readonly isLocalizationRanked: boolean;
 }
 
 interface ImportReporterRow {
@@ -243,6 +250,7 @@ export async function listImportReporters(): Promise<readonly ImportReporterView
     flowCount: row.flow_count,
     earliestPeriodYear: row.earliest_period_year,
     latestPeriodYear: row.latest_period_year,
+    isLocalizationRanked: LOCALIZATION_ASSESSMENT_COUNTRY_CODES.includes(row.country_code),
   }));
 }
 
