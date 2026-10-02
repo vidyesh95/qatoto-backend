@@ -471,7 +471,7 @@ export async function retractProductAnswer(
      * `visible`, and gets the 404.
      *
      * A report decided AFTER this withdrawal commits is closed in the report path, not here: a
-     * DISMISSAL lifts only the two moderation states (`lift_moderation_hold` in
+     * DISMISSAL lifts only the automatic threshold hide (`lift_automatic_hide` in
      * `commerce-content-reports.service`), so the withdrawal survives it. An ACTIONED report still
      * ends `hidden_by_moderator`, deliberately — the moderator's ruling supersedes the withdrawal,
      * and the audit event appended below records the withdrawal either way.

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "#src/db/index.js";
@@ -244,21 +244,25 @@ async function enqueueModeratedTargetSearchRefresh(
 /**
  * What a moderation path is doing to a target's visibility.
  *
- * TWO LIFTS, NOT ONE, because they lift different things. A report DISMISSAL lifts a moderation
- * hold — the automatic threshold hide or a moderator's — and nothing else: an author's withdrawal
- * (`removed_by_author`) is not a moderation event, and a moderator declaring a report unfounded
- * says nothing about whether the author still wants their text up. A direct RESTORE is a
- * moderator reversing whatever hid the row, a withdrawal included, which is what makes a
- * withdrawn answer restorable from the admin console at all.
+ * TWO LIFTS, NOT ONE, because they lift different things.
+ *
+ * A report DISMISSAL lifts ONLY THE AUTOMATIC HIDE (`lift_automatic_hide`), because that is the
+ * only hide an OPEN report can still be standing behind. Actioning closes every open report on the
+ * target, so an open report against a moderator-hidden row was filed AFTER that moderator ruled,
+ * and throwing it out says nothing about the earlier ruling. Likewise an author's withdrawal
+ * (`removed_by_author`) is not a moderation event, and "this report is unfounded" is not
+ * "republish what the author took down". A product never auto-hides, so on a product the
+ * dismissal lifts nothing at all.
+ *
+ * A direct RESTORE (`restore`) is a moderator reversing what hid the row on purpose: it
+ * un-withdraws a question or answer — what makes a withdrawn answer restorable from the admin
+ * console at all — and un-suspends a product, but never approves a `pending` or `rejected` one.
  */
 type TargetVisibilityChange =
   /** `moderatorUserId: null` is the automatic threshold hide. */
   | { readonly kind: "hide"; readonly moderatorUserId: string | null }
-  | { readonly kind: "lift_moderation_hold" }
-  | { readonly kind: "restore_any_hidden_state" };
-
-/** The two UGC states a dismissal may lift. `removed_by_author` is deliberately absent. */
-const MODERATION_HOLD_VISIBILITY_STATES = ["hidden_pending_review", "hidden_by_moderator"] as const;
+  | { readonly kind: "lift_automatic_hide" }
+  | { readonly kind: "restore" };
 
 type UgcVisibilityState = (typeof commerceProductAnswer.$inferSelect)["visibilityState"];
 
@@ -266,8 +270,8 @@ function resolveUgcVisibilityState(change: TargetVisibilityChange): UgcVisibilit
   switch (change.kind) {
     case "hide":
       return change.moderatorUserId === null ? "hidden_pending_review" : "hidden_by_moderator";
-    case "lift_moderation_hold":
-    case "restore_any_hidden_state":
+    case "lift_automatic_hide":
+    case "restore":
       return "visible";
     default: {
       const exhaustiveCheck: never = change;
@@ -289,16 +293,20 @@ async function setTargetVisibility(
   /**
    * ⚠️ THE STATE CONDITION IS IN THE UPDATE, NOT IN A READ BEFORE IT. A read-then-write would let
    * an author withdrawal commit between the two and be republished anyway. Matching nothing is
-   * the correct outcome for a withdrawn row, and the `if (question)` / `if (answer)` guards below
-   * then skip the counter refreshes, because nothing they count changed.
+   * the correct outcome for a withdrawn or moderator-hidden row, and the `if (question)` /
+   * `if (answer)` guards below then skip the counter refreshes, because nothing they count changed.
    */
-  const isLiftLimitedToModerationHolds = change.kind === "lift_moderation_hold";
+  const isLiftLimitedToAutomaticHide = change.kind === "lift_automatic_hide";
 
   switch (targetKind) {
     case "review":
       // `commerce_review` predates the four-value UGC enum and keeps its own two-value
       // one. Hiding here ALSO corrects the rating with no recomputation step, because
       // every aggregate in commerce-trust-metrics already filters on it.
+      //
+      // ⚠️ THE ONE ARM A DISMISSAL CAN STILL OVERRULE A MODERATOR ON. Two values cannot say
+      // whether `hidden` was the threshold or a person, so a dismissed later report un-hides a
+      // review a moderator hid. Closing it needs a third value and a migration (todo.md).
       await transaction
         .update(commerceReview)
         .set({ visibility: hidden ? "hidden" : "visible" })
@@ -311,8 +319,8 @@ async function setTargetVisibility(
         .where(
           and(
             eq(commerceProductQuestion.id, targetId),
-            isLiftLimitedToModerationHolds
-              ? inArray(commerceProductQuestion.visibilityState, MODERATION_HOLD_VISIBILITY_STATES)
+            isLiftLimitedToAutomaticHide
+              ? eq(commerceProductQuestion.visibilityState, "hidden_pending_review")
               : undefined,
           ),
         )
@@ -327,8 +335,8 @@ async function setTargetVisibility(
         .where(
           and(
             eq(commerceProductAnswer.id, targetId),
-            isLiftLimitedToModerationHolds
-              ? inArray(commerceProductAnswer.visibilityState, MODERATION_HOLD_VISIBILITY_STATES)
+            isLiftLimitedToAutomaticHide
+              ? eq(commerceProductAnswer.visibilityState, "hidden_pending_review")
               : undefined,
           ),
         )
@@ -361,11 +369,34 @@ async function setTargetVisibility(
        * lands would recompute eligibility from the pre-moderation state and helpfully undo
        * the hide.
        */
-      await transaction
-        .update(product)
-        .set({ moderationState: hidden ? "suspended" : "approved" })
-        .where(eq(product.id, targetId));
-      return;
+      switch (change.kind) {
+        case "hide":
+          await transaction
+            .update(product)
+            .set({ moderationState: "suspended" })
+            .where(eq(product.id, targetId));
+          return;
+        case "lift_automatic_hide":
+          /**
+           * NOTHING TO LIFT. A product never auto-hides, so a dismissal has no hide of its own to
+           * undo — and this arm used to write `approved` regardless, which made throwing out a
+           * spam report on a `pending` or `rejected` listing PUBLISH it, and a later report's
+           * dismissal undo a moderator's suspension (by report or by `moderateProduct`).
+           */
+          return;
+        case "restore":
+          // From `suspended` only. Restoring a listing that was never suspended must not become
+          // a back door past product review; it records the action and changes nothing.
+          await transaction
+            .update(product)
+            .set({ moderationState: "approved" })
+            .where(and(eq(product.id, targetId), eq(product.moderationState, "suspended")));
+          return;
+        default: {
+          const exhaustiveCheck: never = change;
+          throw new Error(`Unhandled visibility change: ${JSON.stringify(exhaustiveCheck)}`);
+        }
+      }
     case "organization":
       /**
        * DELIBERATELY A NO-OP on the row itself. Organization visibility and trade state
@@ -598,10 +629,12 @@ export async function listContentReports(
  * DISMISSING RESTORES AN AUTOMATIC HIDE. Easy to forget, and forgetting it means three
  * griefers permanently silence content a moderator just declared fine.
  *
- * ⚠️ AND IT RESTORES ONLY A MODERATION HOLD. A question or answer its author withdrew stays
- * `removed_by_author` through a dismissal: "this report is unfounded" is not "republish what the
- * author took down". It used to be — the lift matched on id alone — so a report filed before a
- * withdrawal and dismissed after it put the withdrawn text back on the product page. ACTIONING
+ * ⚠️ AND IT RESTORES ONLY THAT. A question or answer its author withdrew stays
+ * `removed_by_author` through a dismissal, one a moderator hid stays `hidden_by_moderator`, and a
+ * product's state is not touched at all (see `TargetVisibilityChange`). The lift used to match on
+ * id alone and write `visible` / `approved`, so a report filed before a withdrawal and dismissed
+ * after it put the withdrawn text back on the product page, and a dismissed report on a `pending`
+ * listing published it. ACTIONING
  * still overwrites a withdrawal to `hidden_by_moderator`, deliberately: the moderator's ruling on
  * the text supersedes the author's, and the withdrawal's audit event survives either way. The
  * moderation action and audit entry below are written in both cases, because the REPORT was
@@ -648,7 +681,7 @@ export async function decideContentReport(
       transaction,
       report.targetKind,
       targetId,
-      hide ? { kind: "hide", moderatorUserId } : { kind: "lift_moderation_hold" },
+      hide ? { kind: "hide", moderatorUserId } : { kind: "lift_automatic_hide" },
     );
 
     // Close every open report on this target, not only the one being decided.
@@ -754,7 +787,7 @@ export async function restoreContent(
 
     const now = new Date();
     await setTargetVisibility(transaction, input.targetKind, input.targetId, {
-      kind: "restore_any_hidden_state",
+      kind: "restore",
     });
 
     const auditEntry = await appendPlatformAuditEntry(transaction, {
