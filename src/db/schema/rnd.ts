@@ -9446,10 +9446,67 @@ export const countryEconomicIndicator = pgTable(
 );
 
 /**
- * The feasibility readout: one row per (asOf, country, problem domain), THREE SEPARATE PILLARS.
+ * One World Bank B-READY score per (country, edition) — today only "Pillar 1: Regulatory
+ * Framework" (`IC.BRE.P1.RF`), the input to the feasibility readout's regulatory pillar (FE
+ * docs/FEASIBILITY_MODEL.md). Read from the World Bank Indicators API by the same weekly
+ * `sync-world-bank-indicators` run as `country_economic_indicator`.
+ *
+ * ITS OWN TABLE rather than a second indicator in `country_economic_indicator`, because that
+ * table's value column is NOT NULL whole international dollars, and a 0–100 score in a dollars
+ * column would need nullable value columns plus a CHECK picking which one applies.
+ *
+ * TENTHS OF A POINT, 0..1000. The API publishes `decimal: 1` and returns float noise beyond it
+ * (`56.9400978…`); storing more digits would claim a precision the source does not have.
+ *
+ * `edition_year` is the B-READY edition the API files the value under (`date`). A `null` from the
+ * API means the economy is NOT COVERED by that edition (B-READY 2024 covers 50 economies, and
+ * India and Kenya first appear in 2026). It writes NO row, and it is not a zero.
+ */
+export const countryBusinessReadyScore = pgTable(
+  "country_business_ready_score",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    regionId: text("region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    indicatorCode: text("indicator_code").notNull(),
+    editionYear: integer("edition_year").notNull(),
+    scoreInTenths: integer("score_in_tenths").notNull(),
+    sourceName: text("source_name").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    // The dataset's own `lastupdated` date — when the World Bank last revised the series.
+    sourceLastUpdatedDate: date("source_last_updated_date", { mode: "string" }),
+    sourceRetrievedAt: timestamp("source_retrieved_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("country_business_ready_score_cell_unq").on(
+      table.regionId,
+      table.indicatorCode,
+      table.editionYear,
+    ),
+    check(
+      "country_business_ready_score_shape_ck",
+      sql`indicator_code = 'IC.BRE.P1.RF'
+          AND edition_year BETWEEN 2024 AND 2200
+          AND score_in_tenths BETWEEN 0 AND 1000
+          AND source_url LIKE 'https://%'`,
+    ),
+  ],
+);
+
+/**
+ * The feasibility readout: one row per (asOf, country, problem domain), FOUR SEPARATE PILLARS.
  *
  * ⚠️ THERE IS NO TOTAL, AND THAT ABSENCE IS THE DESIGN. Need density is Qatoto's own cluster data;
- * purchasing power is the World Bank; manufacturing is UN Comtrade plus the supplier directory.
+ * purchasing power is the World Bank; manufacturing is UN Comtrade plus the supplier directory;
+ * the regulatory framework is World Bank B-READY.
  * `R_AND_D_STRUCTURE.md` §7 rules that evidence bases like these are never merged into one
  * number, and FE docs/FEASIBILITY_MODEL.md's correction header rejects the spec's weighted
  * composite and its verdict enum for exactly that reason. So unlike `localization_assessment`
@@ -9460,11 +9517,13 @@ export const countryEconomicIndicator = pgTable(
  * Each group's CHECK makes "points without their inputs" and "inputs without points"
  * unwritable. A row whose three pillars are all NULL is never inserted.
  *
- * Regulatory ease (the spec's fourth pillar) is NOT a column yet: nothing can write it until
- * the B-READY import exists, and a column nothing writes is unverified schema.
+ * The spec's fourth pillar, "regulatory ease", is stored as `regulatory_framework_*` because
+ * that is what B-READY Pillar 1 measures: regulation as written, not how easy it is to operate.
+ * Added in model version 2; every v1 row has it NULL.
  *
- * Purchasing power is per COUNTRY, so it repeats on each of a country's domain rows. Stored per
- * row anyway so one snapshot row is self-contained and reproducible.
+ * Purchasing power and the regulatory framework are per COUNTRY, so they repeat on each of a
+ * country's domain rows. Stored per row anyway so one snapshot row is self-contained and
+ * reproducible.
  */
 export const feasibilityReadoutSnapshot = pgTable(
   "feasibility_readout_snapshot",
@@ -9499,6 +9558,11 @@ export const feasibilityReadoutSnapshot = pgTable(
     manufacturingTradeDataYear: integer("manufacturing_trade_data_year"),
     manufacturingDomesticProducerCount: integer("manufacturing_domestic_producer_count"),
     manufacturingSourceRetrievedAt: timestamp("manufacturing_source_retrieved_at"),
+    // --- Regulatory framework (0..20): World Bank B-READY Pillar 1.
+    regulatoryFrameworkPoints: integer("regulatory_framework_points"),
+    regulatoryFrameworkScoreInTenths: integer("regulatory_framework_score_in_tenths"),
+    regulatoryFrameworkEditionYear: integer("regulatory_framework_edition_year"),
+    regulatoryFrameworkSourceRetrievedAt: timestamp("regulatory_framework_source_retrieved_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -9543,10 +9607,22 @@ export const feasibilityReadoutSnapshot = pgTable(
               AND manufacturing_source_retrieved_at IS NOT NULL)`,
     ),
     check(
+      "feasibility_readout_snapshot_regulatory_framework_ck",
+      sql`(regulatory_framework_points IS NULL
+           AND regulatory_framework_score_in_tenths IS NULL
+           AND regulatory_framework_edition_year IS NULL
+           AND regulatory_framework_source_retrieved_at IS NULL)
+          OR (regulatory_framework_points BETWEEN 0 AND 20
+              AND regulatory_framework_score_in_tenths BETWEEN 0 AND 1000
+              AND regulatory_framework_edition_year BETWEEN 2024 AND 2200
+              AND regulatory_framework_source_retrieved_at IS NOT NULL)`,
+    ),
+    check(
       "feasibility_readout_snapshot_not_empty_ck",
       sql`need_density_points IS NOT NULL
           OR purchasing_power_points IS NOT NULL
-          OR manufacturing_points IS NOT NULL`,
+          OR manufacturing_points IS NOT NULL
+          OR regulatory_framework_points IS NOT NULL`,
     ),
   ],
 );

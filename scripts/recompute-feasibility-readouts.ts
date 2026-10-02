@@ -23,7 +23,7 @@ async function main(): Promise<void> {
   console.log(`Recomputing feasibility readouts as of ${asOf.toISOString()} …`);
   const summary = await recomputeFeasibilityReadouts(asOf);
   console.log(
-    `${String(summary.cellCount)} (country, domain) cells: ${String(summary.cellsWithNeedDensity)} with need density, ${String(summary.countriesWithPurchasingPower)} countries with purchasing power, ${String(summary.cellsWithManufacturing)} with manufacturing.`,
+    `${String(summary.cellCount)} (country, domain) cells: ${String(summary.cellsWithNeedDensity)} with need density, ${String(summary.countriesWithPurchasingPower)} countries with purchasing power, ${String(summary.cellsWithManufacturing)} with manufacturing, ${String(summary.countriesWithRegulatoryFramework)} countries with a regulatory framework score.`,
   );
 }
 

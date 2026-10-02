@@ -8,6 +8,7 @@ import {
   manufacturingPoints,
   needDensityPoints,
   purchasingPowerPoints,
+  regulatoryFrameworkPoints,
 } from "#src/modules/rnd/discovery/feasibility-readout-score.js";
 
 type ResearchCategoryDomain = (typeof researchCategoryDomainEnum.enumValues)[number];
@@ -16,7 +17,7 @@ type ResearchCategoryDomain = (typeof researchCategoryDomainEnum.enumValues)[num
  * The nightly feasibility readout: one snapshot row per (country, domain) that has at least one
  * pillar, all written in ONE transaction under one `asOf`.
  *
- * THREE INDEPENDENT READS, THREE INDEPENDENT PILLARS. Nothing below combines a figure from one
+ * FOUR INDEPENDENT PILLARS, EACH FROM ITS OWN READS. Nothing below combines a figure from one
  * read with a figure from another — the only thing they share is the (country, domain) key the
  * row is filed under. That is the whole of the §7 rule in code form: no total, no weights.
  *
@@ -31,7 +32,9 @@ type ResearchCategoryDomain = (typeof researchCategoryDomainEnum.enumValues)[num
  *     country with no reports still shows its one country-level fact;
  *   - manufacturing: a (country, domain) with at least one annual Comtrade line in that domain,
  *     in either direction. Imports without exports scores the export half at 0 — that IS a
- *     finding. A country Comtrade was never synced for has no cell at all.
+ *     finding. A country Comtrade was never synced for has no cell at all;
+ *   - regulatory framework: every country with a B-READY score, in its newest edition, applied
+ *     exactly like purchasing power. An economy no edition covers yet has none.
  */
 
 interface NeedDensityRow extends Record<string, unknown> {
@@ -45,6 +48,13 @@ interface PurchasingPowerRow extends Record<string, unknown> {
   readonly region_id: string;
   readonly data_year: number;
   readonly value_in_whole_international_dollars: string;
+  readonly source_retrieved_at: string;
+}
+
+interface RegulatoryFrameworkRow extends Record<string, unknown> {
+  readonly region_id: string;
+  readonly edition_year: number;
+  readonly score_in_tenths: number;
   readonly source_retrieved_at: string;
 }
 
@@ -107,6 +117,7 @@ export interface FeasibilityRecomputeSummary {
   readonly cellsWithNeedDensity: number;
   readonly countriesWithPurchasingPower: number;
   readonly cellsWithManufacturing: number;
+  readonly countriesWithRegulatoryFramework: number;
 }
 
 export async function recomputeFeasibilityReadouts(
@@ -141,6 +152,18 @@ export async function recomputeFeasibilityReadouts(
     FROM country_economic_indicator
     WHERE indicator_code = 'NY.GDP.PCAP.PP.CD'
     ORDER BY region_id, data_year DESC
+  `);
+
+  // --- 2b. Regulatory framework: the newest B-READY edition per country.
+  const regulatoryFrameworkRows = await db.execute<RegulatoryFrameworkRow>(sql`
+    SELECT DISTINCT ON (region_id)
+           region_id,
+           edition_year::int AS edition_year,
+           score_in_tenths::int AS score_in_tenths,
+           source_retrieved_at::text AS source_retrieved_at
+    FROM country_business_ready_score
+    WHERE indicator_code = 'IC.BRE.P1.RF'
+    ORDER BY region_id, edition_year DESC
   `);
 
   // --- 3. Trade: the newest annual all-partner line per (commodity, country, direction) — the
@@ -257,6 +280,19 @@ export async function recomputeFeasibilityReadouts(
     }
   }
 
+  // Regulatory framework the same way, for the same reason: a country-level fact.
+  for (const row of regulatoryFrameworkRows.rows) {
+    const regulatoryFramework = {
+      regulatoryFrameworkPoints: regulatoryFrameworkPoints(row.score_in_tenths),
+      regulatoryFrameworkScoreInTenths: row.score_in_tenths,
+      regulatoryFrameworkEditionYear: row.edition_year,
+      regulatoryFrameworkSourceRetrievedAt: parseDatabaseTimestamp(row.source_retrieved_at),
+    };
+    for (const domain of DOMAINS) {
+      Object.assign(rowFor(row.region_id, domain), regulatoryFramework);
+    }
+  }
+
   const rows = [...rowsByCell.values()];
   const INSERT_CHUNK_SIZE = 500;
   await db.transaction(async (transaction) => {
@@ -280,6 +316,7 @@ export async function recomputeFeasibilityReadouts(
     cellsWithNeedDensity,
     countriesWithPurchasingPower: purchasingPowerRows.rows.length,
     cellsWithManufacturing,
+    countriesWithRegulatoryFramework: regulatoryFrameworkRows.rows.length,
   };
 }
 

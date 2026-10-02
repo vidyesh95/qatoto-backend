@@ -3,7 +3,13 @@ import { z } from "zod";
 import type { Result } from "#src/types/index.js";
 
 /**
- * The World Bank Indicators API (v2) — the purchasing-power pillar's source.
+ * The World Bank Indicators API (v2) — the source of TWO feasibility pillars: purchasing power
+ * (`NY.GDP.PCAP.PP.CD`) and the regulatory framework (`IC.BRE.P1.RF`, B-READY Pillar 1).
+ *
+ * B-READY IS ON THIS API, which the first plan for the regulatory pillar did not know: it
+ * proposed an admin CSV import because "B-READY has no API". Verified live 2026-10-02: WDI
+ * (source 2) serves 43 `IC.BRE.*` series, the 2024 edition only (50 economies, `lastupdated`
+ * 2026-07-13). Later editions arrive here when WDI ingests them.
  *
  * KEYLESS AND PUBLIC. Nothing personal is sent: the request names countries and an indicator
  * code, nothing about any user, so this adds no processor to the privacy policy.
@@ -29,11 +35,21 @@ const PER_PAGE = 1000;
 export type FetchImplementation = typeof globalThis.fetch;
 
 export const GDP_PER_CAPITA_PPP_INDICATOR_CODE = "NY.GDP.PCAP.PP.CD";
+/**
+ * B-READY "Pillar 1: Regulatory Framework", 0–100. B-READY deliberately publishes NO overall
+ * economy score, so this one published pillar is read rather than an average Qatoto would have
+ * to invent.
+ */
+export const BUSINESS_READY_REGULATORY_FRAMEWORK_INDICATOR_CODE = "IC.BRE.P1.RF";
+
+export type WorldBankIndicatorCode =
+  | typeof GDP_PER_CAPITA_PPP_INDICATOR_CODE
+  | typeof BUSINESS_READY_REGULATORY_FRAMEWORK_INDICATOR_CODE;
 
 export interface IndicatorSeriesQuery {
   /** ISO 3166-1 alpha-2, e.g. "IN". */
   readonly countryCodes: readonly string[];
-  readonly indicatorCode: typeof GDP_PER_CAPITA_PPP_INDICATOR_CODE;
+  readonly indicatorCode: WorldBankIndicatorCode;
   /** `mrv`: the most recent N years per country. */
   readonly mostRecentYears: number;
 }
@@ -47,13 +63,20 @@ export interface WorldBankOptions {
 export interface IndicatorObservation {
   readonly countryCode: string;
   readonly dataYear: number;
-  /** Rounded to whole international dollars. Observations the source left null are omitted. */
-  readonly valueInWholeInternationalDollars: number;
+  /**
+   * The published value, UNROUNDED and in the indicator's own unit. The caller converts, because
+   * the unit differs per indicator (whole dollars for PPP, tenths of a point for B-READY).
+   * Observations the source left null are omitted.
+   */
+  readonly value: number;
 }
 
 export interface IndicatorSeriesResult {
   readonly observations: readonly IndicatorObservation[];
-  /** Countries asked for that came back with no published value in the window. */
+  /**
+   * Countries asked for that came back with no published value in the window. A value the
+   * caller later rejects (out of its unit's range) does not move a country into this list.
+   */
   readonly countriesWithNoValue: readonly string[];
   /** The dataset's own last-revision date (`YYYY-MM-DD`), or null if the source omitted it. */
   readonly sourceLastUpdatedDate: string | null;
@@ -182,12 +205,11 @@ export async function fetchIndicatorSeries(
     // A null is "not published for that year" — not a zero-income country. No row.
     if (observation.value === null) continue;
     if (!requestedCountryCodes.has(observation.country.id)) continue;
-    const valueInWholeInternationalDollars = Math.round(observation.value);
-    if (valueInWholeInternationalDollars <= 0) continue;
+    if (!Number.isFinite(observation.value)) continue;
     observations.push({
       countryCode: observation.country.id,
       dataYear: Number(observation.date),
-      valueInWholeInternationalDollars,
+      value: observation.value,
     });
   }
 

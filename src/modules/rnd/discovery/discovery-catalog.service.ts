@@ -11,7 +11,10 @@ import {
   researchCategoryDomainEnum,
 } from "#src/db/schema.js";
 import { FEASIBILITY_PILLAR_BUDGETS } from "#src/modules/rnd/discovery/feasibility-readout-score.js";
-import { WORLD_BANK_GDP_PPP_SOURCE_NAME } from "#src/modules/rnd/discovery/sync-world-bank-indicators.js";
+import {
+  WORLD_BANK_BUSINESS_READY_SOURCE_NAME,
+  WORLD_BANK_GDP_PPP_SOURCE_NAME,
+} from "#src/modules/rnd/discovery/sync-world-bank-indicators.js";
 
 /**
  * The knowledge hub's read side: the region and skill lookups, the market-insight cards,
@@ -400,6 +403,17 @@ export interface PurchasingPowerReadout {
   readonly sourceRetrievedAt: Date;
 }
 
+export interface RegulatoryFrameworkReadout {
+  readonly points: number;
+  readonly budget: number;
+  /** B-READY Pillar 1, 0–100, in tenths of a point: 569 is 56.9. */
+  readonly scoreInTenths: number;
+  /** The B-READY edition the score belongs to, e.g. 2024. */
+  readonly editionYear: number;
+  readonly sourceName: string;
+  readonly sourceRetrievedAt: Date;
+}
+
 export interface ManufacturingReadout {
   readonly points: number;
   readonly budget: number;
@@ -423,6 +437,8 @@ export interface FeasibilityReadoutView {
   readonly modelVersion: number;
   /** Country-level: the same for every domain, so it is sent once rather than per row. */
   readonly purchasingPower: PurchasingPowerReadout | null;
+  /** Country-level too, and sent once for the same reason. */
+  readonly regulatoryFramework: RegulatoryFrameworkReadout | null;
   /** Only domains with need density or manufacturing. Order is the pgEnum's. */
   readonly domains: readonly FeasibilityDomainReadout[];
 }
@@ -473,6 +489,7 @@ export async function findFeasibilityReadout(
   if (!firstRow) return null;
 
   let purchasingPower: PurchasingPowerReadout | null = null;
+  let regulatoryFramework: RegulatoryFrameworkReadout | null = null;
   const domains: FeasibilityDomainReadout[] = [];
   for (const row of rows) {
     if (
@@ -489,6 +506,23 @@ export async function findFeasibilityReadout(
         dataYear: row.purchasingPowerDataYear,
         sourceName: WORLD_BANK_GDP_PPP_SOURCE_NAME,
         sourceRetrievedAt: row.purchasingPowerSourceRetrievedAt,
+      };
+    }
+
+    if (
+      regulatoryFramework === null &&
+      row.regulatoryFrameworkPoints !== null &&
+      row.regulatoryFrameworkScoreInTenths !== null &&
+      row.regulatoryFrameworkEditionYear !== null &&
+      row.regulatoryFrameworkSourceRetrievedAt !== null
+    ) {
+      regulatoryFramework = {
+        points: row.regulatoryFrameworkPoints,
+        budget: FEASIBILITY_PILLAR_BUDGETS.regulatoryFramework,
+        scoreInTenths: row.regulatoryFrameworkScoreInTenths,
+        editionYear: row.regulatoryFrameworkEditionYear,
+        sourceName: WORLD_BANK_BUSINESS_READY_SOURCE_NAME,
+        sourceRetrievedAt: row.regulatoryFrameworkSourceRetrievedAt,
       };
     }
 
@@ -534,6 +568,7 @@ export async function findFeasibilityReadout(
     asOf: latest.asOf,
     modelVersion: firstRow.modelVersion,
     purchasingPower,
+    regulatoryFramework,
     domains,
   };
 }

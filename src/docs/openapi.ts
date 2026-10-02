@@ -861,11 +861,12 @@ const handWrittenSpec = {
     "/discovery/feasibility-readouts": {
       get: {
         tags: ["Discovery"],
-        summary: "A country's feasibility readout: three pillars per problem domain, never summed",
+        summary: "A country's feasibility readout: four pillars, never summed",
         description:
           "Need density (Qatoto problem reports, /30), purchasing power (World Bank GDP per " +
-          "capita PPP, /25, country-level so sent once) and manufacturing (UN Comtrade exports " +
-          "plus the supplier directory, /25). Each pillar carries its own source and date and " +
+          "capita PPP, /25, country-level so sent once), manufacturing (UN Comtrade exports " +
+          "plus the supplier directory, /25) and the regulatory framework (World Bank B-READY " +
+          "Pillar 1, /20, country-level so sent once). Each pillar carries its own source and date and " +
           "is `null` when there is no data — never 0. There is no total and no verdict. Pinned " +
           "to this country's latest snapshot. `data: null` for an unknown or unscored country.",
         parameters: [

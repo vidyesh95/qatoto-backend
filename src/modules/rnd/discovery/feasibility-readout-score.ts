@@ -7,11 +7,12 @@ import {
 } from "#src/lib/score-ladder.js";
 
 /**
- * The feasibility readout's three pillars (FE docs/FEASIBILITY_MODEL.md, correction header).
+ * The feasibility readout's four pillars (FE docs/FEASIBILITY_MODEL.md, correction header).
  *
- * ⚠️ THREE SCORERS, AND NO FUNCTION THAT ADDS THEM. The spec's weighted 0–100 composite and its
+ * ⚠️ FOUR SCORERS, AND NO FUNCTION THAT ADDS THEM. The spec's weighted 0–100 composite and its
  * `feasibilityRating` verdict were rejected: need density is Qatoto's own cluster data, purchasing
- * power is the World Bank, manufacturing is UN Comtrade plus the supplier directory, and summing
+ * power is the World Bank, manufacturing is UN Comtrade plus the supplier directory, the
+ * regulatory framework is World Bank B-READY, and summing
  * them is the cross-evidence join `R_AND_D_STRUCTURE.md` §7 forbids, "done with weights". Each
  * pillar is bounded by its own budget and read on its own. A sum INSIDE one pillar is fine —
  * both halves of it come from the same source.
@@ -24,23 +25,26 @@ import {
  * `assertLadderIsWellFormed` — a ladder declared the wrong way round produces plausible small
  * numbers and no error, which is the failure this module is built not to have.
  *
- * MODEL VERSION 1 DEPARTS FROM THE SPEC IN THREE STATED WAYS:
+ * THE MODEL DEPARTS FROM THE SPEC IN FOUR STATED WAYS:
  *   - need density is two ladders, not `log10(N+1)/3 × (0.4 + 0.6·C_active/C_total)` — floats and
  *     a denominator ("all historical clusters in the category") that shrinks a country's score
  *     when another country reports more;
  *   - purchasing power drops the `× log10(affected population)` term, because no affected
  *     population figure exists anywhere in this system;
  *   - manufacturing drops the tariff and logistics terms — tariffs are ruled out in §7 and
- *     neither dataset is ingested.
- * A change to any ladder bumps this constant; old snapshots keep the version they were scored
- * under.
+ *     neither dataset is ingested;
+ *   - the regulatory pillar (added in version 2) drops `F_sector_liberalization`, which has no
+ *     source, and reads B-READY Pillar 1 rather than an overall score B-READY does not publish.
+ * A change to any ladder, or a new pillar, bumps this constant; old snapshots keep the version
+ * they were scored under. Version 2 added the regulatory pillar and changed no ladder.
  */
-export const FEASIBILITY_READOUT_MODEL_VERSION = 1;
+export const FEASIBILITY_READOUT_MODEL_VERSION = 2;
 
 export const FEASIBILITY_PILLAR_BUDGETS = {
   needDensity: 30,
   purchasingPower: 25,
   manufacturing: 25,
+  regulatoryFramework: 20,
 } as const;
 
 const NEED_DENSITY_SUB_BUDGETS = { distinctReporters: 20, activeClusters: 10 } as const;
@@ -190,5 +194,29 @@ export function manufacturingPoints(input: {
   return (
     pointsForAtLeastLadder(DOMAIN_EXPORT_VALUE_LADDER, input.exportValueInCents) +
     pointsForAtLeastLadder(DOMESTIC_PRODUCER_LADDER, input.domesticProducerCount)
+  );
+}
+
+/** B-READY scores are stored in tenths of a point; 1000 is a score of 100. */
+const MAXIMUM_BUSINESS_READY_SCORE_IN_TENTHS = 1000;
+
+/**
+ * The regulatory framework for a country: the spec's `20 × score / 100` in integer arithmetic,
+ * `floor(tenths / 50)`, so 0–20. No ladder, because the spec's formula is already linear and a
+ * ladder would add thresholds nobody chose. Only called with a published score; an economy
+ * B-READY does not cover is the caller's null.
+ *
+ * @throws on a negative, non-integer or above-100 score — the table's CHECK rules all three out.
+ */
+export function regulatoryFrameworkPoints(scoreInTenths: number): number {
+  assertNonNegativeIntegerInput("regulatoryFrameworkPoints", "scoreInTenths", scoreInTenths);
+  if (scoreInTenths > MAXIMUM_BUSINESS_READY_SCORE_IN_TENTHS) {
+    throw new Error(
+      `regulatoryFrameworkPoints: scoreInTenths ${String(scoreInTenths)} exceeds ${String(MAXIMUM_BUSINESS_READY_SCORE_IN_TENTHS)}`,
+    );
+  }
+  return Math.floor(
+    (scoreInTenths * FEASIBILITY_PILLAR_BUDGETS.regulatoryFramework) /
+      MAXIMUM_BUSINESS_READY_SCORE_IN_TENTHS,
   );
 }
