@@ -1347,3 +1347,34 @@ thing most worth proving.
 - [ ] CORS names the **exact** frontend origin, never `*`, with `credentials: true`.
 - [ ] Better Auth handler mounted **before** `express.json()` (§5c); helmet on; DB pool
       uses verified TLS (CA cert) when `DATABASE_CA_CERT_PATH` is set.
+
+## 12. The AI assistant and Premium AI — `src/modules/assistant/`
+
+The frontend's AI Assist Mode answers questions with Chrome's built-in Gemini Nano **on the
+viewer's own device** whenever it can. This module is the cloud fallback, and it is **Premium AI
+only**: it spends Qatoto's Gemini key.
+
+| Route                                               | Who                         | What                                                     |
+| --------------------------------------------------- | --------------------------- | -------------------------------------------------------- |
+| `POST /assistant/replies`                           | identified + Premium AI     | One reply from Gemini. Stateless: nothing is stored.     |
+| `GET /assistant/cloud-access`                       | any signed-in caller        | `{ hasCloudAccess }` for the caller, read on panel open. |
+| `GET /assistant/admin/cloud-access`                 | `grant_ai_assistant_cloud`  | Active grants, newest first, keyset-paged.               |
+| `POST /assistant/admin/cloud-access`                | `grant_ai_assistant_cloud`  | Grant by exact email. 404 unknown, 409 already active.   |
+| `POST /assistant/admin/cloud-access/:userId/revocation` | `grant_ai_assistant_cloud` | Revoke. 404 if no active grant.                       |
+
+- **Premium AI is a staff-granted flag, not a subscription.** `assistant_cloud_entitlement`
+  (migration `0213`) holds one row per grant; a partial unique index allows one ACTIVE grant per
+  account, and a revoke stamps `revoked_at` and keeps the row, so the table is its own history.
+  A real subscription later writes the same rows; `hasActiveCloudAccess` is the one reader and
+  does not change.
+- **The check runs before any model call.** Without a grant, `/replies` answers **403 with
+  `data.reason: "premium_required"`**, distinct from `requireIdentifiedUser`'s anonymous-account
+  403. The capability on the admin routes is checked inside the service, first.
+- **`grant_ai_assistant_cloud` is `admin` only** (`platform-role.service.ts`): a per-account
+  spending decision belongs beside role management.
+- **Privacy:** `anonymization-manifest.ts` deletes the subject's grants and nulls them out as
+  granter/revoker; `text-pii-register.ts` covers the admin note; the export carries the
+  subject's own grant dates (`premiumAiAccess`), not who granted it or the note.
+- **There is no web API for Apple's or Samsung's on-device models** (Apple's Foundation Models
+  framework is Swift-only; Galaxy AI is a browser feature). That is why the non-premium path is
+  Chrome's Prompt API or no chat at all, never a third backend.

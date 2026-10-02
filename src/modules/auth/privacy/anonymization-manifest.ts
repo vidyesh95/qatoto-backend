@@ -69,6 +69,11 @@ export type UserReferenceKey = `${string}.${string}`;
 export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, AnonymizationDisposition>> =
   {
     "account.user_id": { kind: "delete_rows" },
+    // Premium AI is a property of the account and means nothing once it is gone. The granter
+    // and revoker are staff attribution on SOMEONE ELSE'S grant: null them, keep the history.
+    "assistant_cloud_entitlement.user_id": { kind: "delete_rows" },
+    "assistant_cloud_entitlement.granted_by_user_id": { kind: "null_out" },
+    "assistant_cloud_entitlement.revoked_by_user_id": { kind: "null_out" },
     "account_deletion_request.user_id": {
       kind: "retain",
       lawfulBasis: "Art. 5(2) accountability",

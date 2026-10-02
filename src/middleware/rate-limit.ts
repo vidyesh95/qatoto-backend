@@ -383,6 +383,23 @@ export const assistantReplyLimiter = createLimiter({
  * the burst limit could still spend a whole day's quota; two hundred questions a day is far past
  * anyone finding their way around the site.
  */
+/**
+ * GET /assistant/cloud-access — the panel's one read on open. Cheap, but per user so a stuck
+ * client cannot hammer it.
+ */
+export const assistantCloudAccessReadLimiter = createLimiter({
+  namespace: "assistantCloudAccessRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/** /assistant/admin/cloud-access — the Premium AI admin queue, reads and writes. */
+export const assistantCloudAccessAdminLimiter = createLimiter({
+  namespace: "assistantCloudAccessAdmin",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
 export const assistantReplyDailyLimiter = createLimiter({
   namespace: "assistantReplyDaily",
   windowMs: 24 * ONE_HOUR_MS,

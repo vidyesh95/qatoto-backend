@@ -802,3 +802,61 @@ export const platformFeedbackRelations = relations(platformFeedback, ({ one }) =
     references: [user.id],
   }),
 }));
+
+/**
+ * Premium AI: which accounts may ask the AI assistant through the cloud route
+ * (`POST /assistant/replies`, Google Gemini on Qatoto's key).
+ *
+ * ## THIS IS A STAFF-GRANTED FLAG, NOT A SUBSCRIPTION
+ *
+ * There is no billing in this codebase. Admins holding `grant_ai_assistant_cloud` grant and
+ * revoke it per account at `/admin/premium-ai`. A real subscription can replace the grant
+ * later by writing the same rows, and nothing that READS this table has to change.
+ *
+ * ## REVOKING NEVER DELETES
+ *
+ * A revoke stamps `revoked_at` / `revoked_by_user_id` and the row stays, so this table is its
+ * own history of who had premium, when, and who decided. That is why there is no audit-enum
+ * label for it. The partial unique index allows exactly one ACTIVE grant per account, and any
+ * number of past ones.
+ *
+ * Everyone else uses the on-device model in their own browser, or has no chat at all.
+ */
+export const assistantCloudEntitlement = pgTable(
+  "assistant_cloud_entitlement",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `cascade` matches the anonymization verdict (`delete_rows`): premium is a property of the
+    // account and means nothing once the account is gone.
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Nullable `set null`: the grant outlives the staff member who made it.
+    grantedByUserId: text("granted_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    grantedAt: timestamp("granted_at", { precision: 3 }).defaultNow().notNull(),
+    note: text("note"),
+    revokedAt: timestamp("revoked_at", { precision: 3 }),
+    revokedByUserId: text("revoked_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+  },
+  (table) => [
+    uniqueIndex("assistant_cloud_entitlement_active_user_unq")
+      .on(table.userId)
+      .where(sql`revoked_at IS NULL`),
+    // The admin list pages active grants newest first, keyset on (granted_at, id).
+    index("assistant_cloud_entitlement_grantedAt_idx").on(table.grantedAt, table.id),
+    check(
+      "assistant_cloud_entitlement_note_ck",
+      sql`note IS NULL OR char_length(note) BETWEEN 1 AND 200`,
+    ),
+    check(
+      "assistant_cloud_entitlement_revocation_ck",
+      sql`revoked_at IS NULL OR revoked_at >= granted_at`,
+    ),
+  ],
+);

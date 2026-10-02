@@ -644,6 +644,20 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
         ORDER BY created_at DESC`,
   );
 
+  /**
+   * PREMIUM AI GRANTS ON THE SUBJECT'S OWN ACCOUNT: when it was granted and, if so, revoked.
+   *
+   * The staff member's identity and the admin's note are NOT selected: both are internal
+   * decisions about the account rather than data the person provided, and the note is written
+   * for the next admin. What is theirs is the fact and its dates.
+   */
+  const premiumAiAccess = await collect(
+    "premiumAiAccess",
+    sql`SELECT granted_at, revoked_at
+        FROM assistant_cloud_entitlement WHERE user_id = ${userId}
+        ORDER BY granted_at DESC`,
+  );
+
   const workYouHaveDone = {
     projectsFounded: await collect(
       "projectsFounded",
@@ -695,6 +709,10 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
           why: "Salted hashes that stop one person's reloads counting as many shoppers. They are not identifiers we can read back, so printing them would tell you nothing about yourself.",
         },
         {
+          what: "Who granted or revoked Premium AI on your account, and their note",
+          why: "Internal staff decisions about the account rather than data you provided. The fact and its dates are included under premiumAiAccess.",
+        },
+        {
           what: "Product pages you opened while signed out",
           why: "They carry no account id, so there is no way to say which of them were yours.",
         },
@@ -709,6 +727,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     productPagesYouLookedAt,
     supportYouAskedFor: { cases: supportCasesYouOpened, messages: supportCaseMessages },
     feedbackYouSent,
+    premiumAiAccess,
     workYouHaveDone,
     /**
      * PRESENT AND EMPTY, ON PURPOSE. The panel lists "Settings on this device" as one of
@@ -717,7 +736,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
      */
     settingsOnThisDevice: {
       rows: [],
-      note: "Your language, browse country and AI assist preference are stored in your browser's local storage and are never sent to us, so we have no copy to include. Clear them from Settings → Your data & privacy.",
+      note: "Your language, browse country, AI assist preference, where the assistant sits and its size and speed, and the notes you asked it to remember are stored in your browser's local storage. We store none of them, so we have no copy to include. (With Premium AI, the notes travel with a question to produce an answer and are not kept.) Clear them from Settings → Your data & privacy.",
     },
   };
 }

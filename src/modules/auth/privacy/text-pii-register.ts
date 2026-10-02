@@ -378,6 +378,11 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
     manifestKey: "account.user_id",
     note: "The Better Auth provider row, including the address the OAuth provider returned.",
   },
+  "assistant_cloud_entitlement.note": {
+    kind: "covered_by_row_delete",
+    manifestKey: "assistant_cloud_entitlement.user_id",
+    note: "An admin's free-text note about why this account has Premium AI. It is about the grant's subject, and every row naming the erasing user is deleted with them.",
+  },
   "session.ip_address": {
     kind: "covered_by_row_delete",
     manifestKey: "session.user_id",

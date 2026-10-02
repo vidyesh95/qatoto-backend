@@ -55,3 +55,29 @@ export type CreateAssistantReplyInput = z.infer<typeof CreateAssistantReplySchem
 
 /** A stray query key is a 422 rather than an ignored parameter. */
 export const EmptyAssistantQuerySchema = z.object({}).strict();
+
+/** `GET /assistant/admin/cloud-access` — keyset-paged active grants. */
+export const ListCloudAccessGrantsQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+    cursor: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+/**
+ * `POST /assistant/admin/cloud-access` — grant Premium AI by exact email.
+ *
+ * Email, not a user id, because that is what an admin has in hand. Matches the lookup the staff
+ * roles console already does (`platform-roles.schemas.ts`). The note is optional context for the
+ * next admin ("beta tester", "support escalation"), never shown to the account holder.
+ */
+export const GrantCloudAccessSchema = z
+  .object({
+    email: z.string().trim().email().max(320),
+    note: z.string().trim().min(1).max(200).nullable().default(null),
+  })
+  .strict();
+
+export const CloudAccessUserIdParamsSchema = z
+  .object({ userId: z.string().trim().min(1).max(200) })
+  .strict();

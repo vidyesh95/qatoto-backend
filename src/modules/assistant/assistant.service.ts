@@ -1,4 +1,5 @@
 import { config } from "#src/config/index.js";
+import { hasActiveCloudAccess } from "#src/modules/assistant/assistant-cloud-access.service.js";
 import {
   AssistantReplySchema,
   ASSISTANT_REPLY_RESPONSE_SCHEMA,
@@ -10,7 +11,8 @@ import { generateOnce, type FetchImplementation } from "#src/modules/rnd/gemini-
 import type { Result } from "#src/types/index.js";
 
 /**
- * One assistant reply, from Gemini, for a signed-in person whose browser cannot run the model.
+ * One assistant reply, from Gemini, for a signed-in PREMIUM account (an active
+ * `assistant_cloud_entitlement` grant) whose browser cannot run the on-device model.
  *
  * ## STATELESS, AND THAT IS A PROMISE THE PRIVACY POLICY MAKES
  *
@@ -32,6 +34,8 @@ import type { Result } from "#src/types/index.js";
  */
 
 export type AssistantReplyError =
+  /** The account holds no active Premium AI grant (`assistant_cloud_entitlement`). */
+  | { type: "ASSISTANT_PREMIUM_REQUIRED" }
   /** No key, provider down, timeout, or truncated output. The person can try again later. */
   | { type: "ASSISTANT_UNAVAILABLE" }
   /** The provider refused this input (a safety stop). Asking differently may work. */
@@ -43,9 +47,16 @@ export type AssistantReplyError =
 const THINKING_LEVEL = "low";
 
 export async function createAssistantReply(
+  callerUserId: string,
   input: CreateAssistantReplyInput,
   fetchImplementation?: FetchImplementation,
 ): Promise<Result<AssistantReply, AssistantReplyError>> {
+  // PREMIUM FIRST, before a single token is spent. Everyone else answers on their own device
+  // (Chrome's built-in model) or has no chat at all; this route spends Qatoto's Gemini key.
+  if (!(await hasActiveCloudAccess(callerUserId))) {
+    return { success: false, error: { type: "ASSISTANT_PREMIUM_REQUIRED" } };
+  }
+
   const generated = await generateOnce(
     {
       parts: [{ text: buildAssistantPrompt(input) }],

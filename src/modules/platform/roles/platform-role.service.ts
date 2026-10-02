@@ -93,7 +93,13 @@ export type PlatformCapability =
    * rather than beside a review queue — the same reasoning `view_platform_metrics` and
    * `handle_support_cases` already state for their own dossiers above.
    */
-  | "export_chargeback_evidence";
+  | "export_chargeback_evidence"
+  /**
+   * Grant and revoke Premium AI (`assistant_cloud_entitlement`): who may ask the AI assistant
+   * through the cloud route, which spends Qatoto's Gemini key. `admin` ONLY. It is a spending
+   * decision made per account, so it sits beside role management, not beside a review queue.
+   */
+  | "grant_ai_assistant_cloud";
 
 /**
  * The grant table. Explicit and total: every role lists every capability it holds, so
@@ -113,6 +119,7 @@ const PLATFORM_ROLE_GRANTS: Readonly<Record<PlatformRole, readonly PlatformCapab
     "view_platform_metrics",
     "handle_support_cases",
     "export_chargeback_evidence",
+    "grant_ai_assistant_cloud",
   ],
 };
 

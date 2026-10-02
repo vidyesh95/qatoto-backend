@@ -141,6 +141,8 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   // member-facing surface it sits inside.
   { prefix: "/support/admin", tag: "Support moderation" },
   { prefix: "/support", tag: "Support" },
+  // Longest prefix first, so the Premium AI admin queue is not tagged as the member surface.
+  { prefix: "/assistant/admin", tag: "AI assistant administration" },
   { prefix: "/assistant", tag: "AI assistant" },
   { prefix: "/governance", tag: "Governance" },
   { prefix: "/daily-logs", tag: "Daily logs" },

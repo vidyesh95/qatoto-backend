@@ -1,7 +1,12 @@
 import express from "express";
 
-import { longFormBody } from "#src/middleware/json-body.js";
-import { assistantReplyDailyLimiter, assistantReplyLimiter } from "#src/middleware/rate-limit.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
+import {
+  assistantCloudAccessAdminLimiter,
+  assistantCloudAccessReadLimiter,
+  assistantReplyDailyLimiter,
+  assistantReplyLimiter,
+} from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as assistantController from "#src/modules/assistant/assistant.controller.js";
@@ -42,6 +47,47 @@ router.post(
   requireIdentifiedUser,
   longFormBody,
   assistantController.createAssistantReply,
+);
+
+/**
+ * PREMIUM AI. The cloud route above answers only accounts with an active
+ * `assistant_cloud_entitlement` grant (the service checks it before any model call). The panel
+ * reads the caller's own answer here once, on open: `requireAuth` and nothing else, the shape
+ * every caller's-own read takes, because it reaches nothing the caller did not already have.
+ */
+router.get(
+  "/cloud-access",
+  requireAuth,
+  assistantCloudAccessReadLimiter,
+  assistantController.getOwnCloudAccess,
+);
+
+/**
+ * The admin queue. `grant_ai_assistant_cloud` (admin ONLY) is checked INSIDE the service, first,
+ * so the capability is not probeable and every refusal joins the controller's exhaustive switch.
+ * Grant is by exact email; revoke stamps the row and keeps it. No two routes here share a method
+ * and a path, so declaration order decides nothing.
+ */
+router.get(
+  "/admin/cloud-access",
+  requireAuth,
+  assistantCloudAccessAdminLimiter,
+  assistantController.listCloudAccessGrants,
+);
+
+router.post(
+  "/admin/cloud-access",
+  requireAuth,
+  assistantCloudAccessAdminLimiter,
+  compactBody,
+  assistantController.grantCloudAccess,
+);
+
+router.post(
+  "/admin/cloud-access/:userId/revocation",
+  requireAuth,
+  assistantCloudAccessAdminLimiter,
+  assistantController.revokeCloudAccess,
 );
 
 export default router;
