@@ -6,8 +6,12 @@ stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
-const { evaluateDisputeOpeningRelationship, evaluateReviewRelationship, isModeratorMemberOfDisputeParty } =
-  await import("#src/modules/store/trust/commerce-trust.service.js");
+const {
+  evaluateDisputeOpeningRelationship,
+  evaluateReviewRelationship,
+  isModeratorMemberOfDisputeParty,
+  projectReviewVisibilityForAuthor,
+} = await import("#src/modules/store/trust/commerce-trust.service.js");
 
 describe("commerce trust relationship policy", () => {
   it("allows only the completion buyer to review a different counterparty", () => {
@@ -111,5 +115,19 @@ describe("commerce trust relationship policy", () => {
         moderatorOrganizationIds: ["commerce_org_moderator"],
       }),
     ).toBe(false);
+  });
+});
+
+describe("projectReviewVisibilityForAuthor", () => {
+  /**
+   * The wire stays two-valued after migration `0214`: the frontend parses `visibility` as
+   * `z.enum(["visible", "hidden"])`, so a third value would fail the parse of the author's review.
+   */
+  it.each([
+    ["visible", "visible"],
+    ["hidden", "hidden"],
+    ["hidden_pending_review", "hidden"],
+  ] as const)("projects %s as %s", (storedVisibility, projectedVisibility) => {
+    expect(projectReviewVisibilityForAuthor(storedVisibility)).toBe(projectedVisibility);
   });
 });

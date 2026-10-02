@@ -251,8 +251,9 @@ async function enqueueModeratedTargetSearchRefresh(
  * target, so an open report against a moderator-hidden row was filed AFTER that moderator ruled,
  * and throwing it out says nothing about the earlier ruling. Likewise an author's withdrawal
  * (`removed_by_author`) is not a moderation event, and "this report is unfounded" is not
- * "republish what the author took down". A product never auto-hides, so on a product the
- * dismissal lifts nothing at all.
+ * "republish what the author took down". A review records the same split since migration `0214`
+ * (`hidden_pending_review` vs `hidden`) and follows the same rule. A product never auto-hides, so
+ * on a product the dismissal lifts nothing at all.
  *
  * A direct RESTORE (`restore`) is a moderator reversing what hid the row on purpose: it
  * un-withdraws a question or answer — what makes a withdrawn answer restorable from the admin
@@ -287,8 +288,7 @@ async function setTargetVisibility(
   targetId: string,
   change: TargetVisibilityChange,
 ): Promise<void> {
-  const hidden = change.kind === "hide";
-  const hiddenAt = hidden ? new Date() : null;
+  const hiddenAt = change.kind === "hide" ? new Date() : null;
   const hiddenByUserId = change.kind === "hide" ? change.moderatorUserId : null;
   /**
    * ⚠️ THE STATE CONDITION IS IN THE UPDATE, NOT IN A READ BEFORE IT. A read-then-write would let
@@ -300,18 +300,41 @@ async function setTargetVisibility(
 
   switch (targetKind) {
     case "review":
-      // `commerce_review` predates the four-value UGC enum and keeps its own two-value
-      // one. Hiding here ALSO corrects the rating with no recomputation step, because
-      // every aggregate in commerce-trust-metrics already filters on it.
-      //
-      // ⚠️ THE ONE ARM A DISMISSAL CAN STILL OVERRULE A MODERATOR ON. Two values cannot say
-      // whether `hidden` was the threshold or a person, so a dismissed later report un-hides a
-      // review a moderator hid. Closing it needs a third value and a migration (todo.md).
-      await transaction
-        .update(commerceReview)
-        .set({ visibility: hidden ? "hidden" : "visible" })
-        .where(eq(commerceReview.id, targetId));
-      return;
+      // `commerce_review` predates the four-value UGC enum and keeps its own, now three-value,
+      // one: `hidden` is a moderator's hide and `hidden_pending_review` the threshold's. Hiding
+      // here ALSO corrects the rating with no recomputation step, because every aggregate in
+      // commerce-trust-metrics already filters on `visible`.
+      switch (change.kind) {
+        case "hide":
+          await transaction
+            .update(commerceReview)
+            .set({
+              visibility: change.moderatorUserId === null ? "hidden_pending_review" : "hidden",
+            })
+            .where(eq(commerceReview.id, targetId));
+          return;
+        case "lift_automatic_hide":
+          await transaction
+            .update(commerceReview)
+            .set({ visibility: "visible" })
+            .where(
+              and(
+                eq(commerceReview.id, targetId),
+                eq(commerceReview.visibility, "hidden_pending_review"),
+              ),
+            );
+          return;
+        case "restore":
+          await transaction
+            .update(commerceReview)
+            .set({ visibility: "visible" })
+            .where(eq(commerceReview.id, targetId));
+          return;
+        default: {
+          const exhaustiveCheck: never = change;
+          throw new Error(`Unhandled visibility change: ${JSON.stringify(exhaustiveCheck)}`);
+        }
+      }
     case "question": {
       const [question] = await transaction
         .update(commerceProductQuestion)

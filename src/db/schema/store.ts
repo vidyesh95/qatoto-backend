@@ -691,8 +691,8 @@ export const commerceProductEngagementKindEnum = pgEnum("commerce_product_engage
 /**
  * Visibility of user-generated commerce content (STORE Appendix A9, A12).
  *
- * FOUR values, not a reuse of `commerce_review_visibility`'s two, because these are
- * four different facts. An author retracting is not a moderation event, and an
+ * FOUR values, not a reuse of `commerce_review_visibility` (three since `0214`, and no
+ * author retraction — a review has none), because these are four different facts. An author retracting is not a moderation event, and an
  * automatic threshold hide is not a human decision — flattening them would make the
  * moderation queue lie about who acted.
  */
@@ -1262,9 +1262,22 @@ export const commerceCompletionTargetKindEnum = pgEnum("commerce_completion_targ
   "service_engagement",
 ]);
 
+/**
+ * Whether a review is on the wire, and WHO took it off.
+ *
+ * `hidden` is a MODERATOR's hide; `hidden_pending_review` is the reporter threshold's, with no
+ * person behind it. The split exists so a report DISMISSAL can lift only the automatic hide: with
+ * two values it could not tell them apart, and throwing out a report filed after a moderator ruled
+ * un-hid the review that moderator had hidden. The label byte-matches
+ * `commerce_ugc_visibility_state`'s, deliberately — one name for one fact across both enums.
+ *
+ * Every reader filters `visibility = 'visible'`, so both hidden values are excluded with no reader
+ * change. The AUTHOR's projection still says `hidden` for either (`projectReviewVisibilityForAuthor`).
+ */
 export const commerceReviewVisibilityEnum = pgEnum("commerce_review_visibility", [
   "visible",
   "hidden",
+  "hidden_pending_review",
 ]);
 
 /**

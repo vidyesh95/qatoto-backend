@@ -258,6 +258,31 @@ function projectDispute(dispute: typeof commerceDispute.$inferSelect): DisputePr
   };
 }
 
+/**
+ * The review's visibility as its AUTHOR sees it: two values, never three.
+ *
+ * The author learns that their review is hidden, not WHO hid it — the reporter threshold
+ * (`hidden_pending_review`) and a moderator (`hidden`) both read `hidden`. That is also what keeps
+ * the wire unchanged since migration `0214` added the third value: the frontend parses this field
+ * as `z.enum(["visible", "hidden"])`, and a bundle older than any change there would fail the parse
+ * of the author's whole review over one row.
+ */
+export function projectReviewVisibilityForAuthor(
+  visibility: (typeof commerceReview.$inferSelect)["visibility"],
+): ReviewProjection["visibility"] {
+  switch (visibility) {
+    case "visible":
+      return "visible";
+    case "hidden":
+    case "hidden_pending_review":
+      return "hidden";
+    default: {
+      const exhaustiveCheck: never = visibility;
+      throw new Error(`Unhandled review visibility: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
 function projectReview(
   review: typeof commerceReview.$inferSelect,
   scores: readonly ReviewScoreEntry[] = [],
@@ -269,7 +294,7 @@ function projectReview(
     productId: review.productId,
     rating: review.rating,
     body: review.body,
-    visibility: review.visibility,
+    visibility: projectReviewVisibilityForAuthor(review.visibility),
     helpfulCount: review.helpfulCount,
     mediaCount: review.mediaCount,
     scores: scores.toSorted((left, right) => left.axis.localeCompare(right.axis)),

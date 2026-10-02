@@ -16,8 +16,8 @@ vi.mock("dotenv/config", () => ({}));
 /**
  * What each moderation path WRITES, per target kind — and in particular what its UPDATE MATCHES.
  *
- * The bugs this file pins were all in a WHERE clause: a dismissal that matched a question or answer
- * by id alone republished a withdrawn one, and a product arm that wrote `approved` with no state
+ * The bugs this file pins were all in a WHERE clause: a dismissal that matched a question, answer
+ * or review by id alone republished a withdrawn one or overruled a moderator, and a product arm that wrote `approved` with no state
  * condition published unreviewed listings. A test that only checked `.set(...)` values passes
  * against both. So every recorded write carries its WHERE rendered through the real `PgDialect`,
  * and the assertions read the column names and bound parameters out of it.
@@ -254,14 +254,18 @@ describe("decideContentReport — a dismissal undoes only the automatic hide", (
     });
   });
 
-  it("still un-hides a review on dismissal (two-value enum; see todo.md)", async () => {
+  it("matches a dismissed review only while it is hidden_pending_review — a moderator's `hidden` survives", async () => {
     seedDecisionTarget("review", "review_1");
 
-    await decideContentReport(MODERATOR_USER_ID, "report_review", { decision: "dismissed" });
+    const result = await decideContentReport(MODERATOR_USER_ID, "report_review", { decision: "dismissed" });
 
+    expect(result.success).toBe(true);
     const update = findOnlyUpdate(commerceReview);
     expect(update.values).toEqual({ visibility: "visible" });
-    expect(renderWhere(update).params).toEqual(["review_1"]);
+    // Exact, for the reason the question/answer case above gives.
+    const where = renderWhere(update);
+    expect(where.sql).toContain('"visibility"');
+    expect(where.params).toEqual(["review_1", "hidden_pending_review"]);
   });
 
   it("closes every open report on the target, not only the one decided", async () => {
@@ -306,6 +310,16 @@ describe("decideContentReport — actioning", () => {
     expect(renderWhere(update).params).toEqual(["answer_1"]);
     expect(qaRefreshes.refreshQuestionAnswerSummary).toHaveBeenCalledWith(expect.anything(), "question_1");
     expect(qaRefreshes.refreshProductQuestionCounters).toHaveBeenCalledWith(expect.anything(), "product_1");
+  });
+
+  it("hides a review as a moderator's `hidden`, matched by id alone so it overrides an automatic hide", async () => {
+    seedDecisionTarget("review", "review_1");
+
+    await decideContentReport(MODERATOR_USER_ID, "report_review", { decision: "actioned" });
+
+    const update = findOnlyUpdate(commerceReview);
+    expect(update.values).toEqual({ visibility: "hidden" });
+    expect(renderWhere(update).params).toEqual(["review_1"]);
   });
 
   it("suspends a product and refreshes its search document after commit", async () => {
@@ -423,6 +437,20 @@ describe("restoreContent", () => {
     });
   });
 
+  it("un-hides a review whichever hide it was — matched by id alone", async () => {
+    seedDecisionTarget("review", "review_1");
+
+    await restoreContent(MODERATOR_USER_ID, {
+      targetKind: "review",
+      targetId: "review_1",
+      reasonNote: "Hidden in error.",
+    });
+
+    const update = findOnlyUpdate(commerceReview);
+    expect(update.values).toEqual({ visibility: "visible" });
+    expect(renderWhere(update).params).toEqual(["review_1"]);
+  });
+
   it("approves a product ONLY from suspended, and refreshes search after commit", async () => {
     seedDecisionTarget("product", "product_1");
 
@@ -481,6 +509,22 @@ describe("createContentReport — the automatic hide a dismissal reverses", () =
       actionKind: "content_hidden",
       actionSource: "automatic",
     });
+  });
+
+  it("hides a review as hidden_pending_review — not a moderator's `hidden` — once the threshold is met", async () => {
+    fakeDatabase.state.selectRowsByTable.set(commerceReview, [{ ownerOrganizationId: OWNER_ORGANIZATION_ID }]);
+    fakeDatabase.state.selectRowsByTable.set(commerceContentReport, [{ reporterCount: 3 }]);
+    fakeDatabase.state.writeRowsByTable.set(commerceContentReport, [buildReportRow("review", "review_1")]);
+
+    const result = await createContentReport(
+      { reporterUserId: "user_reporter", reporterOrganizationId: null },
+      { targetKind: "review", targetId: "review_1", reason: "spam" },
+    );
+
+    expect(result.success).toBe(true);
+    const update = findOnlyUpdate(commerceReview);
+    expect(update.values).toEqual({ visibility: "hidden_pending_review" });
+    expect(renderWhere(update).params).toEqual(["review_1"]);
   });
 
   it("does not hide below the threshold", async () => {
