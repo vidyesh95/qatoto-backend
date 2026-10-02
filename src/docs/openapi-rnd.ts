@@ -21,6 +21,7 @@ import platformAuditRouter from "#src/modules/platform/audit/platform-audit.rout
 import platformFeedbackRouter from "#src/modules/platform/feedback/feedback.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
 import supportCasesRouter from "#src/modules/platform/support/support-cases.routes.js";
+import assistantRouter from "#src/modules/assistant/assistant.routes.js";
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
@@ -100,6 +101,8 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   // carries the PLATFORM surface, not only the R&D one. A router left out is a router the
   // client generator concludes does not exist.
   { mountPath: "/support", router: supportCasesRouter },
+  // The AI assistant's cloud route: a platform surface, like support, not an R&D one.
+  { mountPath: "/assistant", router: assistantRouter },
   { mountPath: "/", router: fundingRouter },
   { mountPath: "/", router: pitchesRouter },
   { mountPath: "/", router: integrationCallbackRouter },
@@ -138,6 +141,7 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   // member-facing surface it sits inside.
   { prefix: "/support/admin", tag: "Support moderation" },
   { prefix: "/support", tag: "Support" },
+  { prefix: "/assistant", tag: "AI assistant" },
   { prefix: "/governance", tag: "Governance" },
   { prefix: "/daily-logs", tag: "Daily logs" },
   // §11m. Five prefixes, one tag — they are one domain and splitting them across tags

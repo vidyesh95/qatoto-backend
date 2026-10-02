@@ -12,6 +12,7 @@ import { parseJsonBodyOnce } from "#src/middleware/json-body.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
+import assistantRouter from "#src/modules/assistant/assistant.routes.js";
 import handlesRouter from "#src/modules/auth/handles/handles.routes.js";
 import authRouter from "#src/modules/auth/session/auth.routes.js";
 import userReportsRouter from "#src/modules/auth/users/user-reports.routes.js";
@@ -463,6 +464,9 @@ app.use("/", platformFeedbackRouter);
 // `/support/admin/cases`. A prefix keeps that tree in one place and collides with nothing:
 // `/support` is a namespace no other router touches.
 app.use("/support", supportCasesRouter);
+// The AI assistant's cloud route (`POST /assistant/replies`): the fallback for browsers that
+// cannot run the model on the device. Prefix-mounted like support, and stateless.
+app.use("/assistant", assistantRouter);
 // §7's id-keyed half: /funding-rounds, /pledges, /milestones, /escrow-releases,
 // /provider-transfers and /funding/deals. Root-mounted because a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it — the

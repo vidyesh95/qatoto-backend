@@ -103,6 +103,12 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/platform/support/support-cases.routes.js",
     exportName: "default",
   },
+  // The AI assistant's cloud route. Same rule: lands with the mount in app.ts.
+  {
+    mountPath: "/assistant",
+    specifier: "#src/modules/assistant/assistant.routes.js",
+    exportName: "default",
+  },
   {
     mountPath: "/commerce",
     specifier: "#src/modules/store/organizations/commerce-organizations.routes.js",

@@ -304,6 +304,18 @@ const envSchema = z.object({
   // rather than a retry. A 400-segment transcript plus chips and claims sits well inside
   // this.
   GEMINI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(65_536).default(32_768),
+  // --- The AI assistant's cloud route (`POST /assistant/replies`). It shares GEMINI_API_KEY —
+  //     with no key the route answers 503 and nothing else changes — but not the timeout: the
+  //     caller is a browser waiting on a chat turn, not a worker watching a video. Optional
+  //     model override, so the assistant can move to a different model without moving the
+  //     daily-log pipeline with it.
+  ASSISTANT_GEMINI_MODEL: z.string().min(1).optional(),
+  // Below the frontend's own 20-second timeout, so the person reads "unavailable right now"
+  // rather than a network failure.
+  ASSISTANT_GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(15_000),
+  // A chat reply is at most three sentences plus four small fields; this is a ceiling with room
+  // for the model's thinking tokens, not a reservation.
+  ASSISTANT_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(2_048),
 
   // --- §10A import intelligence (docs/R_AND_D_BACKEND_STRUCTURE.md §10A). One UN Comtrade
   //     call per (reporting country, year, direction) returns that country's whole HS6

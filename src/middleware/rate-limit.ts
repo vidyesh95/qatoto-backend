@@ -368,6 +368,28 @@ export const platformFeedbackLimiter = createLimiter({
 });
 
 /**
+ * POST /assistant/replies — the burst bound. Every call is one Gemini request drawn against the
+ * deployment's provider quota, so this stops a runaway client (a stuck Send button, a script)
+ * long before it matters. Twenty in five minutes is a fast conversation, not a slow one.
+ */
+export const assistantReplyLimiter = createLimiter({
+  namespace: "assistantReply",
+  windowMs: 5 * ONE_MINUTE_MS,
+  limit: 20,
+});
+
+/**
+ * POST /assistant/replies — the daily cap, beside the burst bound above. A patient client under
+ * the burst limit could still spend a whole day's quota; two hundred questions a day is far past
+ * anyone finding their way around the site.
+ */
+export const assistantReplyDailyLimiter = createLimiter({
+  namespace: "assistantReplyDaily",
+  windowMs: 24 * ONE_HOUR_MS,
+  limit: 200,
+});
+
+/**
  * `POST /support/cases` — opening a support case.
  *
  * THE SAME PAIRING as feedback and problem reports above: `requireIdentifiedUser` prices the

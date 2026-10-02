@@ -61,6 +61,7 @@ import {
   CreatePlatformFeedbackSchema,
   DecidePlatformFeedbackSchema,
 } from "#src/modules/platform/feedback/feedback.schemas.js";
+import { CreateAssistantReplySchema } from "#src/modules/assistant/assistant.schemas.js";
 import {
   AddSupportCaseMessageSchema,
   DecideSupportCaseSchema,
@@ -756,6 +757,9 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   // Site feedback. `pagePath` is in the body and the user agent deliberately is not — the
   // header is read server-side, so no client can claim one.
   "post /feedback": { schema: CreatePlatformFeedbackSchema, required: true },
+  // The AI assistant. Words only: the conversation, a page path and saved notes. The server
+  // writes every instruction, so there is no prompt field to document because there is none.
+  "post /assistant/replies": { schema: CreateAssistantReplySchema, required: true },
   // Triage, and the enum is narrower than the column: `new` is where every row is born, so
   // nothing needs to set it and allowing it would let triage run backwards. There is no note
   // field because `platform_feedback` has no column to put one in.
