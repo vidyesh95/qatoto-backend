@@ -1,10 +1,12 @@
-import { and, asc, eq, gt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
 
 import { db } from "#src/db/index.js";
 import {
   commerceContentReport,
   commerceModerationAction,
   commerceOrganization,
+  commerceOrganizationAuditEntry,
   commerceOrganizationMember,
   commerceProductAnswer,
   commerceProductQuestion,
@@ -19,6 +21,7 @@ import type {
   CreateContentReportInput,
   DecideContentReportInput,
   ListContentReportsQuery,
+  ListWithdrawnProductAnswersQuery,
   RestoreContentInput,
 } from "#src/modules/store/trust/commerce-content-reports.schemas.js";
 import {
@@ -238,15 +241,58 @@ async function enqueueModeratedTargetSearchRefresh(
   await enqueueProductSearchDocumentRefresh(targetId);
 }
 
+/**
+ * What a moderation path is doing to a target's visibility.
+ *
+ * TWO LIFTS, NOT ONE, because they lift different things. A report DISMISSAL lifts a moderation
+ * hold — the automatic threshold hide or a moderator's — and nothing else: an author's withdrawal
+ * (`removed_by_author`) is not a moderation event, and a moderator declaring a report unfounded
+ * says nothing about whether the author still wants their text up. A direct RESTORE is a
+ * moderator reversing whatever hid the row, a withdrawal included, which is what makes a
+ * withdrawn answer restorable from the admin console at all.
+ */
+type TargetVisibilityChange =
+  /** `moderatorUserId: null` is the automatic threshold hide. */
+  | { readonly kind: "hide"; readonly moderatorUserId: string | null }
+  | { readonly kind: "lift_moderation_hold" }
+  | { readonly kind: "restore_any_hidden_state" };
+
+/** The two UGC states a dismissal may lift. `removed_by_author` is deliberately absent. */
+const MODERATION_HOLD_VISIBILITY_STATES = ["hidden_pending_review", "hidden_by_moderator"] as const;
+
+type UgcVisibilityState = (typeof commerceProductAnswer.$inferSelect)["visibilityState"];
+
+function resolveUgcVisibilityState(change: TargetVisibilityChange): UgcVisibilityState {
+  switch (change.kind) {
+    case "hide":
+      return change.moderatorUserId === null ? "hidden_pending_review" : "hidden_by_moderator";
+    case "lift_moderation_hold":
+    case "restore_any_hidden_state":
+      return "visible";
+    default: {
+      const exhaustiveCheck: never = change;
+      throw new Error(`Unhandled visibility change: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
 /** Applies or lifts the visibility flag that actually removes content from the wire. */
 async function setTargetVisibility(
   transaction: DatabaseTransaction,
   targetKind: CommerceContentTargetKind,
   targetId: string,
-  hidden: boolean,
-  moderatorUserId: string | null,
+  change: TargetVisibilityChange,
 ): Promise<void> {
+  const hidden = change.kind === "hide";
   const hiddenAt = hidden ? new Date() : null;
+  const hiddenByUserId = change.kind === "hide" ? change.moderatorUserId : null;
+  /**
+   * ⚠️ THE STATE CONDITION IS IN THE UPDATE, NOT IN A READ BEFORE IT. A read-then-write would let
+   * an author withdrawal commit between the two and be republished anyway. Matching nothing is
+   * the correct outcome for a withdrawn row, and the `if (question)` / `if (answer)` guards below
+   * then skip the counter refreshes, because nothing they count changed.
+   */
+  const isLiftLimitedToModerationHolds = change.kind === "lift_moderation_hold";
 
   switch (targetKind) {
     case "review":
@@ -261,16 +307,15 @@ async function setTargetVisibility(
     case "question": {
       const [question] = await transaction
         .update(commerceProductQuestion)
-        .set({
-          visibilityState: hidden
-            ? moderatorUserId === null
-              ? "hidden_pending_review"
-              : "hidden_by_moderator"
-            : "visible",
-          hiddenAt,
-          hiddenByUserId: hidden ? moderatorUserId : null,
-        })
-        .where(eq(commerceProductQuestion.id, targetId))
+        .set({ visibilityState: resolveUgcVisibilityState(change), hiddenAt, hiddenByUserId })
+        .where(
+          and(
+            eq(commerceProductQuestion.id, targetId),
+            isLiftLimitedToModerationHolds
+              ? inArray(commerceProductQuestion.visibilityState, MODERATION_HOLD_VISIBILITY_STATES)
+              : undefined,
+          ),
+        )
         .returning({ productId: commerceProductQuestion.productId });
       if (question) await refreshProductQuestionCounters(transaction, question.productId);
       return;
@@ -278,16 +323,15 @@ async function setTargetVisibility(
     case "answer": {
       const [answer] = await transaction
         .update(commerceProductAnswer)
-        .set({
-          visibilityState: hidden
-            ? moderatorUserId === null
-              ? "hidden_pending_review"
-              : "hidden_by_moderator"
-            : "visible",
-          hiddenAt,
-          hiddenByUserId: hidden ? moderatorUserId : null,
-        })
-        .where(eq(commerceProductAnswer.id, targetId))
+        .set({ visibilityState: resolveUgcVisibilityState(change), hiddenAt, hiddenByUserId })
+        .where(
+          and(
+            eq(commerceProductAnswer.id, targetId),
+            isLiftLimitedToModerationHolds
+              ? inArray(commerceProductAnswer.visibilityState, MODERATION_HOLD_VISIBILITY_STATES)
+              : undefined,
+          ),
+        )
         .returning({ questionId: commerceProductAnswer.questionId });
       if (answer) {
         await refreshQuestionAnswerSummary(transaction, answer.questionId);
@@ -396,7 +440,10 @@ export async function createContentReport(
         .where(and(targetPredicate, eq(commerceContentReport.status, "open")));
 
       if ((distinctReporters?.reporterCount ?? 0) >= AUTOMATIC_HIDE_REPORTER_THRESHOLD) {
-        await setTargetVisibility(transaction, body.targetKind, body.targetId, true, null);
+        await setTargetVisibility(transaction, body.targetKind, body.targetId, {
+          kind: "hide",
+          moderatorUserId: null,
+        });
         await transaction.insert(commerceModerationAction).values({
           actionKind: "content_hidden",
           targetKind: body.targetKind,
@@ -550,6 +597,15 @@ export async function listContentReports(
  *
  * DISMISSING RESTORES AN AUTOMATIC HIDE. Easy to forget, and forgetting it means three
  * griefers permanently silence content a moderator just declared fine.
+ *
+ * ⚠️ AND IT RESTORES ONLY A MODERATION HOLD. A question or answer its author withdrew stays
+ * `removed_by_author` through a dismissal: "this report is unfounded" is not "republish what the
+ * author took down". It used to be — the lift matched on id alone — so a report filed before a
+ * withdrawal and dismissed after it put the withdrawn text back on the product page. ACTIONING
+ * still overwrites a withdrawal to `hidden_by_moderator`, deliberately: the moderator's ruling on
+ * the text supersedes the author's, and the withdrawal's audit event survives either way. The
+ * moderation action and audit entry below are written in both cases, because the REPORT was
+ * decided even when the row did not move.
  */
 export async function decideContentReport(
   moderatorUserId: string,
@@ -592,8 +648,7 @@ export async function decideContentReport(
       transaction,
       report.targetKind,
       targetId,
-      hide,
-      hide ? moderatorUserId : null,
+      hide ? { kind: "hide", moderatorUserId } : { kind: "lift_moderation_hold" },
     );
 
     // Close every open report on this target, not only the one being decided.
@@ -698,7 +753,9 @@ export async function restoreContent(
     }
 
     const now = new Date();
-    await setTargetVisibility(transaction, input.targetKind, input.targetId, false, null);
+    await setTargetVisibility(transaction, input.targetKind, input.targetId, {
+      kind: "restore_any_hidden_state",
+    });
 
     const auditEntry = await appendPlatformAuditEntry(transaction, {
       eventKind: "commerce_content_restored",
@@ -824,6 +881,183 @@ export async function listModerationActions(
         nextCursor:
           hasMore && lastRow
             ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
+            : null,
+        hasMore: hasMore && lastRow !== undefined,
+      },
+    },
+  };
+}
+
+export interface WithdrawnProductAnswerProjection {
+  readonly auditEntryId: string;
+  readonly withdrawnAt: Date;
+  /**
+   * From the audit payload. `null` when the payload does not parse — the row is still a
+   * withdrawal (its `event_kind` says so) and still restorable, so it is shown rather than
+   * dropped, with this one fact unstated.
+   */
+  readonly withdrawnBy: "author" | "organization_member" | null;
+  readonly actorUserId: string | null;
+  readonly actorMemberRoleSnapshot: (typeof commerceOrganizationAuditEntry.$inferSelect)["actorMemberRoleSnapshot"];
+  readonly answerId: string;
+  readonly answerBodyText: string;
+  readonly authorKind: (typeof commerceProductAnswer.$inferSelect)["authorKind"];
+  readonly answeringOrganizationId: string;
+  /**
+   * The answer's state NOW, not at withdrawal. A restored answer reads `visible`; one a moderator
+   * later hid reads `hidden_by_moderator`. Only `removed_by_author` is restorable from this list.
+   */
+  readonly currentVisibilityState: UgcVisibilityState;
+  readonly questionId: string;
+  readonly questionBodyText: string;
+  readonly productId: string;
+  readonly productTitle: string;
+  /** `null` for a listing that never got a public address, which has no page to link to. */
+  readonly productPublicSlug: string | null;
+}
+
+/**
+ * What `buildAnswerWithdrawalAuditEntry` writes into `payload_json`. Parsed, never cast: the column
+ * is text, and an immutable table outlives every version of the code that wrote it.
+ */
+const AnswerWithdrawalAuditPayloadSchema = z.object({
+  withdrawnBy: z.enum(["author", "organization_member"]),
+});
+
+function readWithdrawnBy(payloadJson: string): WithdrawnProductAnswerProjection["withdrawnBy"] {
+  let rawPayload: unknown;
+  try {
+    rawPayload = JSON.parse(payloadJson);
+  } catch (error: unknown) {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
+  const parsed = AnswerWithdrawalAuditPayloadSchema.safeParse(rawPayload);
+  return parsed.success ? parsed.data.withdrawnBy : null;
+}
+
+/**
+ * Withdrawn product answers, newest first, for staff (todo.md "Surface withdrawn answers").
+ *
+ * A WITHDRAWAL WRITES NO MODERATION ACTION — it is not a moderation event — so the moderation log
+ * cannot find one. The `product_answer_withdrawn` events on the ANSWERING organization's audit
+ * chain are the record, and this is the one read of that table. One row per EVENT: an answer
+ * withdrawn, restored and withdrawn again appears twice, both rows carrying its current state.
+ *
+ * The withdrawn TEXT is returned, deliberately: whether to restore is a judgment about what the
+ * answer said, and `moderate_commerce` is checked before anything is read.
+ *
+ * ⚠️ NO INDEX SERVES THIS SCAN. `commerce_organization_audit_entry_timeline_idx` leads with
+ * `organization_id`, and this read crosses every organization. Withdrawal volume is tiny; add a
+ * partial index on `(occurred_at, id) WHERE event_kind = 'product_answer_withdrawn'` when it isn't.
+ *
+ * The keyset compares `occurred_at` TRUNCATED TO MILLISECONDS, and orders by the same expression,
+ * because the column is microsecond `timestamp` and the cursor carries `toISOString()`. Comparing
+ * the raw column against a millisecond cursor skips every unseen row in that millisecond.
+ */
+export async function listWithdrawnProductAnswers(
+  moderatorUserId: string,
+  query: ListWithdrawnProductAnswersQuery,
+): Promise<
+  Result<
+    {
+      readonly items: readonly WithdrawnProductAnswerProjection[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommerceContentReportsError
+  >
+> {
+  const capability = await requirePlatformCapability(moderatorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return {
+      success: false,
+      error: { type: "PLATFORM_CAPABILITY_REQUIRED", capability: "moderate_commerce" },
+    };
+  }
+
+  const occurredAtMilliseconds = sql<Date>`date_trunc('milliseconds', ${commerceOrganizationAuditEntry.occurredAt})`;
+
+  const filters: SQL[] = [
+    eq(commerceOrganizationAuditEntry.eventKind, "product_answer_withdrawn"),
+    eq(commerceOrganizationAuditEntry.targetEntityType, "commerce_product_answer"),
+  ];
+  switch (query.state) {
+    case "still_withdrawn":
+      filters.push(eq(commerceProductAnswer.visibilityState, "removed_by_author"));
+      break;
+    case "all":
+      break;
+    default: {
+      const exhaustiveCheck: never = query.state;
+      throw new Error(`Unhandled withdrawn-answer state: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+  if (query.cursor !== undefined) {
+    const cursor = decodeTimestampStoreCursor(query.cursor);
+    if (!cursor) return { success: false, error: { type: "INVALID_CURSOR" } };
+    // An ISO string with an explicit cast, not the `Date`: a raw `sql` expression has no column to
+    // borrow a driver mapping from. The cast drops the `Z`, which is right — the column holds UTC.
+    const cursorOccurredAt = sql`${cursor.sortKey.toISOString()}::timestamp`;
+    const keyset = or(
+      lt(occurredAtMilliseconds, cursorOccurredAt),
+      and(
+        eq(occurredAtMilliseconds, cursorOccurredAt),
+        lt(commerceOrganizationAuditEntry.id, cursor.id),
+      ),
+    );
+    if (keyset) filters.push(keyset);
+  }
+
+  const rows = await db
+    .select({
+      auditEntryId: commerceOrganizationAuditEntry.id,
+      withdrawnAt: commerceOrganizationAuditEntry.occurredAt,
+      payloadJson: commerceOrganizationAuditEntry.payloadJson,
+      actorUserId: commerceOrganizationAuditEntry.actorUserId,
+      actorMemberRoleSnapshot: commerceOrganizationAuditEntry.actorMemberRoleSnapshot,
+      answerId: commerceProductAnswer.id,
+      answerBodyText: commerceProductAnswer.bodyText,
+      authorKind: commerceProductAnswer.authorKind,
+      answeringOrganizationId: commerceProductAnswer.authorOrganizationId,
+      currentVisibilityState: commerceProductAnswer.visibilityState,
+      questionId: commerceProductQuestion.id,
+      questionBodyText: commerceProductQuestion.bodyText,
+      productId: product.id,
+      productTitle: product.title,
+      productPublicSlug: product.publicSlug,
+    })
+    .from(commerceOrganizationAuditEntry)
+    .innerJoin(
+      commerceProductAnswer,
+      eq(commerceProductAnswer.id, commerceOrganizationAuditEntry.targetEntityId),
+    )
+    .innerJoin(
+      commerceProductQuestion,
+      eq(commerceProductQuestion.id, commerceProductAnswer.questionId),
+    )
+    .innerJoin(product, eq(product.id, commerceProductQuestion.productId))
+    .where(and(...filters))
+    .orderBy(desc(occurredAtMilliseconds), desc(commerceOrganizationAuditEntry.id))
+    .limit(query.limit + 1);
+
+  const hasMore = rows.length > query.limit;
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
+  const lastRow = pageRows.at(-1);
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map(({ payloadJson, ...row }) => ({
+        ...row,
+        withdrawnBy: readWithdrawnBy(payloadJson),
+      })),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({
+                sortKey: lastRow.withdrawnAt.toISOString(),
+                id: lastRow.auditEntryId,
+              })
             : null,
         hasMore: hasMore && lastRow !== undefined,
       },

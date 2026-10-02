@@ -470,10 +470,11 @@ export async function retractProductAnswer(
      * Locked, the loser blocks, re-reads the row under READ COMMITTED, finds it no longer
      * `visible`, and gets the 404.
      *
-     * NOT closed here: a report decided AFTER this withdrawal commits. `setTargetVisibility`
-     * updates by id with no state condition, so an actioned report ends `hidden_by_moderator` and
-     * a DISMISSED one sets the answer back to `visible`. That is a pre-existing bug in the report
-     * path, tracked in todo.md ("Report decisions overwrite author withdrawals").
+     * A report decided AFTER this withdrawal commits is closed in the report path, not here: a
+     * DISMISSAL lifts only the two moderation states (`lift_moderation_hold` in
+     * `commerce-content-reports.service`), so the withdrawal survives it. An ACTIONED report still
+     * ends `hidden_by_moderator`, deliberately — the moderator's ruling supersedes the withdrawal,
+     * and the audit event appended below records the withdrawal either way.
      */
     const [answer] = await transaction
       .select({

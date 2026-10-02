@@ -76,3 +76,25 @@ export const ListContentReportsQuerySchema = z
 export type ListContentReportsQuery = z.infer<typeof ListContentReportsQuerySchema>;
 
 export const EmptyObjectSchema = z.object({}).strict();
+
+/**
+ * `GET /commerce/admin/withdrawn-answers`.
+ *
+ * ITS OWN SCHEMA, not `ListContentReportsQuerySchema`. That one is shared by two reads and
+ * `listModerationActions` parses `status` and then never reads it; a third reader inheriting a
+ * `targetKind` it cannot honour (every row here is an answer) would repeat that.
+ *
+ * `still_withdrawn` is the default because the list exists to find answers a moderator could
+ * restore; `all` keeps the ones already restored or later hidden, for the history.
+ */
+export const ListWithdrawnProductAnswersQuerySchema = z
+  .object({
+    state: z.enum(["still_withdrawn", "all"]).default("still_withdrawn"),
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    cursor: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export type ListWithdrawnProductAnswersQuery = z.infer<
+  typeof ListWithdrawnProductAnswersQuerySchema
+>;

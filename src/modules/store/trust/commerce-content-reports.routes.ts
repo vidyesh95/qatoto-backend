@@ -77,4 +77,16 @@ commerceContentReportsRouter.get(
   commerceContentReportsController.listModerationActions,
 );
 
+/**
+ * Withdrawn product answers, read from the answering organizations' audit chains. A withdrawal
+ * writes no moderation action, so the log above cannot list one; this is how a moderator finds a
+ * withdrawn answer to restore through `/admin/content/restore`.
+ */
+commerceContentReportsRouter.get(
+  "/admin/withdrawn-answers",
+  requireAuth,
+  commerceTrustModerationLimiter,
+  commerceContentReportsController.listWithdrawnProductAnswers,
+);
+
 export default commerceContentReportsRouter;

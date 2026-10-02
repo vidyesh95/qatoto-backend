@@ -967,6 +967,7 @@ started, not that payment, booking, testing, or settlement succeeded.
 | GET    | `/commerce/admin/content-reports`                         | Moderation queue — A12                                   |
 | POST   | `/commerce/admin/content-reports/:reportId/decisions`     | Action or dismiss a report — A12                         |
 | POST   | `/commerce/admin/content/restore`                         | Un-hide content — A12                                    |
+| GET    | `/commerce/admin/withdrawn-answers`                       | Withdrawn answers, from org audit chains — A12           |
 | POST   | `/commerce/products/:productId/inquiries`                 | Open or return a pre-sales inquiry — A14                 |
 | GET    | `/commerce/inquiries`                                     | Buyer/seller inquiry inbox — A14                         |
 | GET    | `/commerce/completions`                                   | Buyer completions + `hasReview` — A22                    |
