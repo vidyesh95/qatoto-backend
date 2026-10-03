@@ -1301,27 +1301,32 @@ and `pnpm db:smoke-data-export` (real upload, real presigned download, real purg
 first signs in for real rather than simulating the hook, because the invariant above is the
 thing most worth proving.
 
-### 11.x Terms acceptance (todo §7, migration `0219`)
+### 11.x Terms acceptance (todo §7, migrations `0219`, `0220`)
 
 Which Terms version an account accepted, when, and on which surface.
 
-- **`user_terms_acceptance`** keeps every acceptance and is append-only, with `email_sign_up` and
-  `in_app_banner` as the surfaces. `user.terms_version` and `user.terms_accepted_at` hold the latest,
-  as `input:false` additionalFields, so the session tells the client whether to ask again.
+- **`user_terms_acceptance`** keeps every acceptance and is append-only. Its surfaces are
+  `email_sign_up`, `oauth_sign_up` and `in_app_banner`. `user.terms_version` and
+  `user.terms_accepted_at` hold the latest, as `input:false` additionalFields.
   `recordTermsAcceptance` is the only writer and moves both in one transaction.
 - **`CURRENT_TERMS_VERSION`** (`src/lib/terms-version.ts`) is the Terms page's Last updated date. It
   changes together with the frontend's `TERMS_VERSION`, and an echoed version that is not current
-  is a **409**, never a silent upgrade.
-- **Email sign-up:** `/signup/complete` takes an optional `acceptedTermsVersion`. It is optional so
-  an older client still signs up; it then records nothing and the banner asks. When present, it is
-  recorded on both success paths.
-- **In-app:** `POST /users/me/terms-acceptance` (`requireIdentifiedUser`, `termsAcceptanceLimiter`)
-  is idempotent per version.
-- **Accounts with no record:** Google/GitHub first sign-in, anonymous sessions, and Better Auth's
-  pass-through sign-up record nothing. That is by design: the banner covers all of them, and every
-  account that existed before 0219.
+  is a **409**.
+- **Email sign-up:** `/signup/complete` takes an optional `acceptedTermsVersion` and records it on
+  both success paths.
+- **Google/GitHub first sign-in:** recorded by `databaseHooks.user.create.after` when `context.path`
+  is `/callback/:id` or `/sign-in/social`, and the user is not anonymous. A failure is logged, never
+  thrown, so it cannot abort an account creation. Every frontend page with those buttons carries the
+  Terms sentence.
+- **Re-acceptance:** `POST /users/me/terms-acceptance` (`requireIdentifiedUser`,
+  `termsAcceptanceLimiter`) is idempotent per version. The frontend banner calls it **only for an
+  account that accepted an EARLIER version**.
+- **Accounts with no record are not asked, by decision (2026-10-03).** That covers every account
+  created before `0219`, anonymous sessions, and Better Auth's raw pass-through sign-up. The Terms'
+  continued-use clause covers them. They were deliberately not backfilled: an acceptance nobody gave
+  is not a record.
 - **Erasure:** `retain`, Art. 17(3)(e). It is proof of what was agreed, and pseudonymous once the
-  user row is scrubbed. No person-shaped text.
+  user row is scrubbed.
 
 ## 10. Security checklist
 

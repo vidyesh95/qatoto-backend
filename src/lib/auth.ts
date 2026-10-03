@@ -13,6 +13,7 @@ import { account, accountDeletionRequest, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
 import { fetchGitHubPrimaryEmail, readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
 import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
+import { recordOAuthSignUpTermsAcceptance } from "#src/modules/auth/terms/terms-acceptance.service.js";
 
 /**
  * Build and send the OTP email for any flow (signup sign-in OTP or forget-password).
@@ -188,7 +189,26 @@ export const auth = betterAuth({
         // OAuth then never overrides (updateUserInfoOnLink is off below). Users
         // created without an image (email/password, anonymous) keep imageSource
         // NULL. Mirrors the nameSetByUser mechanism for the display name.
-        after: async (createdUser) => {
+        after: async (createdUser, context) => {
+          // TERMS ACCEPTANCE FOR A GOOGLE/GITHUB FIRST SIGN-IN (todo §7). Only OAuth creation paths:
+          // the email form records its own acceptance in `/signup/complete` (recording here too would
+          // double it), and an anonymous session or the raw pass-through sign-up never showed the
+          // Terms. `/callback/:id` is the redirect flow; `/sign-in/social` covers an id-token sign-in.
+          // A failure must NOT abort account creation — logged, like the handle seeding below.
+          const creationPath = context?.path ?? "";
+          const isOAuthCreation =
+            creationPath.startsWith("/callback/") || creationPath === "/sign-in/social";
+          if (isOAuthCreation && createdUser.isAnonymous !== true) {
+            try {
+              await recordOAuthSignUpTermsAcceptance(createdUser.id);
+            } catch (error) {
+              console.error(
+                `Failed to record OAuth sign-up terms acceptance for user ${createdUser.id}:`,
+                error,
+              );
+            }
+          }
+
           if (createdUser.image) {
             await db.update(user).set({ imageSource: "oauth" }).where(eq(user.id, createdUser.id));
           }

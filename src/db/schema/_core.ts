@@ -229,8 +229,11 @@ export const user = pgTable(
 export const userTermsAcceptanceSurfaceEnum = pgEnum("user_terms_acceptance_surface", [
   // The email sign-up form: "By continuing, you agree to …" beside the button.
   "email_sign_up",
-  // The in-app banner asking a signed-in account to accept the current version.
+  // The in-app banner asking an account that accepted an EARLIER version to accept the current one.
   "in_app_banner",
+  // A Google or GitHub first sign-in, recorded by the `user.create.after` hook. Every page with those
+  // buttons carries the Terms sentence beside them, which is what this records.
+  "oauth_sign_up",
 ]);
 
 /**

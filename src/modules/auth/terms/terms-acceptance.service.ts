@@ -105,3 +105,15 @@ export async function recordSignUpTermsAcceptance(email: string): Promise<void> 
     await recordTermsAcceptance(transaction, signedUpUser.id, "email_sign_up");
   });
 }
+
+/**
+ * A Google or GitHub FIRST sign-in — called from Better Auth's `user.create.after` hook, which knows
+ * the user id but sits outside any transaction of ours. Every page that starts that flow carries the
+ * Terms sentence beside the buttons; the version is the server's current one, kept in step with the
+ * frontend's by the 409 on every other acceptance path.
+ */
+export async function recordOAuthSignUpTermsAcceptance(userId: string): Promise<void> {
+  await db.transaction(async (transaction) => {
+    await recordTermsAcceptance(transaction, userId, "oauth_sign_up");
+  });
+}
