@@ -152,8 +152,8 @@
     "gate": "pnpm check:specifiers && pnpm typecheck && pnpm fmt:check && pnpm lint; pnpm test"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1144.0",
-    "@aws-sdk/s3-request-presigner": "^3.1144.0",
+    "@aws-sdk/client-s3": "^3.1145.0",
+    "@aws-sdk/s3-request-presigner": "^3.1145.0",
     "@better-auth/passkey": "^1.7.7",
     "@node-rs/argon2": "^2.2.1",
     "better-auth": "^1.7.7",
@@ -187,7 +187,7 @@
     "@types/http-errors": "^2.0.5",
     "@types/mdast": "^4.0.4",
     "@types/multer": "^2.3.0",
-    "@types/node": "^25.9.8",
+    "@types/node": "^25.9.9",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^6.0.3",
     "@types/swagger-ui-express": "^4.1.8",
