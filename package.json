@@ -37,6 +37,7 @@
     "jobs:install:prod": "node dist/jobs-install.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
     "db:cleanup-orphans": "tsx --conditions=development scripts/cleanup-orphan-signups.ts",
     "db:seed-research-categories": "tsx --conditions=development scripts/seed-research-categories.ts",
     "db:seed-discovery-lookups": "tsx --conditions=development scripts/seed-discovery-lookups.ts",

@@ -10646,6 +10646,16 @@ export const commerceProductHighlightRelations = relations(commerceProductHighli
   }),
 }));
 
+export const commerceProductSpecificationRelations = relations(
+  commerceProductSpecification,
+  ({ one }) => ({
+    product: one(product, {
+      fields: [commerceProductSpecification.productId],
+      references: [product.id],
+    }),
+  }),
+);
+
 export const commerceProductRelationRelations = relations(commerceProductRelation, ({ one }) => ({
   fromProduct: one(product, {
     fields: [commerceProductRelation.fromProductId],

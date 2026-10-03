@@ -5072,6 +5072,37 @@ export const teardownPartListingRelations = relations(teardownPartListing, ({ on
   }),
 }));
 
+export const teardownDocumentRelations = relations(teardownDocument, ({ one }) => ({
+  teardown: one(teardown, {
+    fields: [teardownDocument.teardownId],
+    references: [teardown.id],
+  }),
+}));
+
+export const teardownManufacturingFileRelations = relations(
+  teardownManufacturingFile,
+  ({ one }) => ({
+    teardown: one(teardown, {
+      fields: [teardownManufacturingFile.teardownId],
+      references: [teardown.id],
+    }),
+  }),
+);
+
+export const teardownFastenerRelations = relations(teardownFastener, ({ one }) => ({
+  teardown: one(teardown, {
+    fields: [teardownFastener.teardownId],
+    references: [teardown.id],
+  }),
+}));
+
+export const teardownAssemblyStepRelations = relations(teardownAssemblyStep, ({ one }) => ({
+  teardown: one(teardown, {
+    fields: [teardownAssemblyStep.teardownId],
+    references: [teardown.id],
+  }),
+}));
+
 /**
  * THE FOUR THINGS A PUBLISHER SWEARS TO, by id.
  *
@@ -6078,5 +6109,56 @@ export const caseStudyRelations = relations(caseStudy, ({ one, many }) => ({
   evidenceCompanies: many(caseStudyEvidenceCompany),
   outcomeMetrics: many(caseStudyOutcomeMetric),
   sources: many(caseStudySource),
-  relatedLessons: many(caseStudyRelatedLesson),
+  relatedLessons: many(caseStudyRelatedLesson, { relationName: "caseStudyRelatedLessons" }),
+  referencedByRelatedLessons: many(caseStudyRelatedLesson, {
+    relationName: "caseStudyReferencedByRelatedLessons",
+  }),
+}));
+
+export const caseStudyActionStepRelations = relations(caseStudyActionStep, ({ one }) => ({
+  caseStudy: one(caseStudy, {
+    fields: [caseStudyActionStep.caseStudyId],
+    references: [caseStudy.id],
+  }),
+}));
+
+export const caseStudyPitfallRelations = relations(caseStudyPitfall, ({ one }) => ({
+  caseStudy: one(caseStudy, {
+    fields: [caseStudyPitfall.caseStudyId],
+    references: [caseStudy.id],
+  }),
+}));
+
+export const caseStudyEvidenceCompanyRelations = relations(caseStudyEvidenceCompany, ({ one }) => ({
+  caseStudy: one(caseStudy, {
+    fields: [caseStudyEvidenceCompany.caseStudyId],
+    references: [caseStudy.id],
+  }),
+}));
+
+export const caseStudyOutcomeMetricRelations = relations(caseStudyOutcomeMetric, ({ one }) => ({
+  caseStudy: one(caseStudy, {
+    fields: [caseStudyOutcomeMetric.caseStudyId],
+    references: [caseStudy.id],
+  }),
+}));
+
+export const caseStudySourceRelations = relations(caseStudySource, ({ one }) => ({
+  caseStudy: one(caseStudy, {
+    fields: [caseStudySource.caseStudyId],
+    references: [caseStudy.id],
+  }),
+}));
+
+export const caseStudyRelatedLessonRelations = relations(caseStudyRelatedLesson, ({ one }) => ({
+  caseStudy: one(caseStudy, {
+    fields: [caseStudyRelatedLesson.caseStudyId],
+    references: [caseStudy.id],
+    relationName: "caseStudyRelatedLessons",
+  }),
+  relatedCaseStudy: one(caseStudy, {
+    fields: [caseStudyRelatedLesson.relatedPublicSlug],
+    references: [caseStudy.publicSlug],
+    relationName: "caseStudyReferencedByRelatedLessons",
+  }),
 }));
