@@ -6114,3 +6114,24 @@ back. Now:
 **Not built:** a controlled coverage-class vocabulary and a directory `coverageClass` filter. The
 offering, RFQ, quote and deliverable coverage classes stay free text, per the note at
 `commerce-providers.service.ts` ("deliberately not faceted").
+
+### A49. Insurers could not be filtered by what they cover — **SHIPPED (`0218`)**
+
+Built 2026-10-03, closing A48's "not built" line. `insurance_offering_detail.coverage_class_codes`
+is a `commerce_cargo_coverage_class_code[]` holding eight values: Institute Cargo Clauses A, B, C
+and Air, Institute War and Strikes Clauses, `stock_throughput` and `goods_in_storage`. It sits
+**beside** the free-text `cargo_coverage_classes`, on the `standardCode` precedent: the free text
+stays the display, and the codes are the filter.
+
+- **Written on create only**, like every offering detail. No insurance offering existed when this
+  shipped, so nothing needed a backfill or an edit path.
+- **`GET /store/providers?coverageClass=`** is a `z.enum` matched by EXISTS over an active offering
+  whose codes contain it (`providerFilterPredicates`). It is not a counted facet: the client offers a
+  static chip row of all eight, on the factory-certification precedent, and
+  `getProviderDirectoryFacets` stays four-dimensional. Its comment now also names `currencyPair`
+  among the free-text filters, which it had missed.
+- **`goods_in_storage` is a cover scope, not a policy form.** A stock-throughput policy covers
+  stored goods too, so the composer asks an insurer to tick both. That is what lets "find an insurer
+  for stored goods" be one filter value instead of an any-of.
+- RFQ requirements, quotes, engagements and deliverables keep free-text classes. A filter only
+  needs the offering side.

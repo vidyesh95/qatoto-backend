@@ -540,6 +540,29 @@ export const commerceCertificationStandardCodeEnum = pgEnum(
 );
 
 /**
+ * The cargo cover types a buyer can FILTER insurers on (todo §23.4).
+ *
+ * A closed set BESIDE the free-text `cargo_coverage_classes`, not instead of it — the
+ * `commerce_certification_standard_code` precedent above, for the same two reasons: a chip row
+ * needs a closed vocabulary or it lists one insurer's spellings, and a real policy names its cover
+ * in words this list will never hold. So the free text stays the display and these are the filter.
+ *
+ * `goods_in_storage` is a COVER SCOPE, not a policy form: a stock-throughput policy covers goods
+ * while stored too, and the composer tells an insurer to tick both. That is what lets "find an
+ * insurer for stored goods" be one filter value rather than an any-of.
+ */
+export const commerceCargoCoverageClassCodeEnum = pgEnum("commerce_cargo_coverage_class_code", [
+  "institute_cargo_clauses_a",
+  "institute_cargo_clauses_b",
+  "institute_cargo_clauses_c",
+  "institute_cargo_clauses_air",
+  "institute_war_clauses",
+  "institute_strikes_clauses",
+  "stock_throughput",
+  "goods_in_storage",
+]);
+
+/**
  * A site audit is RECORDED or WITHDRAWN.
  *
  * No `expired`, for the same reason `commerceCertificationStateEnum` has none: an audit
@@ -5576,6 +5599,11 @@ export const insuranceOfferingDetail = pgTable(
       .primaryKey()
       .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
     cargoCoverageClasses: text("cargo_coverage_classes").array().notNull().default([]),
+    /** The filterable cover types — see `commerceCargoCoverageClassCodeEnum`. Empty is ordinary. */
+    coverageClassCodes: commerceCargoCoverageClassCodeEnum("coverage_class_codes")
+      .array()
+      .notNull()
+      .default([]),
     coverageLimitMinInCents: integer("coverage_limit_min_in_cents"),
     coverageLimitMaxInCents: integer("coverage_limit_max_in_cents"),
     currency: text("currency").default("USD").notNull(),
@@ -5583,6 +5611,12 @@ export const insuranceOfferingDetail = pgTable(
   },
   (_table) => [
     check("insurance_offering_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    // Eight values exist, so more than eight entries is a duplicate. `cardinality` of an empty
+    // array is 0, never NULL, so this has no NULL path.
+    check(
+      "insurance_offering_detail_coverage_class_codes_ck",
+      sql`cardinality(coverage_class_codes) <= 8`,
+    ),
     check(
       "insurance_offering_detail_limits_ck",
       sql`(coverage_limit_min_in_cents IS NULL AND coverage_limit_max_in_cents IS NULL)

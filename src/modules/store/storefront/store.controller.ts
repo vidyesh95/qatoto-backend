@@ -683,6 +683,7 @@ export async function listProviders(req: Request, res: Response): Promise<void> 
       jurisdiction: parsed.data.jurisdiction,
       standard: parsed.data.standard,
       storageType: parsed.data.storageType,
+      coverageClass: parsed.data.coverageClass,
       currencyPair: parsed.data.currencyPair,
       // `"true"`/`"false"` on the wire because a query string carries no booleans, and an absent key
       // means "no filter" rather than "false" — which is why the enum has two members and not one.

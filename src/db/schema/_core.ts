@@ -183,6 +183,15 @@ export const user = pgTable(
     // `email` is an @deleted.qatoto.invalid placeholder and the `account`/`passkey` rows
     // are gone, so there is no credential left to sign in with even if something tried.
     anonymizedAt: timestamp("anonymized_at"),
+    // --- TERMS ACCEPTANCE (todo §7). The LATEST acceptance, denormalised so the session can say
+    //     whether to ask again without a join; `user_terms_acceptance` is the record of every
+    //     one. Both NULL until the first acceptance — every account made before this, every
+    //     Google/GitHub first sign-in, and an email sign-up whose client did not echo a version.
+    //     Nullable on purpose: the anonymization verifier seeds a probe user with a fixed
+    //     column list, and a NOT NULL column without a default would break it.
+    //     Written ONLY by `recordTermsAcceptance`; exposed as `input: false` additionalFields.
+    termsVersion: text("terms_version"),
+    termsAcceptedAt: timestamp("terms_accepted_at"),
   },
   (table) => [
     // Partial: staff are a handful of rows out of the whole user table, so the index
@@ -205,6 +214,53 @@ export const user = pgTable(
       sql`anonymized_at IS NULL
           OR (deactivated_at IS NOT NULL AND anonymized_at >= deactivated_at)`,
     ),
+    // Both or neither — a version with no moment, or a moment with no version, proves nothing.
+    // The length test sits inside the second branch so a NULL version cannot pass through it.
+    check(
+      "user_terms_acceptance_pair_ck",
+      sql`(terms_version IS NULL AND terms_accepted_at IS NULL)
+          OR (terms_version IS NOT NULL AND terms_accepted_at IS NOT NULL
+              AND char_length(terms_version) BETWEEN 1 AND 32)`,
+    ),
+  ],
+);
+
+/** Where an acceptance was given. Each is a surface that showed the Terms beside the action. */
+export const userTermsAcceptanceSurfaceEnum = pgEnum("user_terms_acceptance_surface", [
+  // The email sign-up form: "By continuing, you agree to …" beside the button.
+  "email_sign_up",
+  // The in-app banner asking a signed-in account to accept the current version.
+  "in_app_banner",
+]);
+
+/**
+ * EVERY TERMS ACCEPTANCE, append-only (todo §7).
+ *
+ * `user.terms_version` holds only the latest, which a newer acceptance overwrites. This keeps the
+ * one that was overwritten: proof of WHICH text someone agreed to, and when, is the point of
+ * recording acceptance at all, and a single column cannot answer "what had they agreed to on the
+ * day of the dispute".
+ *
+ * `restrict`, and `retain` in the anonymization manifest: an erased account's acceptance is a
+ * legal-claims record (Art. 17(3)(e)). Once `user.name` and `user.email` are scrubbed it points at
+ * a pseudonymous row, so it identifies nobody.
+ */
+export const userTermsAcceptance = pgTable(
+  "user_terms_acceptance",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    termsVersion: text("terms_version").notNull(),
+    acceptanceSurface: userTermsAcceptanceSurfaceEnum("acceptance_surface").notNull(),
+    acceptedAt: timestamp("accepted_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("user_terms_acceptance_user_idx").on(table.userId, table.acceptedAt),
+    check("user_terms_acceptance_version_ck", sql`char_length(terms_version) BETWEEN 1 AND 32`),
   ],
 );
 

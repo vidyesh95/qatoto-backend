@@ -14,6 +14,8 @@
  */
 import { z } from "zod";
 
+import { CARGO_COVERAGE_CLASS_CODES } from "#src/modules/store/procurement/commerce-providers.schemas.js";
+
 export const CursorPageQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(48).default(24),
@@ -187,6 +189,8 @@ export const ProvidersQuerySchema = z
     jurisdiction: z.string().trim().min(1).max(80).optional(),
     standard: z.string().trim().min(1).max(120).optional(),
     storageType: z.string().trim().min(1).max(80).optional(),
+    /** A closed set, unlike the free-text filters above — insurers tick these on their offering. */
+    coverageClass: z.enum(CARGO_COVERAGE_CLASS_CODES).optional(),
     /** `USD/INR` — matched against `currency_pairs`, which stores the pair as one string. */
     currencyPair: z
       .string()

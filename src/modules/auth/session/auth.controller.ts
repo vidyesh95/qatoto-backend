@@ -8,6 +8,10 @@ import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { auth, sendSignupOtp } from "#src/lib/auth.js";
 import { CompleteSignupSchema, StartSignupSchema } from "#src/modules/auth/session/auth.schemas.js";
+import {
+  isCurrentTermsVersion,
+  recordSignUpTermsAcceptance,
+} from "#src/modules/auth/terms/terms-acceptance.service.js";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse, Result } from "#src/types/index.js";
 
@@ -94,14 +98,37 @@ export async function completeSignup(req: Request, res: Response): Promise<void>
     return;
   }
 
-  const { email, otp, password } = parsedBody.data;
+  const { email, otp, password, acceptedTermsVersion } = parsedBody.data;
   const displayName = parsedBody.data.name ?? email.split("@")[0];
+
+  /**
+   * A STALE TERMS VERSION IS REFUSED BEFORE ANY ACCOUNT IS TOUCHED. Recording it would say this
+   * person accepted text they were never shown; ignoring it would silently drop an acceptance the
+   * client meant to make. Neither is honest, so the client is told to reload.
+   */
+  if (acceptedTermsVersion !== undefined && !isCurrentTermsVersion(acceptedTermsVersion)) {
+    res.status(409).json({
+      status: "error",
+      statusCode: 409,
+      message: "The Terms have been updated since this page loaded. Reload the page and try again.",
+    } satisfies ApiResponse);
+    return;
+  }
 
   const [existingUser] = await db.select().from(user).where(eq(user.email, email)).limit(1);
 
   const outcome = existingUser
     ? await linkPasswordOrReject({ email, otp, password, existingUser })
     : await createNewUserAccount({ email, otp, password, displayName });
+
+  /**
+   * After BOTH success paths — a new account, and an OAuth account adding a password through this
+   * same form, which showed the same sentence beside the same button. Only when the client echoed
+   * a version: an absent one records nothing, and the banner asks later.
+   */
+  if (outcome.success && acceptedTermsVersion !== undefined) {
+    await recordSignUpTermsAcceptance(email);
+  }
 
   respondSignup(res, outcome);
 }

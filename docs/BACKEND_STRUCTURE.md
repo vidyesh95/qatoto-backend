@@ -1301,6 +1301,28 @@ and `pnpm db:smoke-data-export` (real upload, real presigned download, real purg
 first signs in for real rather than simulating the hook, because the invariant above is the
 thing most worth proving.
 
+### 11.x Terms acceptance (todo §7, migration `0219`)
+
+Which Terms version an account accepted, when, and on which surface.
+
+- **`user_terms_acceptance`** keeps every acceptance and is append-only, with `email_sign_up` and
+  `in_app_banner` as the surfaces. `user.terms_version` and `user.terms_accepted_at` hold the latest,
+  as `input:false` additionalFields, so the session tells the client whether to ask again.
+  `recordTermsAcceptance` is the only writer and moves both in one transaction.
+- **`CURRENT_TERMS_VERSION`** (`src/lib/terms-version.ts`) is the Terms page's Last updated date. It
+  changes together with the frontend's `TERMS_VERSION`, and an echoed version that is not current
+  is a **409**, never a silent upgrade.
+- **Email sign-up:** `/signup/complete` takes an optional `acceptedTermsVersion`. It is optional so
+  an older client still signs up; it then records nothing and the banner asks. When present, it is
+  recorded on both success paths.
+- **In-app:** `POST /users/me/terms-acceptance` (`requireIdentifiedUser`, `termsAcceptanceLimiter`)
+  is idempotent per version.
+- **Accounts with no record:** Google/GitHub first sign-in, anonymous sessions, and Better Auth's
+  pass-through sign-up record nothing. That is by design: the banner covers all of them, and every
+  account that existed before 0219.
+- **Erasure:** `retain`, Art. 17(3)(e). It is proof of what was agreed, and pseudonymous once the
+  user row is scrubbed. No person-shaped text.
+
 ## 10. Security checklist
 
 - [ ] Server re-validates **every** request — the UI's steps prove nothing (§0).

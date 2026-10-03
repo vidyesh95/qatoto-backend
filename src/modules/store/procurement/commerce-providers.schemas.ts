@@ -60,10 +60,34 @@ const CustomsDetailSchema = z
   })
   .strict();
 
+/**
+ * `commerce_cargo_coverage_class_code`, verbatim. A literal tuple rather than the pgEnum's
+ * `enumValues`, on the `FACTORY_CERTIFICATION_CODES` precedent, so a schema module never imports
+ * the db graph. The directory query (`store.schemas.ts`) shares this one.
+ */
+export const CARGO_COVERAGE_CLASS_CODES = [
+  "institute_cargo_clauses_a",
+  "institute_cargo_clauses_b",
+  "institute_cargo_clauses_c",
+  "institute_cargo_clauses_air",
+  "institute_war_clauses",
+  "institute_strikes_clauses",
+  "stock_throughput",
+  "goods_in_storage",
+] as const;
+
 const InsuranceDetailSchema = z
   .object({
     kind: z.literal("insurance_provider"),
     cargoCoverageClasses: z.array(z.string().trim().min(1).max(80)).max(50),
+    /** The filterable cover types, beside the free-text classes above. Optional and additive. */
+    coverageClassCodes: z
+      .array(z.enum(CARGO_COVERAGE_CLASS_CODES))
+      .max(CARGO_COVERAGE_CLASS_CODES.length)
+      .refine((codes) => new Set(codes).size === codes.length, {
+        message: "coverageClassCodes must not repeat a code.",
+      })
+      .default([]),
     coverageLimitMinInCents: z.number().int().min(0).optional(),
     coverageLimitMaxInCents: z.number().int().min(0).optional(),
     currency: z

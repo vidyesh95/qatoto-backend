@@ -35,5 +35,11 @@ export const CompleteSignupSchema = z
     otp: z.string().min(1, "Verification code is required."),
     password: z.string().min(8, "Password must be at least 8 characters."),
     name: z.string().min(1).optional(),
+    /**
+     * The Terms version shown beside the sign-up button (todo §7). OPTIONAL ON PURPOSE: an older
+     * client omits it, and that sign-up still succeeds — no acceptance is recorded, and the in-app
+     * banner asks once the account is signed in. When present it must be the current version.
+     */
+    acceptedTermsVersion: z.string().trim().min(1).max(32).optional(),
   })
   .strict();

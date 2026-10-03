@@ -36,6 +36,7 @@ import {
   loadSellerDeclaredProfiles,
   type SellerDeclaredProfileProjection,
 } from "#src/modules/store/organizations/commerce-seller-profile.service.js";
+import type { CARGO_COVERAGE_CLASS_CODES } from "#src/modules/store/procurement/commerce-providers.schemas.js";
 import {
   decodeStoreCursor,
   encodeStoreCursor,
@@ -95,6 +96,8 @@ export type ServiceOfferingDetailInput =
   | {
       readonly kind: "insurance_provider";
       readonly cargoCoverageClasses: readonly string[];
+      /** Filterable cover types, beside the free text. Always present on a write (zod defaults it). */
+      readonly coverageClassCodes: readonly (typeof CARGO_COVERAGE_CLASS_CODES)[number][];
       readonly coverageLimitMinInCents?: number;
       readonly coverageLimitMaxInCents?: number;
       readonly currency?: string;
@@ -392,6 +395,7 @@ async function insertOfferingDetail(
       await transaction.insert(insuranceOfferingDetail).values({
         offeringId,
         cargoCoverageClasses: [...detail.cargoCoverageClasses],
+        coverageClassCodes: [...detail.coverageClassCodes],
         coverageLimitMinInCents: detail.coverageLimitMinInCents,
         coverageLimitMaxInCents: detail.coverageLimitMaxInCents,
         currency: detail.currency ?? "USD",
@@ -498,6 +502,7 @@ async function loadOfferingDetail(
         ? {
             kind: "insurance_provider",
             cargoCoverageClasses: row.cargoCoverageClasses,
+            coverageClassCodes: row.coverageClassCodes,
             coverageLimitMinInCents: row.coverageLimitMinInCents ?? undefined,
             coverageLimitMaxInCents: row.coverageLimitMaxInCents ?? undefined,
             currency: row.currency,
@@ -1196,6 +1201,7 @@ function providerFilterPredicates(input: {
   readonly jurisdiction?: string | undefined;
   readonly standard?: string | undefined;
   readonly storageType?: string | undefined;
+  readonly coverageClass?: (typeof CARGO_COVERAGE_CLASS_CODES)[number] | undefined;
   readonly currencyPair?: string | undefined;
   readonly acceptingRequests?: boolean | undefined;
 }): SQL[] {
@@ -1251,6 +1257,20 @@ function providerFilterPredicates(input: {
                            AND ${input.storageType} = ANY(d.storage_types)))`,
     );
   }
+  /**
+   * A CLOSED SET, unlike the three free-text filters beside it — `commerce_cargo_coverage_class_code`.
+   * The bound value is cast to the enum so the comparison is enum-to-enum; the query schema has
+   * already refused anything outside it.
+   */
+  if (input.coverageClass !== undefined) {
+    predicates.push(
+      sql`EXISTS (${activeOfferingForOrganization()}
+            AND EXISTS (SELECT 1 FROM insurance_offering_detail AS d
+                         WHERE d.offering_id = o.id
+                           AND ${input.coverageClass}::commerce_cargo_coverage_class_code
+                               = ANY(d.coverage_class_codes)))`,
+    );
+  }
   if (input.currencyPair !== undefined) {
     predicates.push(
       sql`EXISTS (${activeOfferingForOrganization()}
@@ -1298,10 +1318,14 @@ export interface ProviderDirectoryFacets {
  * `sea` still needs to know what `air` would give them; recomputing against the current filters
  * would zero out every alternative and turn the chips into a dead end.
  *
- * ONLY FOUR DIMENSIONS ARE FACETED, and the other four filters deliberately are not. `jurisdiction`,
- * `standard` and `storageType` are FREE TEXT arrays a provider types — their value space is
+ * ONLY FOUR DIMENSIONS ARE FACETED, and the other filters deliberately are not. `jurisdiction`,
+ * `standard`, `storageType` and `currencyPair` are FREE TEXT a provider types — their value space is
  * unbounded, so a chip row over them would be a list of one provider's spellings rather than a
  * vocabulary. `acceptingRequests` is a boolean and needs no count to be legible.
+ *
+ * `coverageClass` IS a closed set (`commerce_cargo_coverage_class_code`, todo §23.4) and is still not
+ * counted here: the client offers it as a STATIC chip row of all eight, the factory directory's
+ * certification precedent, so this read keeps its four dimensions and one aggregate per dimension.
  */
 export async function getProviderDirectoryFacets(): Promise<ProviderDirectoryFacets> {
   const [kinds, modes, origins, destinations] = await Promise.all([
@@ -1362,6 +1386,7 @@ export async function listPublicProviders(input: {
   readonly jurisdiction?: string;
   readonly standard?: string;
   readonly storageType?: string;
+  readonly coverageClass?: (typeof CARGO_COVERAGE_CLASS_CODES)[number];
   readonly currencyPair?: string;
   readonly acceptingRequests?: boolean;
   readonly limit: number;

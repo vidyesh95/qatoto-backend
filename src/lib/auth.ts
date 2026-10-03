@@ -142,6 +142,14 @@ export const auth = betterAuth({
        * a field for it would be a column that is null in every row that can read it.
        */
       deactivatedAt: { type: "date", required: false, input: false },
+      /**
+       * Terms acceptance (todo §7) — the LATEST version accepted and when. On the session so the
+       * client can decide whether to show the acceptance banner without another request.
+       * `input:false`: written only by `recordTermsAcceptance`, never through Better Auth's own
+       * update or sign-up paths, so no client can claim an acceptance it did not make.
+       */
+      termsVersion: { type: "string", required: false, input: false },
+      termsAcceptedAt: { type: "date", required: false, input: false },
     },
   },
   session: {

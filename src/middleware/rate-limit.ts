@@ -478,6 +478,17 @@ export const userReportLimiter = createLimiter({
   limit: 20,
 });
 
+/**
+ * `POST /users/me/terms-acceptance` (todo §7). The write is idempotent per Terms version, so a
+ * repeat inserts nothing — this bounds the read-then-maybe-write transaction a hammering client
+ * would otherwise run, not the rows. Generous: a person accepts once per Terms change.
+ */
+export const termsAcceptanceLimiter = createLimiter({
+  namespace: "termsAcceptance",
+  windowMs: ONE_MINUTE_MS,
+  limit: 10,
+});
+
 export const channelProfileWriteLimiter = createLimiter({
   namespace: "channelProfileWrite",
   windowMs: ONE_MINUTE_MS,

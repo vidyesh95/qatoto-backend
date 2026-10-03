@@ -1527,6 +1527,20 @@
       "when": 1791035084555,
       "tag": "0217_lively_lyja",
       "breakpoints": true
+    },
+    {
+      "idx": 218,
+      "version": "7",
+      "when": 1791038173829,
+      "tag": "0218_opposite_prowler",
+      "breakpoints": true
+    },
+    {
+      "idx": 219,
+      "version": "7",
+      "when": 1791038215160,
+      "tag": "0219_warm_omega_flight",
+      "breakpoints": true
     }
   ]
 }

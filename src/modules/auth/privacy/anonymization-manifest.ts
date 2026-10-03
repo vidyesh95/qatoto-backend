@@ -864,6 +864,14 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(e)",
       note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
     },
+    // Proof of which Terms version an account agreed to, and when. Pseudonymous once the scrub
+    // has rewritten `user.name`/`user.email`; keeping it is what lets the agreement be shown in a
+    // dispute about the period the account was live.
+    "user_terms_acceptance.user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "Legal-claims record of the Terms version accepted and when. Identifies nobody after the user row is anonymized.",
+    },
     "user_topic_affinity_snapshot.user_id": { kind: "delete_rows" },
     "user_watch_daily.user_id": { kind: "delete_rows" },
     "verification_step.reviewed_by_user_id": {

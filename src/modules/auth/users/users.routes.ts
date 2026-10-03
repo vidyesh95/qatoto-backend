@@ -6,11 +6,13 @@ import {
   channelProfileWriteLimiter,
   dataExportRequestLimiter,
   dataExportStatusLimiter,
+  termsAcceptanceLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as handleController from "#src/modules/auth/handles/handle.controller.js";
 import * as privacyController from "#src/modules/auth/privacy/privacy.controller.js";
+import * as termsAcceptanceController from "#src/modules/auth/terms/terms-acceptance.controller.js";
 import * as channelProfileController from "#src/modules/auth/users/channel-profile.controller.js";
 import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
 import * as userReportsController from "#src/modules/auth/users/user-reports.controller.js";
@@ -61,6 +63,26 @@ router.patch("/me", requireAuth, longFormBody, usersController.updateMyProfile);
  * DECLARED BEFORE `/:id`, like every `/me/*` route above it — `users.routes.order.test.ts` fails the
  * build if a `/me/*` route ever falls after a single-segment param route.
  */
+/**
+ * POST /users/me/terms-acceptance
+ *
+ * The in-app banner's Accept (todo §7). `requireIdentifiedUser` because an ANONYMOUS session is a
+ * real session row — and an agreement recorded against a throwaway identity is not a record of
+ * anyone agreeing. The body echoes the version the reader was shown; a stale one is a 409.
+ *
+ * NO IDEMPOTENCY KEY, deliberately: the write is idempotent per version (a repeat returns the
+ * existing acceptance and inserts nothing), so there is nothing to dedupe. The limiter bounds the
+ * transaction a hammering client would run. Declared before `/:id`, like every `/me/*` route.
+ */
+router.post(
+  "/me/terms-acceptance",
+  requireAuth,
+  requireIdentifiedUser,
+  termsAcceptanceLimiter,
+  compactBody,
+  termsAcceptanceController.acceptTerms,
+);
+
 router.get("/me/channel-profile", requireAuth, channelProfileController.getMyChannelProfile);
 
 router.patch(
