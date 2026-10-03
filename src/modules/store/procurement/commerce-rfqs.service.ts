@@ -1,8 +1,9 @@
-import { and, asc, desc, eq, exists, gt, inArray, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gt, inArray, lt, ne, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
   commerceEncryptedDocument,
+  commerceOrder,
   commerceOrganization,
   commerceOrganizationAddress,
   commerceProviderKindLink,
@@ -53,6 +54,8 @@ export type CommerceRfqsError =
   | { type: "PROVIDER_INELIGIBLE"; providerOrganizationId: string }
   | { type: "DOCUMENT_NOT_OWNED" }
   | { type: "ADDRESS_NOT_OWNED" }
+  /** `relatedOrderId` names an order this buyer is not a party to, a cancelled one, or none. */
+  | { type: "RELATED_ORDER_NOT_AVAILABLE" }
   | { type: "INVALID_CURSOR" };
 
 export type FreightRfqRequirementDetailInput = {
@@ -162,6 +165,8 @@ export interface CreateDraftRfqInput {
   readonly documentIds?: readonly string[];
   /** A14. The pre-sales inquiry this RFQ grew out of, if any. */
   readonly sourceInquiryId?: string;
+  /** The goods order this request asks cover, testing or storage for. */
+  readonly relatedOrderId?: string;
 }
 
 export interface UpdateDraftRfqInput {
@@ -232,6 +237,8 @@ export interface RfqDetailProjection {
   readonly destinationCountryCode: string | null;
   readonly destinationLocality: string | null;
   readonly settlementCurrency: string;
+  /** BUYER VIEW ONLY. A provider being asked to quote has no business with the goods order id. */
+  readonly relatedOrderId: string | null;
   readonly openedAt: string | null;
   readonly closedAt: string | null;
   readonly awardedAt: string | null;
@@ -391,6 +398,36 @@ async function assertOwnedDocuments(
   if (ownedDocuments.length !== uniqueDocumentIds.length) {
     return { success: false, error: { type: "DOCUMENT_NOT_OWNED" } };
   }
+  return { success: true, value: true };
+}
+
+/**
+ * The caller may ask for services FOR an order only if it is a party to that order — buyer or
+ * seller, since either may arrange cover or testing — and the order is not cancelled.
+ *
+ * One refusal for every failing case, unknown id included, so this cannot be used to learn which
+ * order ids exist.
+ */
+async function assertRelatedOrderAvailable(
+  transaction: DatabaseTransaction,
+  callerOrganizationId: string,
+  relatedOrderId: string,
+): Promise<Result<true, CommerceRfqsError>> {
+  const [order] = await transaction
+    .select({ id: commerceOrder.id })
+    .from(commerceOrder)
+    .where(
+      and(
+        eq(commerceOrder.id, relatedOrderId),
+        or(
+          eq(commerceOrder.buyerOrganizationId, callerOrganizationId),
+          eq(commerceOrder.counterpartyOrganizationId, callerOrganizationId),
+        ),
+        ne(commerceOrder.state, "cancelled"),
+      ),
+    )
+    .limit(1);
+  if (!order) return { success: false, error: { type: "RELATED_ORDER_NOT_AVAILABLE" } };
   return { success: true, value: true };
 }
 
@@ -942,6 +979,7 @@ async function projectRfqDetail(
     destinationCountryCode: rfq.destinationCountryCode,
     destinationLocality: rfq.destinationLocality,
     settlementCurrency: rfq.settlementCurrency,
+    relatedOrderId: callerRelation === "buyer" ? rfq.relatedOrderId : null,
     openedAt: toIsoOrNull(rfq.openedAt),
     closedAt: toIsoOrNull(rfq.closedAt),
     awardedAt: toIsoOrNull(rfq.awardedAt),
@@ -1086,6 +1124,14 @@ export async function createDraftRfq(input: {
         );
         if (!documentCheck.success) abortRfqTransaction(documentCheck.error);
       }
+      if (input.body.relatedOrderId !== undefined) {
+        const relatedOrderCheck = await assertRelatedOrderAvailable(
+          transaction,
+          input.buyerOrganizationId,
+          input.body.relatedOrderId,
+        );
+        if (!relatedOrderCheck.success) abortRfqTransaction(relatedOrderCheck.error);
+      }
 
       const [rfq] = await transaction
         .insert(commerceRfq)
@@ -1103,6 +1149,7 @@ export async function createDraftRfq(input: {
           destinationCountryCode: input.body.destinationCountryCode,
           destinationLocality: input.body.destinationLocality,
           settlementCurrency: input.body.settlementCurrency,
+          relatedOrderId: input.body.relatedOrderId ?? null,
         })
         .returning();
       if (!rfq) throw new Error("RFQ insert returned no row.");

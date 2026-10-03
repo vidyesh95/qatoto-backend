@@ -2652,6 +2652,64 @@ export async function getOrderFulfillment(
   };
 }
 
+/**
+ * Insurance, laboratory and warehouse engagements ARRANGED FOR this goods order — i.e. on a
+ * service order whose `related_order_id` points here.
+ *
+ * DELIBERATELY NOT PART OF `getOrderFulfillment`. Merged in, they would move this order's
+ * progress and attention items on the strength of a contract one party made alone, and they
+ * would show the seller a provider engagement the engagement detail read refuses them.
+ *
+ * SCOPED TO THE CALLER AS THE SERVICE'S BUYER. Either party to the goods order may arrange
+ * cover or testing for it, and each sees only what they arranged: a buyer's insurer is the
+ * buyer's business. The goods-order party check runs first so a non-party gets the same
+ * `NOT_FOUND` as an unknown id.
+ */
+export async function listLinkedServiceEngagements(
+  actor: CommerceFulfillmentActorContext,
+  orderId: string,
+): Promise<Result<unknown, CommercePhase6Error>> {
+  const [order] = await db
+    .select({
+      buyerOrganizationId: commerceOrder.buyerOrganizationId,
+      counterpartyOrganizationId: commerceOrder.counterpartyOrganizationId,
+    })
+    .from(commerceOrder)
+    .where(eq(commerceOrder.id, orderId))
+    .limit(1);
+  if (!order) return { success: false, error: { type: "NOT_FOUND" } };
+  if (
+    order.buyerOrganizationId !== actor.organizationId &&
+    order.counterpartyOrganizationId !== actor.organizationId
+  ) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const rows = await db
+    .select({ engagement: commerceServiceEngagement })
+    .from(commerceServiceEngagement)
+    .innerJoin(commerceOrder, eq(commerceOrder.id, commerceServiceEngagement.orderId))
+    .where(
+      and(
+        eq(commerceOrder.relatedOrderId, orderId),
+        eq(commerceOrder.buyerOrganizationId, actor.organizationId),
+      ),
+    )
+    .orderBy(desc(commerceServiceEngagement.createdAt), asc(commerceServiceEngagement.id));
+
+  return {
+    success: true,
+    value: {
+      orderId,
+      items: rows.map(({ engagement }) => ({
+        ...projectEngagement(engagement),
+        // Named for what it is: the engagement's own order is the SERVICE order, not this one.
+        serviceOrderId: engagement.orderId,
+      })),
+    },
+  };
+}
+
 export type FulfillmentProgressInput = {
   readonly orderState: string;
   readonly productLines: readonly {

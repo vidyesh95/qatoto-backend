@@ -452,6 +452,33 @@ export async function getOrderFulfillment(req: Request, res: Response): Promise<
   } satisfies ApiResponse);
 }
 
+export async function listLinkedServiceEngagements(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = OrderIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.listLinkedServiceEngagements(
+    actor,
+    params.data.orderId,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Linked service engagements loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
 export async function getShipment(req: Request, res: Response): Promise<void> {
   const actor = requireCommerceActor(req, res);
   if (!actor) return;

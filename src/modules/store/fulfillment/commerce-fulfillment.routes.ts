@@ -16,6 +16,17 @@ router.get(
   commerceFulfillmentController.getOrderFulfillment,
 );
 
+/**
+ * Services arranged FOR this order through an RFQ that named it (`related_order_id`). A
+ * separate read rather than a field on the fulfillment read — see the service for why.
+ */
+router.get(
+  "/orders/:orderId/linked-service-engagements",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentController.listLinkedServiceEngagements,
+);
+
 router.post(
   "/orders/:orderId/shipments",
   requireAuth,

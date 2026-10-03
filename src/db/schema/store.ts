@@ -1630,6 +1630,27 @@ export const commerceSettlementAttestationKindEnum = pgEnum(
   ["payment_sent", "payment_received"],
 );
 
+/**
+ * What a party DECLARES it arranged with a third party for an order: cargo cover in transit,
+ * cover for goods in storage, or a laboratory test report. A record of a claim, never an
+ * observation — Qatoto is not an insurer, a warehouse or a conformity assessment body, and sees
+ * none of the underlying contracts. See `commerce-order-declaration.service.ts`.
+ */
+export const commerceThirdPartyDeclarationKindEnum = pgEnum(
+  "commerce_third_party_declaration_kind",
+  ["transit_cover", "storage_cover", "test_report"],
+);
+
+/**
+ * Which side of an order a party is on, DERIVED server-side from the two organization ids.
+ * Stored on a declaration so the read can say "recorded by the seller" without the client having
+ * to know which organization id it is.
+ */
+export const commerceOrderPartySideEnum = pgEnum("commerce_order_party_side", [
+  "buyer",
+  "counterparty",
+]);
+
 export const commerceConnectorOutboxKindEnum = pgEnum("commerce_connector_outbox_kind", [
   "escrow_create_session",
   "escrow_lock_milestones",
@@ -5683,6 +5704,14 @@ export const commerceRfq = pgTable(
     destinationCountryCode: text("destination_country_code"),
     destinationLocality: text("destination_locality"),
     settlementCurrency: text("settlement_currency").default("USD").notNull(),
+    /**
+     * The goods order this request is for, when a party asks for cover, testing or storage for an
+     * order it is already on. Checked at creation (the caller must be a party to it) and copied
+     * onto the order an accepted quote opens — see `commerce_order.related_order_id`.
+     */
+    relatedOrderId: text("related_order_id").references((): AnyPgColumn => commerceOrder.id, {
+      onDelete: "restrict",
+    }),
     openedAt: timestamp("opened_at"),
     closedAt: timestamp("closed_at"),
     awardedAt: timestamp("awarded_at"),
@@ -6348,6 +6377,17 @@ export const commerceOrder = pgTable(
       () => commerceQuoteRevision.id,
       { onDelete: "restrict" },
     ),
+    /**
+     * The GOODS order this service order was arranged for, copied from the RFQ at acceptance.
+     *
+     * Accepting a quote always opens a NEW order, so an insurance, laboratory or warehouse
+     * engagement bought for a shipment never sat on that shipment's order. This is the link back.
+     * It grants nothing: the goods order's other party is not a party to this order, and the
+     * linked-engagement read shows it only to the organization that bought the service.
+     */
+    relatedOrderId: text("related_order_id").references((): AnyPgColumn => commerceOrder.id, {
+      onDelete: "restrict",
+    }),
     currency: text("currency").notNull(),
     subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
     taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
@@ -6487,6 +6527,7 @@ export const commerceOrder = pgTable(
      * per category per hour — had no usable index at all.
      */
     index("commerce_order_state_created_idx").on(table.state, table.createdAt, table.id),
+    index("commerce_order_related_order_idx").on(table.relatedOrderId),
     index("commerce_order_confirmed_at_idx")
       .on(table.confirmedAt, table.counterpartyOrganizationId)
       .where(sql`confirmed_at IS NOT NULL`),
@@ -10135,6 +10176,95 @@ export const commerceSettlementAttestation = pgTable(
     check(
       "commerce_settlement_attestation_note_ck",
       sql`reference_note IS NULL OR char_length(reference_note) BETWEEN 1 AND 500`,
+    ),
+  ],
+);
+
+/**
+ * A PARTY'S DECLARATION that it arranged cover or testing with a third party for an order.
+ *
+ * Self-reported and attributed — nothing here says the cover exists, pays out or applies, or that
+ * a test report is genuine. `disclaimer_version` is the non-liability text the author
+ * acknowledged, stamped by the server from its own constant and never accepted as free text.
+ *
+ * APPEND-ONLY EXCEPT FOR WITHDRAWAL. A correction is a withdrawal plus a new row, so what the
+ * other party may already have read and relied on stays readable.
+ *
+ * `issuer` and not `issuer_name`: an insurer or laboratory is a business, and a `_name` column is
+ * swept by the person-shaped text register (`scripts/verify-text-pii-coverage.ts`).
+ */
+export const commerceOrderThirdPartyDeclaration = pgTable(
+  "commerce_order_third_party_declaration",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    /** Transit cover may name the leg it covers. Must be a leg of a shipment on THIS order. */
+    shipmentLegId: text("shipment_leg_id").references(() => commerceShipmentLeg.id, {
+      onDelete: "restrict",
+    }),
+    kind: commerceThirdPartyDeclarationKindEnum("kind").notNull(),
+    declaredBySide: commerceOrderPartySideEnum("declared_by_side").notNull(),
+    declaredByOrganizationId: text("declared_by_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    declaredByMemberId: text("declared_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    /** The insurer or laboratory, as the declaring party wrote it. */
+    issuer: text("issuer").notNull(),
+    /** Policy number or report number, as the declaring party wrote it. */
+    reference: text("reference").notNull(),
+    coverageClass: text("coverage_class"),
+    standard: text("standard"),
+    coverageAmountInCents: bigint("coverage_amount_in_cents", { mode: "number" }),
+    coverageCurrency: text("coverage_currency"),
+    validFrom: date("valid_from", { mode: "string" }),
+    validUntil: date("valid_until", { mode: "string" }),
+    issuedOn: date("issued_on", { mode: "string" }),
+    evidenceDocumentId: text("evidence_document_id").references(
+      () => commerceEncryptedDocument.id,
+      { onDelete: "restrict" },
+    ),
+    note: text("note"),
+    disclaimerVersion: text("disclaimer_version").notNull(),
+    withdrawnAt: timestamp("withdrawn_at"),
+    withdrawnByMemberId: text("withdrawn_by_member_id").references(
+      () => commerceOrganizationMember.id,
+      { onDelete: "restrict" },
+    ),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_order_third_party_declaration_order_idx").on(table.orderId, table.createdAt),
+    check(
+      "commerce_order_third_party_declaration_text_ck",
+      sql`char_length(issuer) BETWEEN 1 AND 200 AND char_length(reference) BETWEEN 1 AND 100 AND (coverage_class IS NULL OR char_length(coverage_class) BETWEEN 1 AND 80) AND (standard IS NULL OR char_length(standard) BETWEEN 1 AND 200) AND (note IS NULL OR char_length(note) BETWEEN 1 AND 1000) AND char_length(disclaimer_version) BETWEEN 1 AND 64`,
+    ),
+    // Half an amount is an unanswerable question — both or neither. The explicit IS NOT NULLs are
+    // load-bearing: `NULL > 0` and `NULL ~ '…'` are NULL, and a CHECK that evaluates to NULL
+    // PASSES, so without them an amount with no currency was admitted (caught by a rolled-back
+    // probe against 0216, fixed in 0217).
+    check(
+      "commerce_order_third_party_declaration_coverage_ck",
+      sql`(coverage_amount_in_cents IS NULL AND coverage_currency IS NULL) OR (coverage_amount_in_cents IS NOT NULL AND coverage_currency IS NOT NULL AND coverage_amount_in_cents > 0 AND coverage_currency ~ '^[A-Z]{3}$')`,
+    ),
+    check(
+      "commerce_order_third_party_declaration_validity_ck",
+      sql`valid_from IS NULL OR valid_until IS NULL OR valid_until >= valid_from`,
+    ),
+    // Each kind has exactly one legal shape. A test report carries no money and covers no leg;
+    // cover names no standard and has no issue date; storage cover is not on a transit leg.
+    check(
+      "commerce_order_third_party_declaration_kind_shape_ck",
+      sql`(kind = 'test_report' AND standard IS NOT NULL AND coverage_class IS NULL AND coverage_amount_in_cents IS NULL AND shipment_leg_id IS NULL) OR (kind = 'transit_cover' AND standard IS NULL AND issued_on IS NULL) OR (kind = 'storage_cover' AND standard IS NULL AND issued_on IS NULL AND shipment_leg_id IS NULL)`,
+    ),
+    check(
+      "commerce_order_third_party_declaration_withdrawn_ck",
+      sql`(withdrawn_at IS NULL) = (withdrawn_by_member_id IS NULL)`,
     ),
   ],
 );

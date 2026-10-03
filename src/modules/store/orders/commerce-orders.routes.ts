@@ -9,6 +9,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import * as commerceEarningsController from "#src/modules/store/orders/commerce-earnings.controller.js";
+import * as commerceOrderDeclarationController from "#src/modules/store/orders/commerce-order-declaration.controller.js";
 import * as commerceOrdersController from "#src/modules/store/orders/commerce-orders.controller.js";
 import * as commerceSettlementAttestationController from "#src/modules/store/orders/commerce-settlement-attestation.controller.js";
 import {
@@ -110,6 +111,40 @@ router.post(
   compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceSettlementAttestationController.recordSettlementAttestation,
+);
+
+/**
+ * Third-party declarations: a party's own record of cargo cover, storage cover or a laboratory
+ * report it arranged for this order. BOTH PARTIES, like the settlement attestations — the side
+ * is derived from the order, not taken from the body.
+ *
+ * Withdraw carries no idempotency key on purpose: a repeat is a 409 (`already_withdrawn`), not
+ * a second effect, and the update is conditional on the row still being live.
+ */
+router.get(
+  "/orders/:orderId/declarations",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceOrderDeclarationController.listOrderDeclarations,
+);
+
+router.post(
+  "/orders/:orderId/declarations",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceOrderWriteLimiter,
+  compactBody,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceOrderDeclarationController.recordOrderDeclaration,
+);
+
+router.post(
+  "/orders/:orderId/declarations/:declarationId/withdraw",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceOrderWriteLimiter,
+  compactBody,
+  commerceOrderDeclarationController.withdrawOrderDeclaration,
 );
 
 router.post(

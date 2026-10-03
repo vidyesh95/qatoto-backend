@@ -139,6 +139,11 @@ export interface OrderDetailProjection {
   readonly source: OrderRow["source"];
   readonly state: OrderState;
   readonly acceptedQuoteId: string | null;
+  /**
+   * On a service order opened from an RFQ that named a goods order: that goods order's id. An id
+   * only — it grants no read of the goods order, which still requires being a party to it.
+   */
+  readonly relatedOrderId: string | null;
   readonly currency: string;
   readonly subtotalInCents: number;
   readonly taxInCents: number;
@@ -340,6 +345,7 @@ export async function projectOrderDetail(order: OrderRow): Promise<OrderDetailPr
     source: order.source,
     state: order.state,
     acceptedQuoteId: order.acceptedQuoteId,
+    relatedOrderId: order.relatedOrderId,
     currency: order.currency,
     subtotalInCents: order.subtotalInCents,
     taxInCents: order.taxInCents,

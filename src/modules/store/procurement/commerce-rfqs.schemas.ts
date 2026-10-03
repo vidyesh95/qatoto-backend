@@ -190,6 +190,16 @@ export const CreateDraftRfqSchema = z
      * than accepted, so this cannot be used to probe other organizations' inquiries.
      */
     sourceInquiryId: z.string().trim().min(1).max(200).optional(),
+    /**
+     * The goods order this request asks cover, testing or storage FOR. Copied onto the order an
+     * accepted quote opens, so the service shows up against the goods order it was bought for.
+     *
+     * REFUSED, NOT IGNORED, when the caller is not a party to that order — unlike
+     * `sourceInquiryId`, a dropped link here would be invisible until the service went missing
+     * from the order it was meant for. The refusal is the same 422 whether the order is someone
+     * else's or does not exist, so it cannot be used to probe order ids.
+     */
+    relatedOrderId: z.string().trim().min(1).max(200).optional(),
   })
   .strict()
   .refine(
@@ -199,7 +209,12 @@ export const CreateDraftRfqSchema = z
       message: "desiredDeliveryStartsAt and desiredDeliveryEndsAt must be set together.",
       path: ["desiredDeliveryEndsAt"],
     },
-  );
+  )
+  .refine((body) => body.relatedOrderId === undefined || body.productLines.length === 0, {
+    message:
+      "A request for an existing order asks for services only. Goods belong on their own request.",
+    path: ["productLines"],
+  });
 
 export const UpdateDraftRfqSchema = z
   .object({

@@ -2599,6 +2599,9 @@ async function openOrderForAcceptedQuote(
       state: "pending_payment",
       acceptedQuoteId: quote.id,
       acceptedQuoteRevisionId: revision.id,
+      // The goods order the RFQ asked services FOR — checked against the buyer when the RFQ was
+      // created, and copied here so the engagement can be found from that goods order.
+      relatedOrderId: rfq.relatedOrderId,
       currency: revision.currency,
       subtotalInCents: revision.subtotalInCents,
       taxInCents: revision.taxInCents,

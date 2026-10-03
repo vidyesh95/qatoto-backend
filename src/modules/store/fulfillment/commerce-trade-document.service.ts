@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, desc, eq, gt, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
   commerceEncryptedDocument,
   commerceMessage,
   commerceMessageAttachment,
+  commerceOrder,
+  commerceOrderThirdPartyDeclaration,
   commerceRfq,
   commerceRfqDocument,
   commerceRfqInvitation,
@@ -178,12 +180,16 @@ export async function uploadTradeDocument(input: {
 /**
  * May this organization open this document?
  *
- * Three ways, and no fourth. Ownership, or a link table that already records the two
+ * Four ways, and no fifth. Ownership, or a link table that already records the two
  * parties agreeing this file is part of their conversation:
  *
  *   1. the organization that uploaded it;
  *   2. a participant of a thread carrying it as a message attachment;
- *   3. the buyer or an INVITED provider on an RFQ carrying it.
+ *   3. the buyer or an INVITED provider on an RFQ carrying it;
+ *   4. either party to an order carrying it as the evidence of a third-party declaration that
+ *      has NOT been withdrawn. The declaration exists to show the other party what was
+ *      arranged, so an evidence link they could not open would be a declaration in name only.
+ *      Withdrawal revokes it, which is why this is checked on every read rather than granted.
  *
  * RFQ access is scoped to invited providers rather than every provider, because an open
  * RFQ is broadcast and its drawings are not. `commerce_rfq_invitation` is the record of
@@ -236,8 +242,25 @@ async function organizationMayReadDocument(input: {
     )
     .where(eq(commerceRfqDocument.encryptedDocumentId, input.documentId))
     .limit(1);
+  if (rfqProviderLink) return true;
 
-  return rfqProviderLink !== undefined;
+  const [declarationLink] = await db
+    .select({ id: commerceOrderThirdPartyDeclaration.id })
+    .from(commerceOrderThirdPartyDeclaration)
+    .innerJoin(commerceOrder, eq(commerceOrder.id, commerceOrderThirdPartyDeclaration.orderId))
+    .where(
+      and(
+        eq(commerceOrderThirdPartyDeclaration.evidenceDocumentId, input.documentId),
+        isNull(commerceOrderThirdPartyDeclaration.withdrawnAt),
+        or(
+          eq(commerceOrder.buyerOrganizationId, input.readerOrganizationId),
+          eq(commerceOrder.counterpartyOrganizationId, input.readerOrganizationId),
+        ),
+      ),
+    )
+    .limit(1);
+
+  return declarationLink !== undefined;
 }
 
 /**

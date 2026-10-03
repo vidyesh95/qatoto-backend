@@ -82,6 +82,7 @@ function respondRfqError(
     case "LINES_REQUIRED":
     case "DOCUMENT_NOT_OWNED":
     case "ADDRESS_NOT_OWNED":
+    case "RELATED_ORDER_NOT_AVAILABLE":
     case "INVALID_CURSOR":
       res.status(422).json({
         status: "error",
@@ -97,7 +98,9 @@ function respondRfqError(
                   ? "One or more documents are not owned by the buyer organization."
                   : error.type === "ADDRESS_NOT_OWNED"
                     ? "Destination address is not owned by the buyer organization."
-                    : "Invalid cursor.",
+                    : error.type === "RELATED_ORDER_NOT_AVAILABLE"
+                      ? "That order is not one your organization is a party to, or it was cancelled."
+                      : "Invalid cursor.",
       } satisfies ApiResponse);
       return;
     default: {

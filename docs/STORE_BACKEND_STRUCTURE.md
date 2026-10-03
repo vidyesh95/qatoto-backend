@@ -6067,3 +6067,50 @@ now destroys the model asset explicitly, refusing on failure like its three sibl
 **Deliberately unchanged:** `product_media_kind` and its `spin_360` label. A pgEnum label cannot
 be dropped, the photo-turntable design remains available as a cheaper later path, and a spin and a
 model may coexist on one listing. No per-variant model, no AR/USDZ, no server-side thumbnailing.
+
+### A48. Cover, test reports and storage were invisible on the goods order — **SHIPPED (`0216`, `0217`)**
+
+Two gaps, one feature. Built 2026-10-03.
+
+**1. Nothing recorded cover or testing a party arranged itself.** `commerce_order_third_party_declaration`
+holds a party's own record of cargo cover in transit (`transit_cover`), cover for goods in storage
+(`storage_cover`) or a laboratory report (`test_report`): issuer, reference, optional class or
+standard, an optional `{ amount, currency }` pair, validity dates, and an optional evidence
+document. Routes, in the orders router beside the settlement attestations:
+`GET|POST /commerce/orders/:orderId/declarations` and `POST …/:declarationId/withdraw`.
+
+- **A claim, never an observation.** No verdict column exists. A test report carries the standard
+  and NO pass/fail, because a stored "passed" on a self-arranged report is an endorsement Qatoto
+  must not make.
+- **The disclaimer is the server's.** `THIRD_PARTY_DECLARATION_DISCLAIMER` (service) holds the text
+  and version. A write must echo the current version (409 `DISCLAIMER_VERSION_STALE` otherwise),
+  and the stored version is the constant, never the body's. The frontend renders the text from the
+  list read.
+- **Both parties may declare.** An Incoterm decides who is obliged to insure, not who may.
+- **Append-only except withdrawal**, which is the author's alone (403 for the other party, 409 on a
+  repeat, conditional update against a concurrent press). Withdrawn rows stay on the read.
+- **The other party can open the evidence.** `organizationMayReadDocument` gained a fourth path:
+  a party to an order carrying the document on a declaration that is not withdrawn.
+- **`0217` exists because `0216`'s coverage CHECK was wrong**: `amount > 0 AND currency ~ …` is NULL
+  when either side is NULL, and a CHECK that evaluates to NULL passes. A rolled-back probe caught
+  it before any row was written. Read every CHECK for a NULL path, not only for the `;` truncation.
+- **Privacy:** no `user` FK and no person-shaped column (`issuer`, not `issuer_name`), so it is in
+  neither manifest. It is commercial record about an order, kept with the order.
+
+**2. A service bought for a shipment never appeared on that shipment's order.** Accepting a quote
+opens a NEW order, so an insurer's or laboratory's engagement sat on its own order with no link
+back. Now:
+
+- `commerce_rfq.related_order_id`, accepted on `POST /commerce/rfqs` as `relatedOrderId`, is
+  refused with 422 unless the caller is a party to that order (buyer OR seller) and it is not
+  cancelled. It is the same refusal for an unknown id, and requires no product lines. Shown on the
+  buyer's RFQ projection only.
+- `acceptQuote` copies it to `commerce_order.related_order_id`, and the order projection carries it.
+- `GET /commerce/orders/:orderId/linked-service-engagements` lists engagements on orders whose
+  `related_order_id` is this order **and whose buyer is the caller**. Each party sees only the
+  services it arranged. It is deliberately not merged into the fulfillment read, which would move
+  progress and attention items and show the seller an engagement its detail read refuses them.
+
+**Not built:** a controlled coverage-class vocabulary and a directory `coverageClass` filter. The
+offering, RFQ, quote and deliverable coverage classes stay free text, per the note at
+`commerce-providers.service.ts` ("deliberately not faceted").
