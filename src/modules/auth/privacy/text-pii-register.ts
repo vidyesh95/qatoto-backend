@@ -630,6 +630,10 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
     note: "A product variant, snapshotted onto the order line.",
   },
   "commerce_product_variant.name": { kind: "not_personal_data", note: "A product variant." },
+  "commerce_product_variant_option.option_name": {
+    kind: "not_personal_data",
+    note: 'An option axis label on a product variant — "Colour", "Size".',
+  },
   "commerce_external_provider.display_name": {
     kind: "not_personal_data",
     note: "A payment or logistics provider — a company Qatoto integrates with.",

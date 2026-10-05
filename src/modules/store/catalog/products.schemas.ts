@@ -155,6 +155,18 @@ const productFieldShapes = {
   sourcingQuoteProductLineId: z.string().trim().min(1).max(200).nullable().optional(),
 };
 
+/**
+ * A26. One value of one option axis — "Colour: Sea blue". Limits match the CHECKs on
+ * `commerce_product_variant_option`: a value is at most 36 characters so three of them joined with
+ * " / " still fit the 120-character variant name generated from them.
+ */
+const ProductVariantOptionSchema = z
+  .object({
+    name: z.string().trim().min(1).max(40),
+    value: z.string().trim().min(1).max(36),
+  })
+  .strict();
+
 /** A1. One variation, with its own price, stock and optional MOQ and ladder. */
 const ProductVariantSchema = z
   .object({
@@ -169,8 +181,18 @@ const ProductVariantSchema = z
     stockQuantity: z.number().int().min(0),
     minimumOrderQuantity: z.number().int().min(1).optional(),
     pricingTiers: z.array(PricingTierSchema).max(10).default([]),
+    /**
+     * A26. One entry per axis, in axis order; `[]` is a flat-list variant, which is what every
+     * listing without axes sends. The cross-variant rules are refinements on the set below.
+     */
+    options: z.array(ProductVariantOptionSchema).max(3).default([]),
   })
   .strict();
+
+/** The axis names of one variant, lowercased, in order — the shape every variant must share. */
+function readOptionAxisKey(options: readonly { readonly name: string }[]): string {
+  return options.map((option) => option.name.toLowerCase()).join("\u001f");
+}
 
 /**
  * Replaces the whole variant set. Empty means "this product is not sold by
@@ -191,7 +213,32 @@ export const ReplaceProductVariantsSchema = z
           new Set(entries.flatMap((entry) => (entry.sku === undefined ? [] : [entry.sku]))).size ===
           entries.filter((entry) => entry.sku !== undefined).length,
         "Variant SKUs must be unique within a listing.",
-      ),
+      )
+      /*
+       * A26's three shape rules. THESE ARE THE REAL GUARD: the database can only see one variant's
+       * own rows, and `replaceVariants` reads any unique violation as a SKU clash, so an option
+       * clash that reached Postgres would come back to the seller as the wrong error.
+       */
+      .refine(
+        (entries) => new Set(entries.map((entry) => readOptionAxisKey(entry.options))).size <= 1,
+        "Every variant must use the same options, in the same order.",
+      )
+      .refine(
+        (entries) =>
+          entries.every(
+            (entry) =>
+              new Set(entry.options.map((option) => option.name.toLowerCase())).size ===
+              entry.options.length,
+          ),
+        "A variant cannot use the same option twice.",
+      )
+      .refine((entries) => {
+        const optionedEntries = entries.filter((entry) => entry.options.length > 0);
+        const combinationKeys = optionedEntries.map((entry) =>
+          entry.options.map((option) => option.value.toLowerCase()).join("\u001f"),
+        );
+        return new Set(combinationKeys).size === optionedEntries.length;
+      }, "Two variants share the same combination of options."),
   })
   .strict();
 

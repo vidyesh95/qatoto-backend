@@ -18,6 +18,7 @@ import {
   commerceProductRelation,
   commerceProductSpecification,
   commerceProductVariant,
+  commerceProductVariantOption,
   product,
   productImage,
   productPricingTier,
@@ -203,6 +204,14 @@ export interface ProductVariantView {
   readonly position: number;
   readonly state: "active" | "retired";
   readonly pricingTiers: readonly PricingTierView[];
+  /** A26. One entry per axis, in axis order; `[]` for a flat-list variant. */
+  readonly options: readonly ProductVariantOptionView[];
+}
+
+/** A26. One value of one option axis on a variant. */
+export interface ProductVariantOptionView {
+  readonly name: string;
+  readonly value: string;
 }
 
 /** A6. One marketing highlight card. */
@@ -914,9 +923,26 @@ async function loadOrganizationProduct(
     .where(eq(commerceProductCustomizationOption.productId, productId))
     .orderBy(asc(commerceProductCustomizationOption.position));
 
+  // A26. Retired variants' options are included, like the variants themselves.
+  const variantOptionRows = await db
+    .select({
+      variantId: commerceProductVariantOption.variantId,
+      name: commerceProductVariantOption.optionName,
+      value: commerceProductVariantOption.optionValue,
+    })
+    .from(commerceProductVariantOption)
+    .where(eq(commerceProductVariantOption.productId, productId))
+    .orderBy(
+      asc(commerceProductVariantOption.variantId),
+      asc(commerceProductVariantOption.position),
+    );
+
   const variants: ProductVariantView[] = variantRows.map((variantRow) => ({
     ...variantRow,
     pricingTiers: pricingTiers.filter((tier) => tier.variantId === variantRow.id),
+    options: variantOptionRows
+      .filter((option) => option.variantId === variantRow.id)
+      .map((option) => ({ name: option.name, value: option.value })),
   }));
 
   // STORE §20. The structured answers, so an edit hydrates its typed controls.
@@ -982,6 +1008,8 @@ async function replaceProductVariants(
       readonly minimumOrderQuantity: number;
       readonly leadTimeDays?: number | undefined;
     }[];
+    /** A26. One entry per axis, in axis order; `[]` for a flat-list variant. */
+    readonly options: readonly { readonly name: string; readonly value: string }[];
   }[],
 ): Promise<void> {
   const existingVariants = await transaction
@@ -1050,6 +1078,23 @@ async function replaceProductVariants(
           minimumOrderQuantity: tier.minimumOrderQuantity,
           leadTimeDays: tier.leadTimeDays ?? null,
           position: tierIndex,
+        })),
+      );
+    }
+
+    // A26. Replaced wholesale like the tier ladder above, and for the same reason: nothing
+    // transactional references an option row, so there is no identity to preserve.
+    await transaction
+      .delete(commerceProductVariantOption)
+      .where(eq(commerceProductVariantOption.variantId, variantId));
+    if (variant.options.length > 0) {
+      await transaction.insert(commerceProductVariantOption).values(
+        variant.options.map((option, axisIndex) => ({
+          productId,
+          variantId,
+          optionName: option.name,
+          optionValue: option.value,
+          position: axisIndex,
         })),
       );
     }
@@ -1951,6 +1996,8 @@ export async function replaceVariants(
       readonly minimumOrderQuantity: number;
       readonly leadTimeDays?: number | undefined;
     }[];
+    /** A26. One entry per axis, in axis order; `[]` for a flat-list variant. */
+    readonly options: readonly { readonly name: string; readonly value: string }[];
   }[],
 ): Promise<Result<PublicProduct, ProductError>> {
   try {
@@ -1979,6 +2026,8 @@ export async function replaceVariants(
       return { success: false, error: { type: "NOT_FOUND", productId } };
     }
   } catch (error) {
+    // Only a SKU can reach this. Slug and position clashes are prevented above, and A26's option
+    // clashes are refused by `ReplaceProductVariantsSchema` before the transaction opens.
     if (isUniqueViolation(error)) {
       return { success: false, error: { type: "SKU_TAKEN", sku: "" } };
     }

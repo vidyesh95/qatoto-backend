@@ -10,6 +10,7 @@ import {
   commerceProductModel,
   commerceProductSpecification,
   commerceProductVariant,
+  commerceProductVariantOption,
   product,
   productImage,
   productPricingTier,
@@ -138,6 +139,40 @@ export interface StoreProductVariantProjection {
   readonly position: number;
   readonly images: readonly StoreProductMediaProjection[];
   readonly pricingTiers: readonly StoreProductPricingTierProjection[];
+  /** A26. One entry per axis, in axis order; `[]` for a flat-list variant. */
+  readonly options: readonly { readonly name: string; readonly value: string }[];
+}
+
+/**
+ * A26. One option axis as the picker draws it: its name, then every value an active variant
+ * carries, in the order those variants are positioned.
+ */
+export interface StoreVariantAxisProjection {
+  readonly name: string;
+  readonly values: readonly string[];
+}
+
+/**
+ * A26. Groups the active variants' options into axes for the picker.
+ *
+ * ON THE SERVER SO EVERY CLIENT READS ONE ORDER. Axis order is the option position, which the
+ * write contract keeps identical on every variant; value order is first appearance across the
+ * variants in `position` order, which is the order the seller's editor generated them in. `[]`
+ * for a flat-list listing, which is the signal the PDP keeps its tile strip.
+ */
+function buildVariantAxes(
+  variants: readonly StoreProductVariantProjection[],
+): StoreVariantAxisProjection[] {
+  const firstOptionedVariant = variants.find((variant) => variant.options.length > 0);
+  if (firstOptionedVariant === undefined) return [];
+  return firstOptionedVariant.options.map((axisOption, axisIndex) => {
+    const values: string[] = [];
+    for (const variant of variants) {
+      const value = variant.options[axisIndex]?.value;
+      if (value !== undefined && !values.includes(value)) values.push(value);
+    }
+    return { name: axisOption.name, values };
+  });
 }
 
 /** A2. `mediaKind` is what makes a 360 spin or a video expressible at all. */
@@ -265,6 +300,8 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
   readonly images: readonly StoreProductMediaProjection[];
   readonly pricingTiers: readonly StoreProductPricingTierProjection[];
   readonly variants: readonly StoreProductVariantProjection[];
+  /** A26. Option axes grouped for the picker; `[]` when the variants are a flat list. */
+  readonly variantAxes: readonly StoreVariantAxisProjection[];
   readonly highlights: readonly StoreProductHighlightProjection[];
   /** §21.3. Public PDFs. `downloadPath` is a path on this API — never a storage URL. */
   readonly documents: readonly StoreProductDocumentProjection[];
@@ -1277,6 +1314,7 @@ export async function getPublicProductBySlug(
     variantAggregates,
     productEngagements,
     builtInTheOpen,
+    variantOptionRows,
   ] = await Promise.all([
     db
       .select({
@@ -1400,6 +1438,20 @@ export async function getPublicProductBySlug(
     // Rides in the existing fan-out rather than adding a serial hop. Returns `null` without
     // querying when the listing has no venture, which is most of them.
     loadProductVentureProvenance(row.researchProjectId),
+    // A26. Every variant's option rows; narrowed to the active variants below.
+    db
+      .select({
+        variantId: commerceProductVariantOption.variantId,
+        name: commerceProductVariantOption.optionName,
+        value: commerceProductVariantOption.optionValue,
+        position: commerceProductVariantOption.position,
+      })
+      .from(commerceProductVariantOption)
+      .where(eq(commerceProductVariantOption.productId, row.id))
+      .orderBy(
+        asc(commerceProductVariantOption.variantId),
+        asc(commerceProductVariantOption.position),
+      ),
   ]);
 
   const sharedImages = allImages.filter((media) => media.variantId === null).map(toMediaProjection);
@@ -1437,8 +1489,12 @@ export async function getPublicProductBySlug(
       // A variant with no ladder of its own inherits the product's, matching how
       // `loadPurchasableProductForCheckout` prices it.
       pricingTiers: variantTiers.length > 0 ? variantTiers : sharedPricingTiers,
+      options: variantOptionRows
+        .filter((option) => option.variantId === variantRow.id)
+        .map((option) => ({ name: option.name, value: option.value })),
     };
   });
+  const variantAxes = buildVariantAxes(variants);
 
   // STORE §20. Loaded through the attribute service so the join and its ordering live in one
   // place; a second copy here would be a second thing to keep in step with the definitions.
@@ -1486,6 +1542,7 @@ export async function getPublicProductBySlug(
       images: sharedImages,
       pricingTiers: sharedPricingTiers,
       variants,
+      variantAxes,
       highlights,
       /**
        * §21.3. `downloadPath`, NEVER a URL — the buyer gets a path on this API which re-checks

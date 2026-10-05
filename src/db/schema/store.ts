@@ -3232,6 +3232,67 @@ export const commerceProductVariant = pgTable(
 );
 
 /**
+ * One value of one option axis on a variant — "Colour: Sea blue" (Appendix A26).
+ *
+ * ⚠️ AXES ARE A BROWSE CONSTRUCT; THE VARIANT IS THE COMMERCIAL ONE. A buyer picks "Sea blue" and
+ * "Large" separately, but what reaches the cart, the reservation and the order-line snapshot is
+ * still the one `commerce_product_variant` those two values identify, under its `name` ("Sea blue /
+ * Large"). Nothing transactional references this table, which is why its rows are replaced
+ * wholesale on every variant save, like the per-variant tier ladder.
+ *
+ * THE SHAPE RULES LIVE IN THE WRITE CONTRACT, NOT HERE. Every active variant of a product carries
+ * the same option names in the same order, and no two share a combination of values —
+ * `ReplaceProductVariantsSchema` refuses anything else before a transaction opens. The unique
+ * indexes below are the backstop for one variant's own rows only.
+ *
+ * At most three axes (`position` 0-2). A value is at most 36 characters so three of them, joined
+ * with " / ", still fit the 120-character variant name the editor generates from them.
+ *
+ * A RETIRED VARIANT KEEPS ITS ROWS. No read serves them, and a retired slug sent again is
+ * un-retired with whatever options the save carries.
+ *
+ * `product_id` is carried like every other variant child, so `commerce_variant_ownership_guard_fn`
+ * can refuse a row naming another product's variant.
+ */
+export const commerceProductVariantOption = pgTable(
+  "commerce_product_variant_option",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    variantId: text("variant_id")
+      .notNull()
+      .references(() => commerceProductVariant.id, { onDelete: "cascade" }),
+    /** The axis label — "Colour", "Size". Public catalog copy. */
+    optionName: text("option_name").notNull(),
+    optionValue: text("option_value").notNull(),
+    /** The axis index, 0-2. The same name sits at the same position on every variant. */
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_variant_option_name_uidx").on(table.variantId, table.optionName),
+    uniqueIndex("commerce_product_variant_option_position_uidx").on(
+      table.variantId,
+      table.position,
+    ),
+    index("commerce_product_variant_option_product_idx").on(table.productId),
+    check(
+      "commerce_product_variant_option_name_ck",
+      sql`char_length(option_name) BETWEEN 1 AND 40`,
+    ),
+    check(
+      "commerce_product_variant_option_value_ck",
+      sql`char_length(option_value) BETWEEN 1 AND 36`,
+    ),
+    check("commerce_product_variant_option_position_ck", sql`position BETWEEN 0 AND 2`),
+  ],
+);
+
+/**
  * Five collapsible marketing cards on the PDP (Appendix A6).
  *
  * `product.keyFeatures` stays what it is — a `text[]` of short bullets with no
@@ -10656,6 +10717,21 @@ export const commerceProductVariantRelations = relations(
     }),
     images: many(productImage),
     pricingTiers: many(productPricingTier),
+    options: many(commerceProductVariantOption),
+  }),
+);
+
+export const commerceProductVariantOptionRelations = relations(
+  commerceProductVariantOption,
+  ({ one }) => ({
+    product: one(product, {
+      fields: [commerceProductVariantOption.productId],
+      references: [product.id],
+    }),
+    variant: one(commerceProductVariant, {
+      fields: [commerceProductVariantOption.variantId],
+      references: [commerceProductVariant.id],
+    }),
   }),
 );
 

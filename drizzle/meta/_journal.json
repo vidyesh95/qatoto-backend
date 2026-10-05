@@ -1562,6 +1562,13 @@
       "when": 1791170365326,
       "tag": "0222_empty_falcon",
       "breakpoints": true
+    },
+    {
+      "idx": 223,
+      "version": "7",
+      "when": 1791180161048,
+      "tag": "0223_brave_kang",
+      "breakpoints": true
     }
   ]
 }

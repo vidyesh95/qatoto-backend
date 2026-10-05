@@ -107,8 +107,8 @@
 > the promised-delivery timestamp it needed (A13). It is `null` only below its sample threshold, and
 > `onTimeSampleSize` rides alongside so "not enough data" is distinguishable from "not wired".
 > **After Phase 19 the register's only unbuilt entries are the deliberate ones**: A10 closed pending
-> a product decision, A20 blocked on §14, A26 deferred until a category actually sells on two
-> dimensions, and the capital half of A34 held behind the same §14 answer A20 is waiting on.
+> a product decision, A20 blocked on §14, and the capital half of A34 held behind the same §14
+> answer A20 is waiting on. (A26, multi-axis variants, was the fourth until it shipped in `0223`.)
 >
 > **Phases 17–19 closed the last three buildable entries in the register (`0099`–`0105`)** — A32,
 > A33 and A34, specified as §16, §17 and §18. The store frontend had shipped a manufacturer
@@ -3772,9 +3772,9 @@ page lists products, per `getCategoryFacets`'s own comment at `store-catalog.ser
   a model, exactly like every other attribute. The moderated claim with evidence behind it is
   `commerce_organization_certification` (§A13), which is organization-scoped and stays that way.
   These two must never be rendered with the same affordance.
-- **It does not add axes to variants.** A26 defers multi-axis variants and this changes nothing
-  about that: an attribute describes the LISTING, and a variant that differs in voltage is still
-  a separate variant row.
+- **It does not add axes to variants.** Axes are A26's (`0223`), not this section's: an attribute
+  describes the LISTING, and a variant that differs in voltage is still a separate variant row —
+  now optionally carrying a "Voltage" option value so the PDP can offer it as a chip.
 
 ---
 
@@ -4770,31 +4770,40 @@ count at all.
 
 ---
 
-### A26. Variants are a flat list, not attribute axes — **DEFERRED, deliberately**
+### A26. Multi-axis variants — **SHIPPED (`0223`, 2026-10-05)**
 
-**Needed by:** the PDP's "Select Color" swatch strip only if it ever grows a second dimension.
+**Needed by:** the PDP's picker once a listing sells on two or three dimensions (Size × Colour ×
+Material).
 
-**What exists:** A1's `commerce_product_variant` — `name`, `publicSlug`, `sku`, own price, stock and
-MOQ, position, `active | retired` — reaching the tier ladder, gallery, cart, reservation, prepare
-snapshot and order line, with `VARIANT_REQUIRED` enforced under the pricing row locks and again by
-trigger.
+**What it was:** A1's `commerce_product_variant` was a flat list, so "Sea blue × Large" was one opaque
+variant name rather than two axes a buyer could pick independently. It was deferred until a category
+asked; the user confirmed it on 2026-10-05.
 
-**What is not expressible:** a matrix. There is no `optionName`/`optionValue` pair, so "Sea blue ×
-Large" is one opaque variant name rather than two axes a buyer can pick independently. Both
-reference markets are axis-based — Amazon's variation themes, Alibaba's multi-spec SKU grid, which
-is the centre of its product page.
+**What shipped:**
 
-**Recorded as deferred rather than missing.** The flat list is the right shape until a category
-actually sells on two dimensions, and A1's cart rule holds either way. Building axes early means a
-migration of every row that reaches an order line snapshot, for a UI nothing has asked for.
+- `commerce_product_variant_option{productId, variantId, optionName, optionValue, position}` — unique
+  `(variantId, optionName)` and `(variantId, position)`, `position` 0-2 (at most three axes), a value
+  at most 36 characters so three joined with " / " fit the 120-character variant name, and
+  `commerce_variant_ownership_guard_fn` attached like every other variant child. Both FKs cascade:
+  nothing transactional references an option row.
+- `PUT /products/:id/variants` takes `options: [{ name, value }]` per variant (default `[]`).
+  `ReplaceProductVariantsSchema` enforces the shape rules the database cannot see: every variant
+  carries the same option names in the same order (or none does), no option twice on one variant,
+  and no two variants share a combination of values. Option rows are replaced wholesale per variant,
+  like the tier ladder; a retired variant keeps its rows.
+- The seller read carries `options` on every variant. `GET /store/products/:slug` carries `options`
+  on each active variant and a grouped `variantAxes: [{ name, values }]` — axis order by option
+  position, value order by first appearance across the variants in `position` order — so every
+  client draws one order. `[]` for a flat-list listing.
+- Search needed nothing: the editor names an axis variant by its values ("Sea blue / Large"), and
+  variant names were already indexed.
 
-**What it would take when asked:** `commerce_product_variant_option{variantId, optionName,
-optionValue, position}` with a unique `(variantId, optionName)`, an optional swatch image per
-option value, and a projection that groups axes for the picker while the variant stays the buyable
-unit. The order-line snapshot keeps recording the variant name, because that is what was bought.
+**Not built:** a swatch image per option value. Values render as text chips.
 
 **Rule, unchanged from A1:** a variant reaching an order line is snapshotted like every other
-commercial fact. Axes are a browse construct; the variant is the commercial one.
+commercial fact, and the snapshot records the variant name, because that is what was bought. Axes are
+a browse construct; the variant is the commercial one. A listing with no options behaves exactly as
+before, and no existing row was migrated.
 
 ---
 

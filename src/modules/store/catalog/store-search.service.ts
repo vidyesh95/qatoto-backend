@@ -1527,7 +1527,9 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       attributeValue.choiceLabel,
       attributeValue.textValue,
     ]),
-    // "Sea blue" and a highlight title are things buyers type; both are public.
+    // "Sea blue" and a highlight title are things buyers type; both are public. A26's option
+    // values reach the index through here too, with no query of their own: an axis variant's
+    // name is its values joined ("Sea blue / Large"), so indexing the name indexes every value.
     ...variantNameRows.map((variant) => variant.name),
     ...highlightRows.map((highlight) => highlight.title),
   ]
