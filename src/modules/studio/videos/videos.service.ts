@@ -13,6 +13,7 @@ import {
   product,
   projectOpenRole,
   researchProject,
+  trendingVideoSnapshot,
   video,
   videoAttachedProduct,
   videoCategory,
@@ -24,6 +25,7 @@ import {
   videoDocument,
   videoMilestone,
   videoOpenRole,
+  videoQualityScoreSnapshot,
   videoTeamMember,
   videoTranscript,
   videoTranscriptSegment,
@@ -2214,13 +2216,26 @@ export async function issuePlaybackToken(
 }
 
 /**
- * Deletes a video and, via FK cascade, its children.
+ * Deletes a video and, via FK cascade, its children — except its two ranking-snapshot tables,
+ * which are `restrict` and are emptied explicitly inside the delete's transaction.
+ *
+ * ⚠️ ROWS FIRST, FILES AFTER COMMIT. The custom thumbnail (Cloudinary) and the attached documents
+ * (object storage) used to be deleted BEFORE the transaction, so any failure inside it — the
+ * snapshot RESTRICT was one, for every video that had ranked in 14 days — left a live video whose
+ * thumbnail and documents were already gone. Now the transaction reads the document keys under
+ * the row lock, deletes the rows and commits, and only then are the files removed.
+ *
+ * THE TRADE, STATED ONCE: a file delete that fails after commit leaves an orphaned object nobody
+ * can see, logged with its key (the thumbnail's public id is derived from the video id), which a
+ * sweep can find. The old order could leave a broken public page. The invisible leak is the better
+ * failure, so BOTH file deletes are best-effort and neither refuses the delete — including a
+ * Cloudinary `NOT_CONFIGURED` on a box without credentials, which used to refuse it.
  *
  * There is NO provider asset to delete — the YouTube video is not ours and stays exactly
- * where it was. The only asset we might own is a custom thumbnail, and `hasCustomThumbnail`
- * is what makes that decidable: calling Cloudinary unconditionally would return
- * NOT_CONFIGURED on a box with no credentials, so no video could ever be deleted in
- * development.
+ * where it was. `hasCustomThumbnail` is what decides whether Cloudinary is called at all.
+ *
+ * A concurrent `attachVideoDocument` cannot strand a file here: it stores the object before
+ * inserting the row, so against a deleted video its insert fails and it deletes the object itself.
  */
 export async function deleteVideo(
   creatorId: string,
@@ -2229,23 +2244,13 @@ export async function deleteVideo(
   const existing = await loadOwnedVideoRow(creatorId, videoId);
   if (!existing) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
 
-  if (existing.hasCustomThumbnail) {
-    const deletedAsset = await deleteThumbnailAsset(videoId);
-    if (!deletedAsset.success) return { success: false, error: deletedAsset.error };
-  }
-
-  // ⚠️ BEFORE THE ROW GOES, because `video_document` CASCADES from `video`: once the delete below
-  // commits there is nothing left to enumerate the object keys from, and the bytes stay in the
-  // bucket forever with no row pointing at them. SQL cannot reach object storage, so there is no
-  // database-level backstop for forgetting this — the same reason `deleteThumbnailAsset` sits
-  // immediately above.
-  //
-  // BEST-EFFORT, UNLIKE THE THUMBNAIL ABOVE, and the asymmetry is deliberate. A creator pressing
-  // Delete on their own video must not be blocked by a storage outage; `deleteObject` is
-  // idempotent, so a failure here leaks bytes rather than corrupting anything, and refusing the
-  // delete would leave them with a video they cannot remove. The failure is logged, loudly, with
-  // the key — which is what makes a later sweep possible.
-  await deleteStoredDocumentsForVideo(videoId);
+  type DeleteOutcome =
+    | { readonly status: "already_deleted" }
+    | {
+        readonly status: "deleted";
+        readonly documentObjectKeys: readonly string[];
+        readonly hadCustomThumbnail: boolean;
+      };
 
   // THE COUNTER COMES DOWN HERE TOO, and its absence was a real bug rather than a deliberate
   // omission. `publishVideo` increments `publishedVideoCount` and `unpublishVideo` decrements it,
@@ -2259,11 +2264,33 @@ export async function deleteVideo(
   // `GREATEST(… - 1, 0)` and the `wasPublished` guard both mirror `unpublishVideo` exactly: the
   // count only comes down if it went up, so deleting a draft cannot drive it negative and a
   // double-delete cannot either.
-  await db.transaction(async (tx) => {
-    // Locked, so a double-clicked Delete decrements once rather than twice.
+  const outcome = await db.transaction(async (tx): Promise<DeleteOutcome> => {
+    // Locked, so a double-clicked Delete decrements once rather than twice — and so the losing
+    // request learns the video is gone and leaves the file cleanup to the winner.
     const lockedStatus = await lockOwnedVideoPublishState(tx, creatorId, videoId);
-    if (lockedStatus === null) return;
+    if (lockedStatus === null) return { status: "already_deleted" };
     const wasPublished = lockedStatus === "published";
+
+    // ⚠️ READ THE DOCUMENT KEYS NOW, UNDER THE LOCK. `video_document` cascades from `video`, so
+    // once the delete below commits nothing names these objects any more. SQL cannot reach object
+    // storage; this list is the only way the bytes get deleted at all.
+    const storedDocuments = await tx
+      .select({ objectStorageKey: videoDocument.objectStorageKey })
+      .from(videoDocument)
+      .where(eq(videoDocument.videoId, videoId));
+
+    // ⚠️ THE RANKING SNAPSHOTS GO FIRST, OR THE OWNER CANNOT DELETE A VIDEO THAT RANKED. Both
+    // tables reference `video` with `restrict`, and their rows live 14 days, so for two weeks after
+    // a video last ranked the delete below raised 23503 — a 500 to the creator. The rows are
+    // derived ranking history, every reader joins `video` (so a deleted video drops out
+    // regardless), and they age out anyway. The FKs stay `restrict` so an unplanned delete still
+    // fails loudly; this and the anonymization scrub's `planRestrictChildClearanceSteps` are the
+    // two sanctioned deletes, and both clear them. Ownership was proved by the lock above, so
+    // these only ever touch the caller's own video.
+    await tx.delete(trendingVideoSnapshot).where(eq(trendingVideoSnapshot.videoId, videoId));
+    await tx
+      .delete(videoQualityScoreSnapshot)
+      .where(eq(videoQualityScoreSnapshot.videoId, videoId));
 
     await tx.delete(video).where(ownedVideoPredicate(creatorId, videoId));
 
@@ -2275,9 +2302,36 @@ export async function deleteVideo(
         })
         .where(eq(creatorStats.userId, creatorId));
     }
+
+    return {
+      status: "deleted",
+      documentObjectKeys: storedDocuments.map((storedDocument) => storedDocument.objectStorageKey),
+      hadCustomThumbnail: existing.hasCustomThumbnail,
+    };
   });
 
-  return { success: true, value: { deleted: true } };
+  switch (outcome.status) {
+    case "already_deleted":
+      // The same answer the concurrent winner gets; it owns the file cleanup.
+      return { success: true, value: { deleted: true } };
+    case "deleted":
+      // COMMITTED. Everything below is best-effort and logged; nothing here can un-delete the row.
+      if (outcome.hadCustomThumbnail) {
+        const deletedThumbnail = await deleteThumbnailAsset(videoId);
+        if (!deletedThumbnail.success) {
+          logger.error("videos: thumbnail left in Cloudinary after video delete", {
+            videoId,
+            reason: deletedThumbnail.error.type,
+          });
+        }
+      }
+      await deleteDocumentObjectsBestEffort(videoId, outcome.documentObjectKeys);
+      return { success: true, value: { deleted: true } };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`Unhandled video delete outcome: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
 }
 
 // --------------------------------------------------------------------------------
@@ -2331,28 +2385,28 @@ function asVideoDocumentStorageError(error: ObjectStorageError): VideoError {
 }
 
 /**
- * Deletes every stored object for a video, best-effort, and reports what it could not remove.
+ * Deletes a deleted video's stored document objects, best-effort, and logs what it could not
+ * remove.
  *
- * CALLED BEFORE THE ROWS GO, from `deleteVideo` and from the account scrub. Both are cascade sites
- * where the rows vanish on their own and the bytes do not.
+ * CALLED AFTER COMMIT, from `deleteVideo` alone, with keys that function read under its row lock —
+ * the rows are already gone, so the keys cannot be re-read here. The account scrub has its own
+ * by-creator sibling below.
  *
  * IT RETURNS NOTHING AND THROWS NOTHING. A caller who could act on a partial failure does not
- * exist: the video is being deleted either way, and `DeleteObject` is idempotent so a retry is
- * always safe. What a failure produces is a log line carrying the key, which is the only thing a
- * later sweep could work from.
+ * exist: the video is deleted, and `DeleteObject` is idempotent so a retry is always safe. What a
+ * failure produces is a log line carrying the key, which is the only thing a later sweep could
+ * work from.
  */
-async function deleteStoredDocumentsForVideo(videoId: string): Promise<void> {
-  const storedDocuments = await db
-    .select({ objectStorageKey: videoDocument.objectStorageKey })
-    .from(videoDocument)
-    .where(eq(videoDocument.videoId, videoId));
-
-  for (const storedDocument of storedDocuments) {
-    const deleted = await deleteDocumentObject(storedDocument.objectStorageKey);
+async function deleteDocumentObjectsBestEffort(
+  videoId: string,
+  objectStorageKeys: readonly string[],
+): Promise<void> {
+  for (const objectStorageKey of objectStorageKeys) {
+    const deleted = await deleteDocumentObject(objectStorageKey);
     if (!deleted.success) {
       logger.error("videos: document object left in storage after video delete", {
         videoId,
-        objectStorageKey: storedDocument.objectStorageKey,
+        objectStorageKey,
         reason: deleted.error.type,
       });
     }

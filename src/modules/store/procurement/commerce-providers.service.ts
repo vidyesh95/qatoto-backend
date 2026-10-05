@@ -1276,12 +1276,23 @@ function providerFilterPredicates(input: {
 }): SQL[] {
   const predicates: SQL[] = [];
 
+  /*
+   * ⚠️ A NULL LANE COUNTRY MEANS "ANY COUNTRY", SO IT MATCHES EVERY COUNTRY FILTER. That is what the
+   * Studio coverage editor tells a provider a blank country means, and what the delivery estimate
+   * already reads (`loadCoveringOfferings`). An exact match here hid a forwarder who covers everywhere
+   * from every filtered list. A provider with NO lane at all is still excluded — no lane declares
+   * nothing, which is not "any".
+   *
+   * The two countries are SEPARATE EXISTS clauses, so origin and destination may be met by different
+   * lanes of the provider. That predates this rule and is unchanged by it.
+   */
   if (input.originCountryCode !== undefined) {
     predicates.push(
       sql`EXISTS (${activeOfferingForOrganization()}
             AND EXISTS (SELECT 1 FROM commerce_service_coverage AS c
                          WHERE c.offering_id = o.id
-                           AND c.origin_country_code = ${input.originCountryCode}))`,
+                           AND (c.origin_country_code = ${input.originCountryCode}
+                                OR c.origin_country_code IS NULL)))`,
     );
   }
   if (input.destinationCountryCode !== undefined) {
@@ -1289,7 +1300,8 @@ function providerFilterPredicates(input: {
       sql`EXISTS (${activeOfferingForOrganization()}
             AND EXISTS (SELECT 1 FROM commerce_service_coverage AS c
                          WHERE c.offering_id = o.id
-                           AND c.destination_country_code = ${input.destinationCountryCode}))`,
+                           AND (c.destination_country_code = ${input.destinationCountryCode}
+                                OR c.destination_country_code IS NULL)))`,
     );
   }
   if (input.transportMode !== undefined) {
@@ -1395,6 +1407,11 @@ export interface ProviderDirectoryFacets {
  * `coverageClass` IS a closed set (`commerce_cargo_coverage_class_code`, todo §23.4) and is still not
  * counted here: the client offers it as a STATIC chip row of all eight, the factory directory's
  * certification precedent, so this read keeps its four dimensions and one aggregate per dimension.
+ *
+ * **A COUNTRY CHIP COUNTS WHAT CLICKING IT RETURNS.** The country filter matches a lane naming the
+ * country OR naming none ("any country"), so each count includes those any-country providers too.
+ * The chips themselves are still only countries somebody NAMED — an "any" lane adds to every chip
+ * and creates none.
  */
 export async function getProviderDirectoryFacets(): Promise<ProviderDirectoryFacets> {
   const [kinds, modes, origins, destinations] = await Promise.all([
@@ -1418,24 +1435,42 @@ export async function getProviderDirectoryFacets(): Promise<ProviderDirectoryFac
          AND prof.verification_state NOT IN ('rejected', 'suspended')
        GROUP BY 1 ORDER BY 1`),
     db.execute<{ value: string; count: number }>(sql`
-      SELECT c.origin_country_code AS value, COUNT(DISTINCT org.id)::int AS count
-        FROM commerce_organization AS org
-        JOIN commerce_provider_profile AS prof ON prof.organization_id = org.id
-        JOIN commerce_service_offering AS o ON o.provider_organization_id = org.id AND o.state = 'active'
-        JOIN commerce_service_coverage AS c ON c.offering_id = o.id
-       WHERE org.trade_state = 'active' AND org.visibility = 'public'
-         AND prof.verification_state NOT IN ('rejected', 'suspended')
-         AND c.origin_country_code IS NOT NULL
+      WITH eligible_lane AS (
+        SELECT org.id AS organization_id, c.origin_country_code AS country_code
+          FROM commerce_organization AS org
+          JOIN commerce_provider_profile AS prof ON prof.organization_id = org.id
+          JOIN commerce_service_offering AS o ON o.provider_organization_id = org.id AND o.state = 'active'
+          JOIN commerce_service_coverage AS c ON c.offering_id = o.id
+         WHERE org.trade_state = 'active' AND org.visibility = 'public'
+           AND prof.verification_state NOT IN ('rejected', 'suspended')
+      ),
+      named_country AS (
+        SELECT DISTINCT country_code FROM eligible_lane WHERE country_code IS NOT NULL
+      )
+      SELECT named_country.country_code AS value,
+             COUNT(DISTINCT eligible_lane.organization_id)::int AS count
+        FROM named_country
+        JOIN eligible_lane ON eligible_lane.country_code = named_country.country_code
+                           OR eligible_lane.country_code IS NULL
        GROUP BY 1 ORDER BY 1`),
     db.execute<{ value: string; count: number }>(sql`
-      SELECT c.destination_country_code AS value, COUNT(DISTINCT org.id)::int AS count
-        FROM commerce_organization AS org
-        JOIN commerce_provider_profile AS prof ON prof.organization_id = org.id
-        JOIN commerce_service_offering AS o ON o.provider_organization_id = org.id AND o.state = 'active'
-        JOIN commerce_service_coverage AS c ON c.offering_id = o.id
-       WHERE org.trade_state = 'active' AND org.visibility = 'public'
-         AND prof.verification_state NOT IN ('rejected', 'suspended')
-         AND c.destination_country_code IS NOT NULL
+      WITH eligible_lane AS (
+        SELECT org.id AS organization_id, c.destination_country_code AS country_code
+          FROM commerce_organization AS org
+          JOIN commerce_provider_profile AS prof ON prof.organization_id = org.id
+          JOIN commerce_service_offering AS o ON o.provider_organization_id = org.id AND o.state = 'active'
+          JOIN commerce_service_coverage AS c ON c.offering_id = o.id
+         WHERE org.trade_state = 'active' AND org.visibility = 'public'
+           AND prof.verification_state NOT IN ('rejected', 'suspended')
+      ),
+      named_country AS (
+        SELECT DISTINCT country_code FROM eligible_lane WHERE country_code IS NOT NULL
+      )
+      SELECT named_country.country_code AS value,
+             COUNT(DISTINCT eligible_lane.organization_id)::int AS count
+        FROM named_country
+        JOIN eligible_lane ON eligible_lane.country_code = named_country.country_code
+                           OR eligible_lane.country_code IS NULL
        GROUP BY 1 ORDER BY 1`),
   ]);
 

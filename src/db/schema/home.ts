@@ -739,8 +739,10 @@ export const videoQualityScoreSnapshot = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => randomUUID()),
-    // `restrict`, not cascade — the snapshot precedent. Deleting a video that has ranking
-    // history should fail loudly rather than silently erase the record of how it ranked.
+    // `restrict`, not cascade — the snapshot precedent: an UNPLANNED delete of a video with
+    // ranking history fails loudly. The two sanctioned deletes — the studio's `deleteVideo` and the
+    // anonymization scrub's `clear:*` steps — empty these rows first, explicitly, in their own
+    // transaction or step (`db:verify-anonymization-coverage` check 7 enforces the scrub side).
     videoId: text("video_id")
       .notNull()
       .references(() => video.id, { onDelete: "restrict" }),
@@ -924,6 +926,8 @@ export const trendingVideoSnapshot = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => randomUUID()),
+    // `restrict` for the reason `video_quality_score_snapshot.video_id` gives: an unplanned delete
+    // fails loudly, and `deleteVideo` and the anonymization `clear:*` steps empty these rows first.
     videoId: text("video_id")
       .notNull()
       .references(() => video.id, { onDelete: "restrict" }),
