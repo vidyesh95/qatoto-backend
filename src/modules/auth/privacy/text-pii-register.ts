@@ -682,6 +682,14 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
     kind: "not_personal_data",
     note: "The dataset a trade-flow figure came from — a statistics agency.",
   },
+  "country_economic_indicator.source_name": {
+    kind: "not_personal_data",
+    note: "The World Bank dataset a GDP-per-capita figure came from; written only from WORLD_BANK_GDP_PPP_SOURCE_NAME by sync-world-bank-indicators.",
+  },
+  "country_business_ready_score.source_name": {
+    kind: "not_personal_data",
+    note: "The World Bank B-READY dataset a regulatory score came from; written only from WORLD_BANK_BUSINESS_READY_SOURCE_NAME by sync-world-bank-indicators.",
+  },
   "market_insight.source_name": {
     kind: "not_personal_data",
     note: "The publication a market figure was taken from.",
