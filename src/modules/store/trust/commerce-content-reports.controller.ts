@@ -8,6 +8,7 @@ import {
   DecideContentReportSchema,
   ListContentReportsQuerySchema,
   ListWithdrawnProductAnswersQuerySchema,
+  ListWithdrawnProductQuestionsQuerySchema,
   ReportIdParamsSchema,
   RestoreContentSchema,
 } from "#src/modules/store/trust/commerce-content-reports.schemas.js";
@@ -289,6 +290,32 @@ export async function listWithdrawnProductAnswers(req: Request, res: Response): 
     status: "success",
     statusCode: 200,
     message: "Withdrawn answers.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function listWithdrawnProductQuestions(req: Request, res: Response): Promise<void> {
+  const moderatorUserId = requireUserId(req, res);
+  if (!moderatorUserId) return;
+
+  const query = ListWithdrawnProductQuestionsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await commerceContentReportsService.listWithdrawnProductQuestions(
+    moderatorUserId,
+    query.data,
+  );
+  if (!result.success) {
+    mapReportsError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Withdrawn questions.",
     data: result.value,
   } satisfies ApiResponse);
 }

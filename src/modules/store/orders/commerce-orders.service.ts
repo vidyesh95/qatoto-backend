@@ -9,6 +9,7 @@ import {
   commerceServiceEngagement,
   product,
 } from "#src/db/schema.js";
+import { resolveOrderDestination } from "#src/modules/store/fulfillment/commerce-arrival-window.service.js";
 import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import { loadOrderCompletionIndex } from "#src/modules/store/orders/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
@@ -171,6 +172,16 @@ export interface OrderDetailProjection {
    * by is on `commerce_shipment_leg`.
    */
   readonly requestedFreightModeSnapshot: FreightMode | null;
+  /**
+   * Where the goods are going, as an ISO 3166-1 alpha-2 country — from the order's delivery
+   * address, else a quote-originated order's RFQ destination (`resolveOrderDestination`, the
+   * arrival window's own resolver). `null` when neither names one.
+   *
+   * COARSE ON PURPOSE: the snapshot beside it already shows the country, and street lines stay
+   * behind the audited reveal. Its reader is the order page's third-party signposts, which link a
+   * provider directory filtered to this destination. It filters a directory and decides nothing.
+   */
+  readonly deliveryCountryCode: string | null;
   readonly buyerLegalNameSnapshot: string;
   readonly counterpartyLegalNameSnapshot: string;
   readonly createdAt: Date;
@@ -321,7 +332,7 @@ function projectOrderServiceLine(line: ServiceLineRow): OrderServiceLineProjecti
 }
 
 export async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjection> {
-  const [productLines, serviceLines, completionIndex, paymentIntentIdsByOrderId] =
+  const [productLines, serviceLines, completionIndex, paymentIntentIdsByOrderId, destination] =
     await Promise.all([
       db
         .select()
@@ -335,6 +346,7 @@ export async function projectOrderDetail(order: OrderRow): Promise<OrderDetailPr
         .orderBy(asc(commerceOrderServiceLine.siblingOrder)),
       loadOrderCompletionIndex(order.id),
       loadLivePaymentIntentIdsByOrderId([order.id]),
+      resolveOrderDestination(order),
     ]);
 
   return {
@@ -356,6 +368,7 @@ export async function projectOrderDetail(order: OrderRow): Promise<OrderDetailPr
     paymentTermsSnapshot: order.paymentTermsSnapshot,
     incotermSnapshot: order.incotermSnapshot,
     requestedFreightModeSnapshot: order.requestedFreightModeSnapshot,
+    deliveryCountryCode: destination.countryCode,
     buyerLegalNameSnapshot: order.buyerLegalNameSnapshot,
     counterpartyLegalNameSnapshot: order.counterpartyLegalNameSnapshot,
     settlementRail: order.settlementRail,

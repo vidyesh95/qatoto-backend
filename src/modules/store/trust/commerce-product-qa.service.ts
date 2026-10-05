@@ -17,6 +17,7 @@ import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organiz
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import {
   buildAnswerWithdrawalAuditEntry,
+  buildQuestionWithdrawalAuditEntry,
   canViewerDeleteAnswer,
   canViewerDeleteQuestion,
   type QaPermissionViewer,
@@ -240,6 +241,14 @@ export async function askProductQuestion(
  * hard delete would cascade them away; the state also keeps an author retraction
  * distinguishable from a moderator hide, which is the whole reason the visibility enum
  * has four values instead of two.
+ *
+ * Every withdrawal appends `product_question_withdrawn` to the SELLER organization's audit chain,
+ * in this transaction, the way `retractProductAnswer` does — the state records that it happened,
+ * the entry records who and when, and survives a restore. A failed append rolls it back.
+ *
+ * The row lock is the answer path's, for the answer path's reasons: two withdrawals racing would
+ * append two events, and a moderator hide landing between the read and the update would be
+ * overwritten.
  */
 export async function retractProductQuestion(
   askerUserId: string,
@@ -247,8 +256,13 @@ export async function retractProductQuestion(
 ): Promise<Result<{ readonly questionId: string }, CommerceProductQaError>> {
   const outcome = await db.transaction(async (transaction) => {
     const [question] = await transaction
-      .select()
+      .select({
+        id: commerceProductQuestion.id,
+        productId: commerceProductQuestion.productId,
+        sellerOrganizationId: product.sellerOrganizationId,
+      })
       .from(commerceProductQuestion)
+      .innerJoin(product, eq(product.id, commerceProductQuestion.productId))
       .where(
         and(
           eq(commerceProductQuestion.id, questionId),
@@ -257,15 +271,20 @@ export async function retractProductQuestion(
         ),
       )
       .limit(1)
-      .for("update");
+      .for("update", { of: commerceProductQuestion });
     if (!question) return { status: "not_found" as const };
 
+    const now = new Date();
     await transaction
       .update(commerceProductQuestion)
-      .set({ visibilityState: "removed_by_author", hiddenAt: new Date() })
+      .set({ visibilityState: "removed_by_author", hiddenAt: now })
       .where(eq(commerceProductQuestion.id, question.id));
 
     await refreshProductQuestionCounters(transaction, question.productId);
+    await appendAuditOrThrow(
+      transaction,
+      buildQuestionWithdrawalAuditEntry(question, question.sellerOrganizationId, askerUserId, now),
+    );
     return { status: "retracted" as const };
   });
 
@@ -438,7 +457,7 @@ async function appendAuditOrThrow(
 ): Promise<void> {
   const appended = await appendCommerceOrganizationAuditEntry(transaction, input);
   if (!appended.success) {
-    throw new Error(`Product answer withdrawal audit append failed: ${appended.error.type}`);
+    throw new Error(`Product Q&A withdrawal audit append failed: ${appended.error.type}`);
   }
 }
 

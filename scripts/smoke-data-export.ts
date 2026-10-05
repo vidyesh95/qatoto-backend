@@ -84,13 +84,22 @@ async function main(): Promise<void> {
       const parsed: unknown = JSON.parse(gunzipSync(downloaded).toString("utf8"));
       const document: Record<string, unknown> =
         typeof parsed === "object" && parsed !== null ? { ...parsed } : {};
+      // Every top-level key `buildExportDocument` returns. This list had fallen behind by five
+      // keys before schema 2 added `whatYouBought`, which is the failure it exists to catch.
       const expectedKeys = [
         "readme",
         "manifest",
         "whoYouAre",
+        "yourChannelLinks",
+        "yourVideoDocuments",
         "howYouSignIn",
         "whatYouDoHere",
         "howMuchYouWatch",
+        "productPagesYouLookedAt",
+        "supportYouAskedFor",
+        "feedbackYouSent",
+        "premiumAiAccess",
+        "whatYouBought",
         "workYouHaveDone",
         "settingsOnThisDevice",
       ];
@@ -122,6 +131,33 @@ async function main(): Promise<void> {
         leaked.length === 0
           ? `none of ${credentialColumns.join(", ")}`
           : `LEAKED: ${leaked.join(", ")}`,
+      );
+
+      /**
+       * Schema 2's deliberate omissions, checked the same way: each is a column the orders, cart
+       * and effort sections must never select (see `manifest.exclusions`). The fixture account has
+       * no orders, so this proves only that no SELECT names them — which is the property a later
+       * edit to those queries could break.
+       */
+      const excludedColumns = [
+        '"counterparty_address_snapshot"',
+        '"buyer_qualification_state"',
+        '"buyer_qualification_reasons"',
+        '"idempotency_key"',
+        '"provider_payment_ref"',
+        '"settlement_account_ref"',
+        '"application_fee_in_cents"',
+        '"encrypted_document_id"',
+        '"override_reason"',
+        '"overridden_by_user_id"',
+      ];
+      const excludedLeaked = excludedColumns.filter((column) => serialized.includes(column));
+      check(
+        "no excluded order, payment or effort column leaked",
+        excludedLeaked.length === 0,
+        excludedLeaked.length === 0
+          ? `none of ${excludedColumns.length} columns`
+          : `LEAKED: ${excludedLeaked.join(", ")}`,
       );
     }
 

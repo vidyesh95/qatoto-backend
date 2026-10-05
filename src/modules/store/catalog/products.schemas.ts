@@ -80,6 +80,15 @@ const productFieldShapes = {
     .regex(/^[A-Z]{2}$/)
     .optional(),
   unitOfMeasure: z.string().trim().min(1).max(40).optional(),
+  /**
+   * The seller's declared standard Incoterms 2020 term — display only (see the column). The same
+   * eleven as a quote's `incoterm`. `.nullable().optional()` for `sourcingQuoteProductLineId`'s
+   * reason: optional on create, and `null` on a PATCH is how a seller withdraws the declaration.
+   */
+  defaultIncoterm: z
+    .enum(["EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB", "CFR", "CIF"])
+    .nullable()
+    .optional(),
   samplePolicy: z.enum(["unavailable", "paid", "refundable"]).optional(),
   /**
    * §21.2. Optional on the way in: a listing being created is `selling` by the column default,

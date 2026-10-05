@@ -89,4 +89,15 @@ commerceContentReportsRouter.get(
   commerceContentReportsController.listWithdrawnProductAnswers,
 );
 
+/**
+ * Withdrawn product questions, read from the SELLER organizations' audit chains — the question
+ * twin of the route above, restored through the same `/admin/content/restore`.
+ */
+commerceContentReportsRouter.get(
+  "/admin/withdrawn-questions",
+  requireAuth,
+  commerceTrustModerationLimiter,
+  commerceContentReportsController.listWithdrawnProductQuestions,
+);
+
 export default commerceContentReportsRouter;

@@ -304,6 +304,31 @@ export async function submitOffering(req: Request, res: Response): Promise<void>
   } satisfies ApiResponse);
 }
 
+export async function getCoverage(req: Request, res: Response): Promise<void> {
+  const context = requireCommerceContext(req, res);
+  if (!context) return;
+  const params = OfferingParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const result = await commerceProvidersService.getOwnedOfferingCoverage({
+    offeringId: params.data.offeringId,
+    organizationId: context.organizationId,
+    memberRole: context.memberRole,
+  });
+  if (!result.success) {
+    mapProviderError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Coverage.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
 export async function setCoverage(req: Request, res: Response): Promise<void> {
   const context = requireCommerceContext(req, res);
   if (!context) return;

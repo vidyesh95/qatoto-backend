@@ -35,6 +35,12 @@ import type { Result } from "#src/types/index.js";
  * at 90. `prune-engagement-data` is what keeps that true, so this is safe by argument
  * rather than by the current row counts happening to be small.
  *
+ * ⚠️ **THAT ARGUMENT DOES NOT COVER THE SCHEMA-2 SECTIONS.** Orders, effort logs, daily logs and
+ * effort claims are records, kept for as long as the account exists, and nothing prunes them. They
+ * are bounded only by how much one person trades and works, which today is small. If a smoke run
+ * ever shows the gzipped document approaching the job's memory, these sections are the ones to
+ * stream first.
+ *
  * ## WHAT THE FILE MUST CONTAIN IS DECIDED BY THE PANEL, NOT BY THIS FILE
  *
  * `data-and-privacy-panel.tsx` lists six categories under "What we hold about you". That
@@ -56,7 +62,7 @@ const MILLISECONDS_PER_DAY = 86_400_000;
  * produced it. That is a portability obligation, not housekeeping: Art. 20 data is meant
  * to be usable somewhere that is not us.
  */
-const EXPORT_SCHEMA_VERSION = 1;
+const EXPORT_SCHEMA_VERSION = 2;
 
 export type RequestDataExportError =
   | { type: "EXPORT_ALREADY_IN_FLIGHT" }
@@ -658,6 +664,198 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
         ORDER BY granted_at DESC`,
   );
 
+  /**
+   * ORDERS THE SUBJECT PLACED, AND THE CART OF THEIR OWN BUYER WORKSPACE (schema 2).
+   *
+   * ⚠️ **AN ORDER BELONGS TO AN ORGANIZATION, NOT A PERSON, SO "YOURS" HAS TO BE DECIDED.** The
+   * rule is: orders whose `created_by_member_id` is one of the subject's memberships, in ANY
+   * organization. Not every order of every organization they belong to — that would hand a junior
+   * buyer the whole company's order book, which is the company's record and not their personal data.
+   * Orders a colleague placed are listed under `manifest.exclusions` for that reason.
+   *
+   * WHAT IS LEFT OUT OF AN ORDER, AND WHY:
+   *  - `counterparty_address_snapshot` — the seller's address is the seller's data. Their legal name
+   *    stays: it is who the subject traded with, and the order page already shows it.
+   *  - `buyer_qualification_state` / `_reasons` — an anti-fraud assessment; printing it hands out
+   *    the shape of the control. Listed in the exclusions.
+   *  - Internal ids (`delivery_address_id`, `checkout_group_id`, quote ids, `created_by_member_id`)
+   *    — pointers, not information about the subject.
+   *  - From payments: `idempotency_key`, `provider_payment_ref`, `settlement_account_ref` and
+   *    `application_fee_in_cents` — internal references, the seller's processor account and
+   *    Qatoto's fee. The amount, state and dates are the subject's.
+   *  - Customization artwork BYTES and their document ids — `has_document` says one was attached,
+   *    for the reason `yourVideoDocuments` gives sizes rather than files.
+   */
+  const ordersYouPlaced = await collect(
+    "ordersYouPlaced",
+    sql`SELECT o.id, o.source, o.state, o.currency, o.subtotal_in_cents, o.tax_in_cents,
+               o.service_fee_in_cents, o.shipping_in_cents, o.discount_in_cents, o.total_in_cents,
+               o.payment_terms_snapshot, o.incoterm_snapshot, o.requested_freight_mode_snapshot,
+               o.buyer_legal_name_snapshot, o.buyer_address_snapshot,
+               o.counterparty_legal_name_snapshot, o.promised_delivery_at, o.confirmed_at,
+               o.completed_at, o.cancelled_at, o.settlement_rail, o.created_at
+        FROM commerce_order AS o
+        WHERE o.created_by_member_id IN
+              (SELECT id FROM commerce_organization_member WHERE user_id = ${userId})
+        ORDER BY o.created_at DESC`,
+  );
+
+  const orderLines = await collect(
+    "orderLines",
+    sql`SELECT l.order_id, l.product_id, l.title_snapshot, l.variant_name_snapshot,
+               l.specification_snapshot, l.is_sample, l.quantity_ordered, l.quantity_fulfilled,
+               l.quantity_cancelled, l.quantity_refunded, l.unit_price_in_cents,
+               l.line_total_in_cents, l.promised_delivery_at, l.lead_time_min_days_snapshot,
+               l.created_at
+        FROM commerce_order_product_line AS l
+        JOIN commerce_order AS o ON o.id = l.order_id
+        WHERE o.created_by_member_id IN
+              (SELECT id FROM commerce_organization_member WHERE user_id = ${userId})
+        ORDER BY l.order_id, l.sibling_order`,
+  );
+
+  const orderServiceLines = await collect(
+    "orderServiceLines",
+    sql`SELECT l.order_id, l.provider_kind, l.title_snapshot, l.scope_snapshot, l.fee_in_cents,
+               l.created_at
+        FROM commerce_order_service_line AS l
+        JOIN commerce_order AS o ON o.id = l.order_id
+        WHERE o.created_by_member_id IN
+              (SELECT id FROM commerce_organization_member WHERE user_id = ${userId})
+        ORDER BY l.order_id, l.sibling_order`,
+  );
+
+  const orderLineChoices = await collect(
+    "orderLineChoices",
+    sql`SELECT l.order_id, c.slot_key_snapshot, c.label_snapshot, c.choice_value,
+               (c.encrypted_document_id IS NOT NULL) AS has_document, c.created_at
+        FROM commerce_order_line_customization AS c
+        JOIN commerce_order_product_line AS l ON l.id = c.order_product_line_id
+        JOIN commerce_order AS o ON o.id = l.order_id
+        WHERE o.created_by_member_id IN
+              (SELECT id FROM commerce_organization_member WHERE user_id = ${userId})
+        ORDER BY l.order_id, c.created_at`,
+  );
+
+  const orderPayments = await collect(
+    "orderPayments",
+    sql`SELECT p.order_id, p.provider, p.state, p.amount_in_cents, p.currency, p.failure_reason,
+               p.authorized_at, p.settled_at, p.failed_at, p.cancelled_at, p.created_at
+        FROM commerce_payment_intent AS p
+        JOIN commerce_order AS o ON o.id = p.order_id
+        WHERE o.created_by_member_id IN
+              (SELECT id FROM commerce_organization_member WHERE user_id = ${userId})
+        ORDER BY p.order_id, p.created_at`,
+  );
+
+  /**
+   * Cover, test reports and storage the subject DECLARED on an order — rows they wrote, so theirs
+   * whichever side they were on. A declaration the other party made is that party's statement.
+   * `evidence_document_id` is a pointer, not a fact, and is not selected.
+   */
+  const orderDeclarationsYouMade = await collect(
+    "orderDeclarationsYouMade",
+    sql`SELECT d.order_id, d.kind, d.declared_by_side, d.issuer, d.reference, d.coverage_class,
+               d.standard, d.coverage_amount_in_cents, d.coverage_currency, d.valid_from,
+               d.valid_until, d.issued_on, d.note, d.disclaimer_version, d.withdrawn_at,
+               d.created_at
+        FROM commerce_order_third_party_declaration AS d
+        WHERE d.declared_by_member_id IN
+              (SELECT id FROM commerce_organization_member WHERE user_id = ${userId})
+        ORDER BY d.created_at DESC`,
+  );
+
+  /**
+   * THE CART OF THE SUBJECT'S OWN BUYER WORKSPACE ONLY. A cart is one per organization and its
+   * lines carry no member, so in a shared company cart there is no way to say which lines are
+   * this person's. The auto-provisioned workspace is the one cart that is theirs alone. A plain
+   * SELECT, never `getCart`: that read creates a cart when none exists and re-prices every line,
+   * and an export must not write. Prices are not stored on a cart line, so none are given.
+   */
+  const cartLines = await collect(
+    "cartLines",
+    sql`SELECT l.product_id, p.title AS product_title, l.variant_id, l.quantity, l.is_sample,
+               l.created_at, l.updated_at
+        FROM commerce_cart_product_line AS l
+        JOIN commerce_cart AS c ON c.id = l.cart_id
+        JOIN commerce_organization AS org ON org.id = c.buyer_organization_id
+        LEFT JOIN product AS p ON p.id = l.product_id
+        WHERE org.provisioning_origin = 'auto_provisioned'
+          AND org.created_by_user_id = ${userId}
+        ORDER BY l.created_at`,
+  );
+
+  const cartLineChoices = await collect(
+    "cartLineChoices",
+    sql`SELECT l.product_id, ch.slot_key_snapshot, ch.label_snapshot, ch.choice_value,
+               (ch.encrypted_document_id IS NOT NULL) AS has_document, ch.created_at
+        FROM commerce_cart_line_customization AS ch
+        JOIN commerce_cart_product_line AS l ON l.id = ch.cart_product_line_id
+        JOIN commerce_cart AS c ON c.id = l.cart_id
+        JOIN commerce_organization AS org ON org.id = c.buyer_organization_id
+        WHERE org.provisioning_origin = 'auto_provisioned'
+          AND org.created_by_user_id = ${userId}
+        ORDER BY l.created_at, ch.created_at`,
+  );
+
+  /**
+   * EFFORT THE SUBJECT LOGGED AND CLAIMED (schema 2), on both R&D surfaces.
+   *
+   * Research PROGRAMMES reach the person through `research_program_participant`; PROJECTS through
+   * `project_member`. Both are self-reported records written by the subject, so both are theirs.
+   * Excluded throughout: idempotency keys (request plumbing), the daily log's analysis-pipeline
+   * internals (model names, prompt versions, failure text), and on an effort claim the reviewer's
+   * id and override reason — what a reviewer wrote about the work falls under the "things other
+   * people wrote about you" exclusion. The overridden MINUTES stay: they are what the claim now says.
+   */
+  const programmeParticipations = await collect(
+    "programmeParticipations",
+    sql`SELECT program_id, role, compensation_preference, contribution_summary, joined_at
+        FROM research_program_participant WHERE user_id = ${userId}
+        ORDER BY joined_at`,
+  );
+
+  const programmeEffort = await collect(
+    "programmeEffort",
+    sql`SELECT e.program_id, e.branch_id, e.minutes, e.logged_for_date, e.note, e.created_at
+        FROM research_effort_log AS e
+        JOIN research_program_participant AS p ON p.id = e.participant_id
+        WHERE p.user_id = ${userId}
+        ORDER BY e.logged_for_date DESC, e.created_at DESC`,
+  );
+
+  const programmeContributions = await collect(
+    "programmeContributions",
+    sql`SELECT e.program_id, e.kind, e.amount_in_cents, e.currency_code, e.description,
+               e.created_at
+        FROM research_contribution_ledger_entry AS e
+        JOIN research_program_participant AS p ON p.id = e.participant_id
+        WHERE p.user_id = ${userId}
+        ORDER BY e.created_at DESC`,
+  );
+
+  const projectDailyLogs = await collect(
+    "projectDailyLogs",
+    sql`SELECT d.project_id, d.log_date, d.narrative, d.status, d.submitted_at, d.video_source,
+               d.youtube_video_id, d.effort_verification_status, d.created_at
+        FROM daily_log AS d
+        JOIN project_member AS m ON m.id = d.author_member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY d.log_date DESC, d.created_at DESC`,
+  );
+
+  const projectEffortClaims = await collect(
+    "projectEffortClaims",
+    sql`SELECT c.project_id, c.source_kind, c.claimed_for_date, c.claim_summary,
+               c.extracted_minutes, c.extracted_cash_in_cents, c.grounded_minutes,
+               c.grounded_cash_in_cents, c.overridden_minutes, c.overridden_at,
+               c.verification_status, c.verdict_reached_at, c.created_at
+        FROM effort_claim AS c
+        JOIN project_member AS m ON m.id = c.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY c.claimed_for_date DESC, c.created_at DESC`,
+  );
+
   const workYouHaveDone = {
     projectsFounded: await collect(
       "projectsFounded",
@@ -674,6 +872,11 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
       sql`SELECT project_id, kind, status, short_pitch, created_at
           FROM project_application WHERE applicant_user_id = ${userId}`,
     ),
+    programmeParticipations,
+    programmeEffort,
+    programmeContributions,
+    projectDailyLogs,
+    projectEffortClaims,
   };
 
   return {
@@ -716,6 +919,30 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
           what: "Product pages you opened while signed out",
           why: "They carry no account id, so there is no way to say which of them were yours.",
         },
+        {
+          what: "Orders a colleague placed for a company you belong to",
+          why: "Those are the company's records, not your personal data. whatYouBought lists the orders you placed yourself, in any company.",
+        },
+        {
+          what: "Carts of companies you belong to",
+          why: "A company has one shared cart and its lines do not record who added them, so there is no way to say which are yours. The cart of your own buyer workspace is included.",
+        },
+        {
+          what: "The seller's address on your orders, and the other party's declarations",
+          why: "They are the other party's data (GDPR Article 15(4)). The seller's name, and every declaration you made yourself, are included.",
+        },
+        {
+          what: "The fraud-screening assessment on your orders",
+          why: "Printing it would hand out the shape of an anti-fraud control.",
+        },
+        {
+          what: "Payment processor references, the seller's settlement account and Qatoto's fee",
+          why: "Internal references and other parties' data. The amount, state and dates of each payment are included.",
+        },
+        {
+          what: "Artwork and documents you attached to customized lines",
+          why: "The files themselves are not copied into this document; has_document says one was attached, as with your video documents.",
+        },
       ],
     },
     whoYouAre,
@@ -728,6 +955,15 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     supportYouAskedFor: { cases: supportCasesYouOpened, messages: supportCaseMessages },
     feedbackYouSent,
     premiumAiAccess,
+    whatYouBought: {
+      orders: ordersYouPlaced,
+      orderLines,
+      orderServiceLines,
+      orderLineChoices,
+      payments: orderPayments,
+      declarationsYouMade: orderDeclarationsYouMade,
+      cart: { lines: cartLines, choices: cartLineChoices },
+    },
     workYouHaveDone,
     /**
      * PRESENT AND EMPTY, ON PURPOSE. The panel lists "Settings on this device" as one of

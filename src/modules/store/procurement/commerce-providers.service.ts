@@ -938,6 +938,75 @@ export async function submitServiceOffering(input: {
   return { success: false, error: { type: "INVALID_STATE" } };
 }
 
+/** One lane as its owner reads it back — exactly the shape `PUT …/coverage` takes per lane. */
+export interface OwnedCoverageLane {
+  readonly originCountryCode: string | null;
+  readonly destinationCountryCode: string | null;
+  readonly originRegionLabel: string | null;
+  readonly destinationRegionLabel: string | null;
+  readonly locationIdentifier: string | null;
+  readonly supportsHazardousGoods: boolean;
+  readonly supportsConsolidation: boolean;
+}
+
+/**
+ * `GET /commerce/service-offerings/:offeringId/coverage` — the OWNER's read of every lane, in any
+ * state. The public offering read shows lanes for `active` offerings only, so before this a
+ * provider had no way to see what `PUT …/coverage` had stored — and that PUT replaces the WHOLE list
+ * (an omitted lane is a deletion), so an editor cannot be built without a read to seed it.
+ *
+ * `isEditable` is the PUT's own gate (`draft` or `pending_review`), answered here so the editor and
+ * the write cannot disagree. Another organization's offering is NOT_FOUND, never FORBIDDEN: the
+ * read must not become an oracle for which offering ids exist.
+ */
+export async function getOwnedOfferingCoverage(input: {
+  readonly offeringId: string;
+  readonly organizationId: string;
+  readonly memberRole: MemberRole;
+}): Promise<
+  Result<
+    {
+      readonly offeringId: string;
+      readonly state: ServiceOffering["state"];
+      readonly isEditable: boolean;
+      readonly coverages: readonly OwnedCoverageLane[];
+    },
+    CommerceProvidersError
+  >
+> {
+  const access = requireProviderRole(input.memberRole);
+  if (!access.success) return access;
+
+  const offering = await findOwnedOffering(input.offeringId, input.organizationId);
+  if (!offering) return { success: false, error: { type: "NOT_FOUND" } };
+
+  const rows = await db
+    .select({
+      originCountryCode: commerceServiceCoverage.originCountryCode,
+      destinationCountryCode: commerceServiceCoverage.destinationCountryCode,
+      originRegionLabel: commerceServiceCoverage.originRegionLabel,
+      destinationRegionLabel: commerceServiceCoverage.destinationRegionLabel,
+      locationIdentifier: commerceServiceCoverage.locationIdentifier,
+      supportsHazardousGoods: commerceServiceCoverage.supportsHazardousGoods,
+      supportsConsolidation: commerceServiceCoverage.supportsConsolidation,
+    })
+    .from(commerceServiceCoverage)
+    .where(eq(commerceServiceCoverage.offeringId, offering.id))
+    // Insertion order: the PUT inserts the list in the order it was sent, so the editor gets the
+    // provider's own order back. `id` breaks the tie inside one insert's shared `now()`.
+    .orderBy(asc(commerceServiceCoverage.createdAt), asc(commerceServiceCoverage.id));
+
+  return {
+    success: true,
+    value: {
+      offeringId: offering.id,
+      state: offering.state,
+      isEditable: offering.state === "draft" || offering.state === "pending_review",
+      coverages: rows,
+    },
+  };
+}
+
 export async function setOfferingCoverage(input: {
   readonly offeringId: string;
   readonly organizationId: string;

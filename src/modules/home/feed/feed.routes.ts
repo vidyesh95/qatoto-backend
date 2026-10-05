@@ -106,8 +106,15 @@ router.get("/search", attachOptionalUser, feedReadLimiter, feedController.search
 /*
  * "Everyone is searching for" suppression — `moderate_content`, checked in-service before anything
  * is read. The public list is re-filtered at read time, so a suppression shows on the next load.
- * There is no list route yet: lifting one is by API only (`todo.md`).
+ * The list backs the staff screen at `/admin/search-terms`, where a suppression is lifted.
  */
+router.get(
+  "/admin/search-terms/suppressions",
+  requireAuth,
+  communityModerationLimiter,
+  searchTermSuppressionController.listSearchTermSuppressions,
+);
+
 router.post(
   "/admin/search-terms/suppressions",
   requireAuth,

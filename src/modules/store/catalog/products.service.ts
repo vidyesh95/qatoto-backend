@@ -493,6 +493,8 @@ export interface PublicProduct {
   readonly publicSlug: string | null;
   readonly modelNumber: string | null;
   readonly countryOfOriginCode: string | null;
+  /** The seller's declared standard Incoterm; `null` when not declared. Display only. */
+  readonly defaultIncoterm: (typeof product.$inferSelect)["defaultIncoterm"];
   readonly unitOfMeasure: string | null;
   readonly samplePolicy: "unavailable" | "paid" | "refundable";
   readonly samplePriceInCents: number | null;
@@ -597,6 +599,7 @@ const PRODUCT_SCALAR_COLUMNS = {
   publicSlug: product.publicSlug,
   modelNumber: product.modelNumber,
   countryOfOriginCode: product.countryOfOriginCode,
+  defaultIncoterm: product.defaultIncoterm,
   unitOfMeasure: product.unitOfMeasure,
   samplePolicy: product.samplePolicy,
   samplePriceInCents: product.samplePriceInCents,
@@ -768,6 +771,7 @@ function toPublicProduct(
     publicSlug: row.publicSlug,
     modelNumber: row.modelNumber,
     countryOfOriginCode: row.countryOfOriginCode,
+    defaultIncoterm: row.defaultIncoterm,
     unitOfMeasure: row.unitOfMeasure,
     samplePolicy: row.samplePolicy,
     samplePriceInCents: row.samplePriceInCents,
@@ -1584,6 +1588,7 @@ export async function createProduct(
             keyFeatures: input.keyFeatures,
             modelNumber: input.modelNumber ?? null,
             countryOfOriginCode: input.countryOfOriginCode ?? null,
+            defaultIncoterm: input.defaultIncoterm ?? null,
             unitOfMeasure: input.unitOfMeasure ?? null,
             samplePolicy: input.samplePolicy ?? "unavailable",
             samplePriceInCents: input.samplePriceInCents ?? null,
@@ -1742,6 +1747,7 @@ export async function updateProduct(
   if (patch.modelNumber !== undefined) scalarUpdates.modelNumber = patch.modelNumber;
   if (patch.countryOfOriginCode !== undefined)
     scalarUpdates.countryOfOriginCode = patch.countryOfOriginCode;
+  if (patch.defaultIncoterm !== undefined) scalarUpdates.defaultIncoterm = patch.defaultIncoterm;
   if (patch.unitOfMeasure !== undefined) scalarUpdates.unitOfMeasure = patch.unitOfMeasure;
   if (patch.samplePolicy !== undefined) scalarUpdates.samplePolicy = patch.samplePolicy;
   if (patch.sellingState !== undefined) scalarUpdates.sellingState = patch.sellingState;

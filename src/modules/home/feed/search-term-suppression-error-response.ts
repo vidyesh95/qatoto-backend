@@ -10,7 +10,8 @@ export {
 
 /**
  * STATUS POLICY: 403 only for the capability refusal, decided before anything is read; 422 for a
- * term the search log would never store; 404 for lifting a suppression that does not exist.
+ * term the search log would never store, and for a malformed list cursor; 404 for lifting a
+ * suppression that does not exist.
  */
 function mapSearchTermSuppressionErrorToResponse(error: SearchTermSuppressionError): {
   readonly statusCode: number;
@@ -32,6 +33,12 @@ function mapSearchTermSuppressionErrorToResponse(error: SearchTermSuppressionErr
       };
     case "SEARCH_TERM_NOT_SUPPRESSED":
       return { statusCode: 404, message: `"${error.term}" is not suppressed.` };
+    case "INVALID_CURSOR":
+      return {
+        statusCode: 422,
+        message: "That page cursor could not be read.",
+        errors: { cursor: ["Start again from the first page."] },
+      };
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled search-term error: ${JSON.stringify(exhaustiveCheck)}`);

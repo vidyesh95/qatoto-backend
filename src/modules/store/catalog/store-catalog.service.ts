@@ -248,6 +248,11 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
   readonly keyFeatures: readonly string[];
   readonly modelNumber: string | null;
   readonly countryOfOriginCode: string | null;
+  /**
+   * The seller's DECLARED standard Incoterms 2020 term, or `null` when none is declared — which
+   * renders nothing. A declaration, not a contract: the quote or order states the binding term.
+   */
+  readonly defaultIncoterm: (typeof product.$inferSelect)["defaultIncoterm"];
   readonly unitOfMeasure: string | null;
   readonly samplePriceInCents: number | null;
   /**
@@ -1232,6 +1237,7 @@ export async function getPublicProductBySlug(
       keyFeatures: product.keyFeatures,
       modelNumber: product.modelNumber,
       countryOfOriginCode: product.countryOfOriginCode,
+      defaultIncoterm: product.defaultIncoterm,
       unitOfMeasure: product.unitOfMeasure,
       samplePriceInCents: product.samplePriceInCents,
       maximumSampleQuantity: product.maximumSampleQuantity,
@@ -1466,6 +1472,7 @@ export async function getPublicProductBySlug(
       keyFeatures: row.keyFeatures,
       modelNumber: row.modelNumber,
       countryOfOriginCode: row.countryOfOriginCode,
+      defaultIncoterm: row.defaultIncoterm,
       unitOfMeasure: row.unitOfMeasure,
       samplePriceInCents: row.samplePriceInCents,
       maximumSampleQuantity: row.maximumSampleQuantity,

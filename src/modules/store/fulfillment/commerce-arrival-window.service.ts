@@ -361,7 +361,7 @@ export async function getOrderArrivalWindow(
   );
   const hasPhysicalGoods = goodsLines.length > 0;
 
-  const destination = await resolveDestination(order);
+  const destination = await resolveOrderDestination(order);
   const originCountryCode = hasPhysicalGoods
     ? await resolveShippingOriginCountryCode(order.counterpartyOrganizationId)
     : null;
@@ -435,11 +435,15 @@ export async function getOrderArrivalWindow(
 /**
  * Where is this going?
  *
+ * Exported for the order detail read, which carries the country so the order page's provider
+ * signposts can link a directory filtered to it — one resolver, so the arrival window and those
+ * links cannot name two different destinations for one order.
+ *
  * `buyerAddressSnapshot` IS NEVER PARSED. It is a display string built by
  * `formatDeliveryAddressSnapshot`, and reading geography back out of formatted prose is how a
  * comma inside a locality becomes a wrong country.
  */
-async function resolveDestination(order: {
+export async function resolveOrderDestination(order: {
   readonly deliveryAddressId: string | null;
   readonly acceptedQuoteId: string | null;
 }): Promise<{

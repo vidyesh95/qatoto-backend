@@ -98,3 +98,20 @@ export const ListWithdrawnProductAnswersQuerySchema = z
 export type ListWithdrawnProductAnswersQuery = z.infer<
   typeof ListWithdrawnProductAnswersQuerySchema
 >;
+
+/**
+ * `GET /commerce/admin/withdrawn-questions`. The same three keys with the same meaning — every row
+ * is a question, so `still_withdrawn` means the question is still `removed_by_author` — but its own
+ * name, so a change to one list's filters is not silently a change to the other's.
+ */
+export const ListWithdrawnProductQuestionsQuerySchema = z
+  .object({
+    state: z.enum(["still_withdrawn", "all"]).default("still_withdrawn"),
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    cursor: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export type ListWithdrawnProductQuestionsQuery = z.infer<
+  typeof ListWithdrawnProductQuestionsQuerySchema
+>;

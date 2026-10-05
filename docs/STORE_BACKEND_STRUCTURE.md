@@ -891,6 +891,7 @@ organization member IDs, moderation notes, and storage object keys.
 | POST   | `/commerce/providers/:organizationId/offerings`             | Create draft offering                   |
 | PATCH  | `/commerce/service-offerings/:offeringId`                   | Update owned draft                      |
 | POST   | `/commerce/service-offerings/:offeringId/submit`            | Submit for moderation                   |
+| GET    | `/commerce/service-offerings/:offeringId/coverage`          | Owner's lanes, any state + `isEditable` |
 | POST   | `/commerce/providers/:organizationId/evidence`              | Upload verification evidence            |
 
 Moderation routes live under the existing platform capability model and are not granted by an
@@ -968,6 +969,7 @@ started, not that payment, booking, testing, or settlement succeeded.
 | POST   | `/commerce/admin/content-reports/:reportId/decisions`     | Action or dismiss a report — A12                         |
 | POST   | `/commerce/admin/content/restore`                         | Un-hide content — A12                                    |
 | GET    | `/commerce/admin/withdrawn-answers`                       | Withdrawn answers, from org audit chains — A12           |
+| GET    | `/commerce/admin/withdrawn-questions`                     | Withdrawn questions, from seller org audit chains — A12  |
 | POST   | `/commerce/products/:productId/inquiries`                 | Open or return a pre-sales inquiry — A14                 |
 | GET    | `/commerce/inquiries`                                     | Buyer/seller inquiry inbox — A14                         |
 | GET    | `/commerce/completions`                                   | Buyer completions + `hasReview` — A22                    |
@@ -3009,12 +3011,15 @@ as product decisions.
 
     **What is still open is the Incoterm concept itself.** Phase 26 ships the *effect* — the buyer
     sees the ocean rate and is told which leg it stops short of — without an incoterm input, because
-    there is none to read: `commerce_incoterm` sits on exactly two nullable columns
+    there was none to read: `commerce_incoterm` sat on two nullable columns
     (`commerce_quote_revision.incoterm`, `commerce_order.incoterm_snapshot`), both of which exist
-    only *after* a buyer already has a priced offer. A product carries no term. **A seller-declared
-    incoterm — the value that would say which legs are the BUYER's to arrange, and would distinguish
-    an FOB listing from a DDP one — is still absent, and remains a migration.** Phase 23's vocabulary
-    (A40) is still vocabulary only: nothing branches on the value, and no leg is modelled from it.
+    only *after* a buyer already has a priced offer. **Migration `0222` (2026-10-05) adds the
+    seller-declared term, `product.default_incoterm`** — nullable, set on create and PATCH, returned
+    on the owner and public product reads, and shown on the product page as the seller's
+    declaration. ⚠️ **It is DISPLAY ONLY.** The catalog checkout still writes `incoterm_snapshot`
+    NULL, the delivery estimate does not read it, and no leg is modelled from it: making a listing
+    default bind an order is the §19.9 concept that stays open. Phase 23's vocabulary (A40) is still
+    vocabulary only as far as anything branching on it goes.
 - **Customs dwell is exposed as its own component.** Alibaba does not surface it; it bundles
   clearance into the estimate or sells DDP. Here the backend is **more** transparent than Alibaba,
   not less, which is the intended direction.
@@ -5122,7 +5127,7 @@ Verified against `src/routes/*.ts` and the mounts at `src/app.ts:171-341`:
 - `GET /commerce/settlement/escrow-providers`, `GET|POST /commerce/threads/:threadId/settlement-agreements`,
   `POST /commerce/settlement-agreements/:agreementId/responses` — Phase 14 shipped these and §6 never
   grew a settlement subsection.
-- `GET /commerce/admin/moderation-actions`, `PUT /commerce/service-offerings/:offeringId/coverage`,
+- `GET /commerce/admin/moderation-actions`, `GET|PUT /commerce/service-offerings/:offeringId/coverage`,
   `POST /commerce/admin/products/:productId/moderate`,
   `POST /commerce/admin/suppliers/:supplierId/link-organization`,
   `GET /commerce/products/:productId/ranking-status`,

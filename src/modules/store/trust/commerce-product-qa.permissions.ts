@@ -107,3 +107,27 @@ export function buildAnswerWithdrawalAuditEntry(
     occurredAt,
   };
 }
+
+/**
+ * The audit entry a question withdrawal appends (todo §3.8). A question has no organization, so it
+ * is filed on the chain of the SELLER whose product it was asked on: the organization it was
+ * addressed to. The asker is not acting as a member of that organization, so no role is
+ * snapshotted. Only staff read the chain, so the asker's id reaches no seller.
+ */
+export function buildQuestionWithdrawalAuditEntry(
+  question: { readonly id: string; readonly productId: string },
+  sellerOrganizationId: string,
+  askerUserId: string,
+  occurredAt: Date,
+): CommerceOrganizationAuditAppendInput {
+  return {
+    organizationId: sellerOrganizationId,
+    eventKind: "product_question_withdrawn",
+    actorUserId: askerUserId,
+    actorMemberRoleSnapshot: null,
+    targetEntityType: "commerce_product_question",
+    targetEntityId: question.id,
+    payload: { productId: question.productId },
+    occurredAt,
+  };
+}

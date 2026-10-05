@@ -22,6 +22,7 @@ import type {
   DecideContentReportInput,
   ListContentReportsQuery,
   ListWithdrawnProductAnswersQuery,
+  ListWithdrawnProductQuestionsQuery,
   RestoreContentInput,
 } from "#src/modules/store/trust/commerce-content-reports.schemas.js";
 import {
@@ -1107,6 +1108,134 @@ export async function listWithdrawnProductAnswers(
         ...row,
         withdrawnBy: readWithdrawnBy(payloadJson),
       })),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({
+                sortKey: lastRow.withdrawnAt.toISOString(),
+                id: lastRow.auditEntryId,
+              })
+            : null,
+        hasMore: hasMore && lastRow !== undefined,
+      },
+    },
+  };
+}
+
+export interface WithdrawnProductQuestionProjection {
+  readonly auditEntryId: string;
+  readonly withdrawnAt: Date;
+  /** The asker. `null` once their account is anonymized; the withdrawal still stands. */
+  readonly actorUserId: string | null;
+  readonly questionId: string;
+  readonly questionBodyText: string;
+  /**
+   * The question's state NOW, not at withdrawal — `visible` once restored, `hidden_by_moderator` if
+   * a moderator later hid it. Only `removed_by_author` is restorable from this list.
+   */
+  readonly currentVisibilityState: UgcVisibilityState;
+  /** Answers still attached: a withdrawal hides other people's writing along with the question. */
+  readonly answerCount: number;
+  readonly productId: string;
+  readonly productTitle: string;
+  /** `null` for a listing that never got a public address, which has no page to link to. */
+  readonly productPublicSlug: string | null;
+}
+
+/**
+ * Withdrawn product questions, newest first, for staff (todo §3.8) — the question twin of
+ * `listWithdrawnProductAnswers`, with the same keyset, gate and `state` filter, for the same
+ * reason: a withdrawal is not a moderation event, so the moderation log cannot find one. The
+ * `product_question_withdrawn` events on the SELLER organization's chain are the record.
+ *
+ * One row per EVENT, so a question withdrawn, restored and withdrawn again appears twice. The
+ * withdrawn TEXT is returned, deliberately, after `moderate_commerce` is checked.
+ *
+ * ⚠️ NO INDEX SERVES THIS SCAN either; see `listWithdrawnProductAnswers` for the partial index to
+ * add when volume needs it.
+ */
+export async function listWithdrawnProductQuestions(
+  moderatorUserId: string,
+  query: ListWithdrawnProductQuestionsQuery,
+): Promise<
+  Result<
+    {
+      readonly items: readonly WithdrawnProductQuestionProjection[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommerceContentReportsError
+  >
+> {
+  const capability = await requirePlatformCapability(moderatorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return {
+      success: false,
+      error: { type: "PLATFORM_CAPABILITY_REQUIRED", capability: "moderate_commerce" },
+    };
+  }
+
+  const occurredAtMilliseconds = sql<Date>`date_trunc('milliseconds', ${commerceOrganizationAuditEntry.occurredAt})`;
+
+  const filters: SQL[] = [
+    eq(commerceOrganizationAuditEntry.eventKind, "product_question_withdrawn"),
+    eq(commerceOrganizationAuditEntry.targetEntityType, "commerce_product_question"),
+  ];
+  switch (query.state) {
+    case "still_withdrawn":
+      filters.push(eq(commerceProductQuestion.visibilityState, "removed_by_author"));
+      break;
+    case "all":
+      break;
+    default: {
+      const exhaustiveCheck: never = query.state;
+      throw new Error(`Unhandled withdrawn-question state: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+  if (query.cursor !== undefined) {
+    const cursor = decodeTimestampStoreCursor(query.cursor);
+    if (!cursor) return { success: false, error: { type: "INVALID_CURSOR" } };
+    const cursorOccurredAt = sql`${cursor.sortKey.toISOString()}::timestamp`;
+    const keyset = or(
+      lt(occurredAtMilliseconds, cursorOccurredAt),
+      and(
+        eq(occurredAtMilliseconds, cursorOccurredAt),
+        lt(commerceOrganizationAuditEntry.id, cursor.id),
+      ),
+    );
+    if (keyset) filters.push(keyset);
+  }
+
+  const rows = await db
+    .select({
+      auditEntryId: commerceOrganizationAuditEntry.id,
+      withdrawnAt: commerceOrganizationAuditEntry.occurredAt,
+      actorUserId: commerceOrganizationAuditEntry.actorUserId,
+      questionId: commerceProductQuestion.id,
+      questionBodyText: commerceProductQuestion.bodyText,
+      currentVisibilityState: commerceProductQuestion.visibilityState,
+      answerCount: commerceProductQuestion.answerCount,
+      productId: product.id,
+      productTitle: product.title,
+      productPublicSlug: product.publicSlug,
+    })
+    .from(commerceOrganizationAuditEntry)
+    .innerJoin(
+      commerceProductQuestion,
+      eq(commerceProductQuestion.id, commerceOrganizationAuditEntry.targetEntityId),
+    )
+    .innerJoin(product, eq(product.id, commerceProductQuestion.productId))
+    .where(and(...filters))
+    .orderBy(desc(occurredAtMilliseconds), desc(commerceOrganizationAuditEntry.id))
+    .limit(query.limit + 1);
+
+  const hasMore = rows.length > query.limit;
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
+  const lastRow = pageRows.at(-1);
+
+  return {
+    success: true,
+    value: {
+      items: pageRows,
       page: {
         nextCursor:
           hasMore && lastRow

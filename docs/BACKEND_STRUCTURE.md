@@ -1280,6 +1280,22 @@ them; they would serve a state the system cannot enter.
 Deletion takes `requireAuth` **only** — `requireIdentifiedUser` would 403 an anonymous
 account into a dead end where it cannot close itself.
 
+### What the export contains (schema 2, 2026-10-05)
+
+`buildExportDocument` in `data-export.service.ts` is the authority; `manifest.exclusions` in the
+file says what each section leaves out and why. Schema 2 added two things:
+
+- **`whatYouBought`** — orders whose `created_by_member_id` is one of the subject's memberships, in
+  any organization (never a colleague's order), with their product/service lines, line choices,
+  payments and the declarations the subject made; and the cart of the subject's
+  **auto-provisioned** buyer workspace only, because a shared cart's lines carry no member.
+- **`workYouHaveDone`** gained programme participations, effort logs and contribution entries
+  (through `research_program_participant`) and project daily logs and effort claims (through
+  `project_member`).
+
+These sections are records with no retention, so the "retention bounds every table" argument at
+the top of the service does not cover them; stream them first if the document ever grows large.
+
 ### Jobs and flags
 
 `anonymize-due-accounts-tick` at `30 5 * * *` fans out to one `anonymize-account` job per

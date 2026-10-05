@@ -1281,8 +1281,10 @@ domain where `new Date()` is called.
 > twice in a rolling 7 days. A search with an email, a web address or 7+ digits, or outside 2–80
 > characters, is never written (`search-query-log.ts`). `recompute-trending-searches` enforces the
 > 30-day retention itself rather than through the dry-run prune job. `moderate_content` holders
-> suppress terms (`POST`/`DELETE /feed/admin/search-terms/suppressions`, audited); the watch read
-> re-filters suppressions so a hide takes effect on the next load.
+> suppress terms (`POST`/`DELETE /feed/admin/search-terms/suppressions`, audited) and list the
+> standing ones (`GET`, keyset on `(suppressed_at, term)`, read by the staff screen at
+> `/admin/search-terms`); the watch read re-filters suppressions so a hide takes effect on the next
+> load.
 
 Ordering is expressed **by cron time**, not by code — same convention as
 `recompute-branch-signals` (`20 3`) running before `recompute-program-stats` (`35 3`).

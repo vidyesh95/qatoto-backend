@@ -84,6 +84,17 @@ commerceProvidersRouter.post(
   commerceProvidersController.submitOffering,
 );
 
+/*
+ * The owner's read of an offering's lanes, which seeds the Studio editor. The PUT below replaces the
+ * whole list, so without this a provider could only overwrite lanes they could not see.
+ */
+commerceProvidersRouter.get(
+  "/service-offerings/:offeringId/coverage",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceProvidersController.getCoverage,
+);
+
 commerceProvidersRouter.put(
   "/service-offerings/:offeringId/coverage",
   requireAuth,

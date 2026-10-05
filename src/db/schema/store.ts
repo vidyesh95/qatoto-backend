@@ -424,6 +424,15 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
      * did it" is answered, and it survives a later restore.
      */
     "product_answer_withdrawn",
+    /**
+     * An asker withdrawing their own product question (todo §3.8). A question has no owning
+     * organization, so it lands on the chain of the SELLER whose product it was asked on — the
+     * organization the question was addressed to, and the only one that ever saw it. Only staff
+     * read this table (`commerce-content-reports.service`), so the asker's id reaches no seller.
+     * `removed_by_author` records that it happened; this entry records when, and survives a later
+     * restore.
+     */
+    "product_question_withdrawn",
   ],
 );
 
@@ -3020,6 +3029,17 @@ export const product = pgTable(
     publicSlug: text("public_slug"),
     modelNumber: text("model_number"),
     countryOfOriginCode: text("country_of_origin_code"),
+    /**
+     * The seller's DECLARED standard delivery term for this listing (A40 vocabulary), shown on the
+     * product page so a buyer knows which legs are theirs to arrange before asking. NULL means not
+     * declared, and renders nothing — never a guessed EXW.
+     *
+     * DISPLAY ONLY. Nothing branches on it: a quote states its own `incoterm`, the order freezes
+     * that, and the catalog checkout still writes `incoterm_snapshot` NULL. Copying this value into
+     * the snapshot would turn a listing default into a contractual term the buyer never saw stated
+     * on an order, which is §19.9's open question, not this column's.
+     */
+    defaultIncoterm: commerceIncotermEnum("default_incoterm"),
     unitOfMeasure: text("unit_of_measure"),
     samplePolicy: productSamplePolicyEnum("sample_policy").default("unavailable").notNull(),
     samplePriceInCents: integer("sample_price_in_cents"),
