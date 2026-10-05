@@ -101,6 +101,7 @@ async function main(): Promise<void> {
         "premiumAiAccess",
         "whatYouBought",
         "workYouHaveDone",
+        "whatYouPublish",
         "settingsOnThisDevice",
       ];
       const missing = expectedKeys.filter((key) => !(key in document));
@@ -134,10 +135,16 @@ async function main(): Promise<void> {
       );
 
       /**
-       * Schema 2's deliberate omissions, checked the same way: each is a column the orders, cart
-       * and effort sections must never select (see `manifest.exclusions`). The fixture account has
-       * no orders, so this proves only that no SELECT names them — which is the property a later
-       * edit to those queries could break.
+       * Schema 2's and schema 3's deliberate omissions, checked the same way: each is a column the
+       * orders, cart, effort, receipt, pay and video sections must never select (see
+       * `manifest.exclusions`).
+       *
+       * ⚠️ **AGAINST THIS FIXTURE THE CHECK IS VACUOUS, AND AN EARLIER VERSION OF THIS COMMENT SAID
+       * OTHERWISE.** `db.execute` returns column names only as keys of the rows it returns, and the
+       * fixture account owns no orders, receipts, ledger rows or videos — so an empty section
+       * serializes as `[]` whether or not its SELECT names an excluded column. It catches a leak
+       * only for an account that has rows in that section. Proving the property for every section
+       * would need the fixture to own one row of each, which this smoke does not seed.
        */
       const excludedColumns = [
         '"counterparty_address_snapshot"',
@@ -150,10 +157,19 @@ async function main(): Promise<void> {
         '"encrypted_document_id"',
         '"override_reason"',
         '"overridden_by_user_id"',
+        '"perceptual_hash"',
+        '"device_fingerprint_hash"',
+        '"stored_image_public_id"',
+        '"generated_by_model"',
+        '"prompt_version"',
+        '"model_name"',
+        '"proposed_by_user_id"',
+        '"recorded_by_user_id"',
+        '"video_asset_id"',
       ];
       const excludedLeaked = excludedColumns.filter((column) => serialized.includes(column));
       check(
-        "no excluded order, payment or effort column leaked",
+        "no excluded order, payment, effort, receipt, pay or video column leaked",
         excludedLeaked.length === 0,
         excludedLeaked.length === 0
           ? `none of ${excludedColumns.length} columns`

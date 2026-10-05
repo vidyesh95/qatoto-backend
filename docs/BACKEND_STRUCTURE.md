@@ -1280,7 +1280,7 @@ them; they would serve a state the system cannot enter.
 Deletion takes `requireAuth` **only** — `requireIdentifiedUser` would 403 an anonymous
 account into a dead end where it cannot close itself.
 
-### What the export contains (schema 2, 2026-10-05)
+### What the export contains (schema 3, 2026-10-05)
 
 `buildExportDocument` in `data-export.service.ts` is the authority; `manifest.exclusions` in the
 file says what each section leaves out and why. Schema 2 added two things:
@@ -1293,8 +1293,24 @@ file says what each section leaves out and why. Schema 2 added two things:
   (through `research_program_participant`) and project daily logs and effort claims (through
   `project_member`).
 
+Schema 3 closed the gaps the account panel listed as "not yet":
+
+- **`workYouHaveDone`** gained the analysis of each daily log (transcript segments, extracted
+  claims, summary chips, evidence links — `projectDailyLogs` now carries `id` so they join back),
+  receipt photos (`physical_work_receipt`: the image URL, never the bytes or the Cloudinary handle)
+  with their forensic checks, the slice ledger, slice proposals, the subject's OWN line of each
+  `equity_snapshot` (never another member's), fair market rates, cash agreements, pay lines and
+  recorded payments.
+- **`whatYouPublish`** is new, named after the panel category: the subject's own `video` rows and
+  their uploaded transcripts. `yourVideoDocuments` stays top-level for schema-2 readers.
+
+Left out by rule, each with a `manifest.exclusions` entry: analysis model and prompt identifiers,
+the receipt perceptual hash and device fingerprint (anti-fraud), storage handles, and every
+who-acted user id on rates, pay and payments (the subject's own accept/confirm dates stay).
+
 These sections are records with no retention, so the "retention bounds every table" argument at
-the top of the service does not cover them; stream them first if the document ever grows large.
+the top of the service does not cover them; stream them first if the document ever grows large —
+the transcript sections before the rest.
 
 ### Jobs and flags
 

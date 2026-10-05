@@ -35,11 +35,12 @@ import type { Result } from "#src/types/index.js";
  * at 90. `prune-engagement-data` is what keeps that true, so this is safe by argument
  * rather than by the current row counts happening to be small.
  *
- * ⚠️ **THAT ARGUMENT DOES NOT COVER THE SCHEMA-2 SECTIONS.** Orders, effort logs, daily logs and
- * effort claims are records, kept for as long as the account exists, and nothing prunes them. They
- * are bounded only by how much one person trades and works, which today is small. If a smoke run
- * ever shows the gzipped document approaching the job's memory, these sections are the ones to
- * stream first.
+ * ⚠️ **THAT ARGUMENT DOES NOT COVER THE SCHEMA-2 AND SCHEMA-3 SECTIONS.** Orders, effort logs,
+ * daily logs, effort claims, transcripts, receipts and the slice and pay ledgers are records, kept
+ * for as long as the account exists, and nothing prunes them. They are bounded only by how much one
+ * person trades, works and publishes, which today is small. If a smoke run ever shows the gzipped
+ * document approaching the job's memory, these sections are the ones to stream first — the two
+ * transcript sections before the rest, since one long video is thousands of segment rows.
  *
  * ## WHAT THE FILE MUST CONTAIN IS DECIDED BY THE PANEL, NOT BY THIS FILE
  *
@@ -62,7 +63,7 @@ const MILLISECONDS_PER_DAY = 86_400_000;
  * produced it. That is a portability obligation, not housekeeping: Art. 20 data is meant
  * to be usable somewhere that is not us.
  */
-const EXPORT_SCHEMA_VERSION = 2;
+const EXPORT_SCHEMA_VERSION = 3;
 
 export type RequestDataExportError =
   | { type: "EXPORT_ALREADY_IN_FLIGHT" }
@@ -836,7 +837,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
 
   const projectDailyLogs = await collect(
     "projectDailyLogs",
-    sql`SELECT d.project_id, d.log_date, d.narrative, d.status, d.submitted_at, d.video_source,
+    sql`SELECT d.id, d.project_id, d.log_date, d.narrative, d.status, d.submitted_at, d.video_source,
                d.youtube_video_id, d.effort_verification_status, d.created_at
         FROM daily_log AS d
         JOIN project_member AS m ON m.id = d.author_member_id
@@ -854,6 +855,252 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
         JOIN project_member AS m ON m.id = c.member_id
         WHERE m.user_id = ${userId}
         ORDER BY c.claimed_for_date DESC, c.created_at DESC`,
+  );
+
+  /**
+   * WHAT THE ANALYSIS DREW FROM THE SUBJECT'S DAILY UPDATES (schema 3).
+   *
+   * The transcript is the subject's own words out of their own update, and the claims, summary
+   * chips and evidence links are what the pipeline read out of it — the panel lists all of them
+   * under "Daily updates you posted, and the transcript and claims drawn from them", and the
+   * project page already shows them to the author. Each row carries `daily_log_id`, which is why
+   * `projectDailyLogs` selects `d.id` from schema 3 on: without it these rows could not be joined
+   * back to the update they came from.
+   *
+   * `speaker_label` IS KEPT even on a segment spoken by somebody else on the recording. The update
+   * is the subject's submission and the transcript is what was held against it; leaving out the
+   * lines of a colleague would hand back a conversation with holes in it.
+   *
+   * `generated_by_model` and `prompt_version` are NOT selected, for the reason the daily-log
+   * section above gives: analysis-pipeline internals, not information about the subject.
+   */
+  const projectDailyLogTranscripts = await collect(
+    "projectDailyLogTranscripts",
+    sql`SELECT s.daily_log_id, s.sequence_number, s.start_offset_seconds, s.end_offset_seconds,
+               s.speaker_label, s.segment_text
+        FROM daily_log_transcript_segment AS s
+        JOIN daily_log AS d ON d.id = s.daily_log_id
+        JOIN project_member AS m ON m.id = d.author_member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY s.daily_log_id, s.sequence_number`,
+  );
+
+  const projectDailyLogClaimsDrawn = await collect(
+    "projectDailyLogClaimsDrawn",
+    sql`SELECT c.daily_log_id, c.sequence_number, c.claim_summary, c.extracted_minutes,
+               c.extracted_cash_in_cents, c.confidence_bps, c.created_at
+        FROM daily_log_extracted_claim AS c
+        JOIN daily_log AS d ON d.id = c.daily_log_id
+        JOIN project_member AS m ON m.id = d.author_member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY c.daily_log_id, c.sequence_number`,
+  );
+
+  const projectDailyLogSummaryChips = await collect(
+    "projectDailyLogSummaryChips",
+    sql`SELECT c.daily_log_id, c.sequence_number, c.label, c.confidence_bps
+        FROM daily_log_ai_summary_chip AS c
+        JOIN daily_log AS d ON d.id = c.daily_log_id
+        JOIN project_member AS m ON m.id = d.author_member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY c.daily_log_id, c.sequence_number`,
+  );
+
+  const projectDailyLogEvidenceLinks = await collect(
+    "projectDailyLogEvidenceLinks",
+    sql`SELECT e.daily_log_id, e.external_url, e.external_host, e.external_id, e.created_at
+        FROM daily_log_evidence_link AS e
+        JOIN daily_log AS d ON d.id = e.daily_log_id
+        JOIN project_member AS m ON m.id = d.author_member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY e.daily_log_id, e.created_at`,
+  );
+
+  /**
+   * RECEIPT PHOTOS THE SUBJECT UPLOADED AS EVIDENCE, AND THE CHECKS RUN ON THEM (schema 3).
+   *
+   * THE IMAGE URL, NOT THE BYTES — the `yourVideoDocuments` reasoning. The URL is selected because
+   * it is how the subject gets their own photo back, and `physical-receipts.service.ts` already
+   * returns it to them on the receipt read. `stored_image_public_id` is NOT: it is the Cloudinary
+   * handle, an internal address rather than information about anybody.
+   *
+   * `perceptual_hash` AND `device_fingerprint_hash` ARE NOT SELECTED. They exist to catch one photo
+   * being submitted twice or from a farm of devices — printing them hands out the shape of an
+   * anti-fraud control and tells the subject nothing they could read back, the reasoning the
+   * product-view hashes are excluded under. `idempotency_key` is request plumbing.
+   *
+   * The forensic checks ARE included, finding text and all, because the receipt read already shows
+   * them to the member who uploaded the photo. This is not the order fraud screen, which is never
+   * shown to the buyer. `model_name` and `prompt_version` are pipeline internals and are left out.
+   */
+  const projectReceipts = await collect(
+    "projectReceipts",
+    sql`SELECT r.id, r.project_id, r.claim_id, r.receipt_kind, r.stored_image_url, r.size_bytes,
+               r.width_pixels, r.height_pixels, r.captured_at, r.created_at
+        FROM physical_work_receipt AS r
+        JOIN project_member AS m ON m.id = r.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY r.created_at DESC`,
+  );
+
+  const projectReceiptChecks = await collect(
+    "projectReceiptChecks",
+    sql`SELECT f.receipt_id, f.check_kind, f.result, f.finding_summary, f.confidence_bps,
+               f.checked_at
+        FROM receipt_forensics_check AS f
+        JOIN physical_work_receipt AS r ON r.id = f.receipt_id
+        JOIN project_member AS m ON m.id = r.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY f.receipt_id, f.check_kind`,
+  );
+
+  /**
+   * THE SUBJECT'S EQUITY: SLICES AWARDED, SLICES PROPOSED, AND THEIR SHARE OF EACH SNAPSHOT
+   * (schema 3).
+   *
+   * ⚠️ **THE SUBJECT'S OWN ROWS ONLY.** A snapshot is a whole cap table; `equity_snapshot_share`
+   * is selected by `member_user_id`, so the person gets their line of it plus the snapshot's total
+   * — the number their share is a fraction of — and never another member's slices. Other members'
+   * equity is their data (Art. 15(4)) and is listed in the exclusions.
+   *
+   * Ledger rows keep `id` and `reversal_of_entry_id` so a reversal can be read against the award it
+   * cancels; on a proposal, `run_id`, `fair_market_rate_id` and `active_dispute_id` are pointers
+   * into tables this file does not export and are left out.
+   */
+  const projectSliceLedger = await collect(
+    "projectSliceLedger",
+    sql`SELECT l.id, l.project_id, l.sequence_number, l.entry_kind, l.contribution_kind,
+               l.claim_id, l.slice_numerator, l.slices_awarded, l.unpaid_rate_cents_per_hour,
+               l.effort_minutes, l.cash_in_cents, l.reversal_of_entry_id, l.occurred_at,
+               l.created_at
+        FROM slice_ledger_entry AS l
+        JOIN project_member AS m ON m.id = l.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY l.project_id, l.sequence_number`,
+  );
+
+  const projectSliceProposals = await collect(
+    "projectSliceProposals",
+    sql`SELECT p.project_id, p.claim_id, p.verdict, p.proposed_slices, p.proposed_slice_numerator,
+               p.proposed_time_slice_numerator, p.proposed_cash_slice_numerator, p.status,
+               p.window_opens_at, p.window_closes_at, p.escrowed_slices
+        FROM slice_allocation_proposal AS p
+        JOIN project_member AS m ON m.id = p.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY p.window_opens_at DESC`,
+  );
+
+  const projectEquityShares = await collect(
+    "projectEquityShares",
+    sql`SELECT s.project_id, s.as_of, s.total_slices, s.is_baked, sh.slices,
+               sh.equity_basis_points
+        FROM equity_snapshot_share AS sh
+        JOIN equity_snapshot AS s ON s.id = sh.snapshot_id
+        WHERE sh.member_user_id = ${userId}
+        ORDER BY s.project_id, s.as_of DESC`,
+  );
+
+  /**
+   * THE SUBJECT'S RATES, PAY AGREEMENTS, PAY LINES AND RECORDED PAYMENTS (schema 3).
+   *
+   * Attestations, not money movements: Qatoto holds no funds, and a payment record is what the
+   * founder recorded and the member confirmed about money that moved somewhere else. Everything
+   * the member sees on their compensation pages is here — including the rationale on a rate or
+   * agreement, which is a term of what they accepted, and the pay line's `verification_note`, which
+   * the system writes and the period read returns to them.
+   *
+   * WHO PROPOSED, ACCEPTED, LOCKED, FINALIZED, RECORDED OR CONFIRMED IS NOT SELECTED — the user ids
+   * on every one of these tables. They are the Premium AI exclusion again: internal records of who
+   * acted, not information the subject provided. The subject's own `accepted_at` and
+   * `confirmed_by_member_at` stay, because those dates are what they did. `idempotency_key` is
+   * request plumbing.
+   */
+  const projectFairMarketRates = await collect(
+    "projectFairMarketRates",
+    sql`SELECT r.project_id, r.fair_market_rate_cents_per_hour, r.paid_cash_rate_cents_per_hour,
+               r.currency_code, r.status, r.effective_from, r.rationale_note, r.accepted_at,
+               r.locked_at, r.created_at
+        FROM member_fair_market_rate AS r
+        JOIN project_member AS m ON m.id = r.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY r.project_id, r.effective_from DESC`,
+  );
+
+  const projectCashAgreements = await collect(
+    "projectCashAgreements",
+    sql`SELECT a.project_id, a.engagement_kind, a.monthly_amount_in_cents,
+               a.hourly_rate_cents_per_hour, a.currency_code, a.status, a.effective_from,
+               a.effective_until, a.rationale_note, a.accepted_at, a.created_at
+        FROM member_cash_compensation_agreement AS a
+        JOIN project_member AS m ON m.id = a.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY a.project_id, a.effective_from DESC`,
+  );
+
+  const projectPayLines = await collect(
+    "projectPayLines",
+    sql`SELECT l.project_id, p.period_start_date, p.period_end_date, p.status AS period_status,
+               p.finalized_at, p.countersigned_at, l.kind, l.gross_amount_in_cents, l.currency,
+               l.effort_minutes, l.equity_basis_points_at_start, l.equity_basis_points_at_end,
+               l.equity_basis_points_delta, l.verification_note, l.created_at
+        FROM compensation_period_line AS l
+        JOIN compensation_period AS p ON p.id = l.period_id
+        JOIN project_member AS m ON m.id = l.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY l.project_id, p.period_start_date DESC`,
+  );
+
+  const projectPayments = await collect(
+    "projectPayments",
+    sql`SELECT r.project_id, r.paid_amount_in_cents, r.currency, r.paid_on_date, r.method_key,
+               r.reference_note, r.confirmed_by_member_at, r.created_at
+        FROM compensation_payment_record AS r
+        JOIN compensation_period_line AS l ON l.id = r.line_id
+        JOIN project_member AS m ON m.id = l.member_id
+        WHERE m.user_id = ${userId}
+        ORDER BY r.project_id, r.paid_on_date DESC`,
+  );
+
+  /**
+   * THE SUBJECT'S OWN VIDEOS AND THEIR TRANSCRIPTS (schema 3).
+   *
+   * A new top-level key named after the panel's "What you publish" category, which until now had
+   * nothing in the file at all. `yourVideoDocuments` predates it and STAYS at the top level, so a
+   * reader written against schema 2 still finds it where it was.
+   *
+   * Every column the creator wrote or the studio shows them. NOT selected: `storage_provider`,
+   * `video_asset_id`, `playback_id`, `playback_url`, `original_file_name` and `size_bytes`, the
+   * self-hosting columns no YouTube row fills, which are internal addresses where they are filled;
+   * `is_source_verified` and `review_status`, staff-side gates; and `attached_pitch_id` /
+   * `research_project_id`, pointers.
+   */
+  const yourVideos = await collect(
+    "yourVideos",
+    sql`SELECT id, title, description, video_source, youtube_video_id, video_type, stage_badge,
+               sector_tags, website_url, cta_label, cta_url, linkedin_url, x_profile_url,
+               contact_email, visibility, publish_status, scheduled_publish_at, published_at,
+               duration_seconds, thumbnail_url, created_at
+        FROM video WHERE creator_id = ${userId}
+        ORDER BY created_at DESC`,
+  );
+
+  const yourVideoTranscripts = await collect(
+    "yourVideoTranscripts",
+    sql`SELECT t.video_id, t.format, t.segment_count, t.uploaded_at
+        FROM video_transcript AS t
+        JOIN video AS v ON v.id = t.video_id
+        WHERE v.creator_id = ${userId}
+        ORDER BY t.video_id`,
+  );
+
+  const yourVideoTranscriptSegments = await collect(
+    "yourVideoTranscriptSegments",
+    sql`SELECT s.video_id, s.segment_order, s.start_offset_seconds, s.end_offset_seconds,
+               s.segment_text
+        FROM video_transcript_segment AS s
+        JOIN video AS v ON v.id = s.video_id
+        WHERE v.creator_id = ${userId}
+        ORDER BY s.video_id, s.segment_order`,
   );
 
   const workYouHaveDone = {
@@ -876,7 +1123,20 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     programmeEffort,
     programmeContributions,
     projectDailyLogs,
+    projectDailyLogTranscripts,
+    projectDailyLogClaimsDrawn,
+    projectDailyLogSummaryChips,
+    projectDailyLogEvidenceLinks,
     projectEffortClaims,
+    projectReceipts,
+    projectReceiptChecks,
+    projectSliceLedger,
+    projectSliceProposals,
+    projectEquityShares,
+    projectFairMarketRates,
+    projectCashAgreements,
+    projectPayLines,
+    projectPayments,
   };
 
   return {
@@ -943,6 +1203,26 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
           what: "Artwork and documents you attached to customized lines",
           why: "The files themselves are not copied into this document; has_document says one was attached, as with your video documents.",
         },
+        {
+          what: "Which analysis model and prompt version read your daily updates and receipt photos",
+          why: "Internal details of the analysis pipeline, not information about you. What it drew from your updates, and what each check found, are included.",
+        },
+        {
+          what: "The image fingerprint and device code stored beside each receipt photo",
+          why: "They exist to catch the same photo being submitted twice. They are not identifiers we can read back, so printing them would tell you nothing about yourself while showing how the check works.",
+        },
+        {
+          what: "The receipt photos and video files themselves, and the storage handles behind them",
+          why: "Each receipt is listed with the address of its photo, and each video with its YouTube id, rather than copying the files into this document. The storage handles are internal addresses, not information about you.",
+        },
+        {
+          what: "Who proposed, accepted, locked, finalized, recorded or confirmed your rates, pay and payments",
+          why: "Internal records of who acted, as with Premium AI grants. The amounts, terms, dates, and the dates you accepted or confirmed are included.",
+        },
+        {
+          what: "Other members' equity and pay in projects you belong to",
+          why: "Their data, not yours (GDPR Article 15(4)). Your own share of each snapshot is included, with the snapshot's total so the share can be read.",
+        },
       ],
     },
     whoYouAre,
@@ -965,6 +1245,11 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
       cart: { lines: cartLines, choices: cartLineChoices },
     },
     workYouHaveDone,
+    whatYouPublish: {
+      videos: yourVideos,
+      videoTranscripts: yourVideoTranscripts,
+      videoTranscriptSegments: yourVideoTranscriptSegments,
+    },
     /**
      * PRESENT AND EMPTY, ON PURPOSE. The panel lists "Settings on this device" as one of
      * six categories; a download missing one of the six reads as data withheld. It is
