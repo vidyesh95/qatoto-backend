@@ -1053,6 +1053,9 @@ async function seedOrdersForProduct(
           counterpartyOrganizationId: seller.organizationId,
           checkoutGroupId: groupId,
           source: "direct_checkout",
+          // What a real direct checkout produces. This insert used to omit the rail and so took
+          // the column's old `internal_custody` default — a frozen custody order on every seed.
+          settlementRail: "direct_processor",
           state: isCancelled
             ? "cancelled"
             : boundedCompletedAt !== null

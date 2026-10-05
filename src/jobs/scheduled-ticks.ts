@@ -830,6 +830,29 @@ export async function handleSweepOrphanShowcaseImagesTick(
 }
 
 /**
+ * The daily teardown upload sweep tick. Day-quantized for the showcase tick's reason: the 24-hour
+ * cutoff is measured from a stable instant, and a double cron fire collapses into one job.
+ */
+export async function handleSweepOrphanTeardownUploadsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.sweepOrphanTeardownUploads,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.sweepOrphanTeardownUploads(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `sweep-orphan-teardown-uploads-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/**
  * The daily rights-claim retention purge tick. Day-quantized for the showcase tick's reason: the
  * six-year cutoff is measured from a stable instant, and a double cron fire collapses into one job.
  */

@@ -42,6 +42,7 @@ import {
   handleRecomputeFeasibilityReadoutsTick,
   handleRecomputeLocalizationAssessmentsTick,
   handleSweepOrphanShowcaseImagesTick,
+  handleSweepOrphanTeardownUploadsTick,
   handleSweepExpiredRightsClaimDetailsTick,
   handleSweepOrphanProblemPhotosTick,
   handleSweepPendingDocumentScansTick,
@@ -66,6 +67,7 @@ import {
 } from "#src/modules/auth/privacy/data-export.job.js";
 import { handleSweepExpiredRightsClaimDetails } from "#src/modules/home/blueprints/sweep-expired-rights-claim-details.js";
 import { handleSweepOrphanShowcaseImages } from "#src/modules/home/blueprints/sweep-orphan-showcase-images.js";
+import { handleSweepOrphanTeardownUploads } from "#src/modules/home/blueprints/sweep-orphan-teardown-uploads.js";
 import { handlePruneEngagementData } from "#src/modules/home/engagement/prune-engagement-data.js";
 import { handleRecomputeUserAffinities } from "#src/modules/home/engagement/recompute-user-affinities.js";
 import { handleRollupUserWatchActivity } from "#src/modules/home/engagement/rollup-user-watch-activity.js";
@@ -674,6 +676,18 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.sweepOrphanShowcaseImages,
     workOptions,
     runJob(JOB_NAMES.sweepOrphanShowcaseImages, handleSweepOrphanShowcaseImages),
+  );
+
+  // Blueprints teardowns — the daily sweep of staged files no submission or saved draft claims.
+  await boss.work(
+    JOB_NAMES.sweepOrphanTeardownUploadsTick,
+    workOptions,
+    runJob(JOB_NAMES.sweepOrphanTeardownUploadsTick, handleSweepOrphanTeardownUploadsTick),
+  );
+  await boss.work(
+    JOB_NAMES.sweepOrphanTeardownUploads,
+    workOptions,
+    runJob(JOB_NAMES.sweepOrphanTeardownUploads, handleSweepOrphanTeardownUploads),
   );
 
   // Blueprints rights claims — the daily retention purge of claimant details six years after a

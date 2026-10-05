@@ -6612,18 +6612,20 @@ export const commerceOrder = pgTable(
      * HOW THIS ORDER SETTLES (Phase 14). Fixed at confirm, under the same row lock that
      * makes every other commercial fact on this row immutable.
      *
-     * Defaults to `internal_custody` because that is what every pre-Phase-14 row
-     * actually did. Nothing backfills it to something truer: those orders really did
-     * post `buyer_clearing → order_held`, and relabelling them would make the journal
-     * disagree with the rail it claims to have run on.
+     * ⚠️ NO DEFAULT, AND THAT IS THE GUARD. It defaulted to `internal_custody` from `0087` —
+     * right for the rows that migration added the column to, because every pre-Phase-14 order
+     * really did post `buyer_clearing → order_held`, and nothing backfills them (relabelling them
+     * would make the journal disagree with the rail it ran on). But the default outlived its job:
+     * any later insert that forgot the rail silently became a FROZEN custody order the backend
+     * refuses to take payment on — `seed-store-ranking-dev.ts` did exactly that for every order it
+     * wrote. `0224` dropped it, so an insert must name its rail; both real paths already take it
+     * from `resolveSettlementRail`, whose return type cannot be `internal_custody`.
      *
      * Which agreement bound an `external_escrow` order is reachable through
      * `commerce_settlement_agreement.consumedByOrderId`, which is uniquely indexed —
      * a column here as well would be a second, divergible answer to one question.
      */
-    settlementRail: commerceSettlementRailEnum("settlement_rail")
-      .default("internal_custody")
-      .notNull(),
+    settlementRail: commerceSettlementRailEnum("settlement_rail").notNull(),
     createdByMemberId: text("created_by_member_id")
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),

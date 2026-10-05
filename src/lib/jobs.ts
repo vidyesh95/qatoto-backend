@@ -183,6 +183,8 @@ export const JOB_NAMES = {
   // day, and any showcase asset left with no row naming it.
   sweepOrphanShowcaseImagesTick: "sweep-orphan-showcase-images-tick",
   sweepOrphanShowcaseImages: "sweep-orphan-showcase-images",
+  sweepOrphanTeardownUploadsTick: "sweep-orphan-teardown-uploads-tick",
+  sweepOrphanTeardownUploads: "sweep-orphan-teardown-uploads",
   // BLUEPRINTS — rights claims. Daily: nulls a claimant's details six years after their claim was
   // resolved (the retention period the privacy policy states).
   sweepExpiredRightsClaimDetailsTick: "sweep-expired-rights-claim-details-tick",
@@ -1396,6 +1398,31 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanShowcaseImages),
     },
   },
+  [JOB_NAMES.sweepOrphanTeardownUploadsTick]: {
+    name: JOB_NAMES.sweepOrphanTeardownUploadsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanTeardownUploadsTick),
+    },
+  },
+  [JOB_NAMES.sweepOrphanTeardownUploads]: {
+    name: JOB_NAMES.sweepOrphanTeardownUploads,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // `singleton`: two concurrent sweeps would contend for the same row locks. `SKIP LOCKED`
+      // makes that safe, but one run at a time keeps the log honest about what each one deleted.
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanTeardownUploads),
+    },
+  },
   [JOB_NAMES.sweepExpiredRightsClaimDetailsTick]: {
     name: JOB_NAMES.sweepExpiredRightsClaimDetailsTick,
     payloadSchema: TickPayloadSchema,
@@ -1839,6 +1866,9 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // Nothing waits on it: an unclaimed upload is invisible to readers, so a late run only costs
   // storage for a few more hours.
   [JOB_NAMES.sweepOrphanShowcaseImagesTick]: "25 4 * * *",
+  // BLUEPRINTS — the teardown upload sweep. 04:50 UTC, a free slot. Nothing waits on it: an
+  // unclaimed upload is invisible to every reader, so a late run only costs storage.
+  [JOB_NAMES.sweepOrphanTeardownUploadsTick]: "50 4 * * *",
   // BLUEPRINTS — the rights-claim retention purge. 04:45 UTC, a free slot. Nothing waits on it:
   // a claim reaches its six years at some point in a day, and a purge a few hours late is still
   // inside any honest reading of "then deleted".
@@ -2216,6 +2246,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.sweepPendingDocumentScans]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.sweepOrphanShowcaseImagesTick]: TickPayloadSchema,
   [JOB_NAMES.sweepOrphanShowcaseImages]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.sweepOrphanTeardownUploadsTick]: TickPayloadSchema,
+  [JOB_NAMES.sweepOrphanTeardownUploads]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.sweepExpiredRightsClaimDetailsTick]: TickPayloadSchema,
   [JOB_NAMES.sweepExpiredRightsClaimDetails]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.sweepOrphanProblemPhotosTick]: TickPayloadSchema,
@@ -2428,6 +2460,8 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.sweepPendingDocumentScans}:${asOfIso}`,
   sweepOrphanShowcaseImages: (asOfIso: string): string =>
     `${JOB_NAMES.sweepOrphanShowcaseImages}:${asOfIso}`,
+  sweepOrphanTeardownUploads: (asOfIso: string): string =>
+    `${JOB_NAMES.sweepOrphanTeardownUploads}:${asOfIso}`,
   sweepExpiredRightsClaimDetails: (asOfIso: string): string =>
     `${JOB_NAMES.sweepExpiredRightsClaimDetails}:${asOfIso}`,
   sweepOrphanProblemPhotos: (asOfIso: string): string =>
