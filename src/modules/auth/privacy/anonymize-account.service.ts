@@ -451,6 +451,61 @@ export function planFreeTextSteps(userId: string): readonly StepPlan[] {
                     WHERE handle_normalized = (SELECT lower(handle) FROM "user" WHERE id = ${userId})
                       AND handle NOT LIKE 'removed-%'`,
     },
+    {
+      /**
+       * THE PROGRAMME PARTICIPANT ROW IS RETAINED, SO ITS FREE TEXT HAS TO BE SCRUBBED HERE.
+       *
+       * The manifest used to DELETE this row, which would have taken the summary with it — and
+       * which raised 23503 for anyone with a logged effort or contribution, because those tables
+       * are append-only RESTRICT children (see the manifest entry). Now the row stays and only the
+       * person's own description of their role goes. `contribution_summary` is nullable and its
+       * CHECK admits NULL; the table has no triggers.
+       *
+       * ⚠️ `research_effort_log.note` AND `research_contribution_ledger_entry.description` ARE NOT
+       * SCRUBBED, and cannot be: both tables refuse UPDATE as well as DELETE. They are retained
+       * under the participant's Art. 17(3)(e) entry, attributed only by id.
+       */
+      stepName: "scrub:research_program_participant_summary",
+      tableName: "research_program_participant",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM research_program_participant
+                    WHERE user_id = ${userId} AND contribution_summary IS NOT NULL`,
+      applySql: sql`UPDATE research_program_participant SET contribution_summary = NULL
+                    WHERE user_id = ${userId} AND contribution_summary IS NOT NULL`,
+    },
+  ];
+}
+
+/**
+ * Empties the RESTRICT children of `delete_rows` tables, BEFORE the manifest deletes run.
+ *
+ * ⚠️ WITHOUT THESE THE `video.creator_id` STEP RAISES 23503 for any creator whose video ranked in
+ * the last 14 days, because both snapshot tables are `ON DELETE restrict` against `video`. The step
+ * retries until the job dead-letters, and every step after it — `scrub_user` included — never runs.
+ *
+ * Each step here must be named in `RESTRICT_CHILD_CLEARANCES`, which is what
+ * `db:verify-anonymization-coverage` check 7 compares against Postgres's own list of blocking
+ * edges. Deleting these rows is what the erasure would have done had the FK cascaded: they are
+ * derived ranking history, carry no personal data, age out after 14 days anyway, and describe a
+ * video that is about to be deleted.
+ */
+export function planRestrictChildClearanceSteps(userId: string): readonly StepPlan[] {
+  return [
+    {
+      stepName: "clear:trending_video_snapshot",
+      tableName: "trending_video_snapshot",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM trending_video_snapshot
+                    WHERE video_id IN (SELECT id FROM video WHERE creator_id = ${userId})`,
+      applySql: sql`DELETE FROM trending_video_snapshot
+                    WHERE video_id IN (SELECT id FROM video WHERE creator_id = ${userId})`,
+    },
+    {
+      stepName: "clear:video_quality_score_snapshot",
+      tableName: "video_quality_score_snapshot",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM video_quality_score_snapshot
+                    WHERE video_id IN (SELECT id FROM video WHERE creator_id = ${userId})`,
+      applySql: sql`DELETE FROM video_quality_score_snapshot
+                    WHERE video_id IN (SELECT id FROM video WHERE creator_id = ${userId})`,
+    },
   ];
 }
 
@@ -470,6 +525,7 @@ export function planFreeTextSteps(userId: string): readonly StepPlan[] {
  */
 export const PLANNED_ANONYMIZATION_STEP_NAMES: readonly string[] = [
   ...planFreeTextSteps("step-name-probe").map((step) => step.stepName),
+  ...planRestrictChildClearanceSteps("step-name-probe").map((step) => step.stepName),
   "purge_video_document_objects",
   "purge_teardown_file_objects",
   "purge_showcase_launch_images",
@@ -560,9 +616,10 @@ export async function anonymizeAccount(
 
   const { userId, handle: originalHandle, email: originalEmail } = guarded.value;
 
-  // --- 2. The step list. Free text first, then the manifest.
+  // --- 2. The step list. Free text first, then the RESTRICT-child clearances, then the manifest.
   const steps: readonly StepPlan[] = [
     ...planFreeTextSteps(userId),
+    ...planRestrictChildClearanceSteps(userId),
     ...[...DELETE_ROW_KEYS, ...NULL_OUT_KEYS].map((key) => planManifestStep(key, userId)),
   ];
 

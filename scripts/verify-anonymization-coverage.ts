@@ -22,7 +22,7 @@
  * There is no error, no log line, and no way to notice except by asking Postgres what actually
  * references `user`. That is this script.
  *
- * ## SIX CHECKS, AND THE LAST TWO ARE THE ONES THAT MATTER
+ * ## SEVEN CHECKS, AND THE LAST THREE ARE THE ONES THAT MATTER
  *
  *   1. Every FK into `user` appears in the manifest. Catches the new table above.
  *   2. Every manifest key still exists as an FK. Catches rot in the other direction — a
@@ -40,6 +40,12 @@
  *      trigger rejects it.
  *   6. Asks all 151 columns whether they still hold the probe id afterwards. Check 1 compares
  *      names; this asks Postgres, so it also catches a step that ran against the wrong column.
+ *   7. THE ONE CHECK 5 CANNOT BE. Every RESTRICT / NO ACTION foreign key into a `delete_rows`
+ *      table — or into anything that table cascades to — must be emptied first by a step named
+ *      in `RESTRICT_CHILD_CLEARANCES`. Check 5's probe user owns no child rows, so a RESTRICT
+ *      child never fires against it; that is how `research_program_participant` (append-only
+ *      effort logs) and `video` (ranking snapshots) both shipped as `delete_rows` steps that
+ *      raised 23503 on any real account that had the child, and dead-lettered the erasure.
  *
  * Check 5 is where a `retain` on a trigger-protected table earns its keep: four columns are
  * `set null` in the schema and `retain` in the manifest precisely because a BEFORE UPDATE
@@ -56,6 +62,7 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
+import { PgDialect } from "drizzle-orm/pg-core";
 import type { PoolClient } from "pg";
 
 import { pool } from "#src/db/index.js";
@@ -64,8 +71,13 @@ import {
   DELETE_ROW_KEYS,
   NULL_OUT_KEYS,
   parseUserReferenceKey,
+  RESTRICT_CHILD_CLEARANCES,
   type UserReferenceKey,
 } from "#src/modules/auth/privacy/anonymization-manifest.js";
+import {
+  PLANNED_ANONYMIZATION_STEP_NAMES,
+  planRestrictChildClearanceSteps,
+} from "#src/modules/auth/privacy/anonymize-account.service.js";
 
 interface CheckOutcome {
   readonly label: string;
@@ -226,6 +238,21 @@ async function checkStepsAreExecutable(
     }
   };
 
+  // The clearances run before the manifest in the job, so they run first here. Rendered through
+  // the dialect so the statement executed is the job's own, not a restatement of it.
+  const dialect = new PgDialect();
+  for (const step of planRestrictChildClearanceSteps(probeUserId)) {
+    const query = dialect.sqlToQuery(step.applySql);
+    await client.query("SAVEPOINT coverage_probe");
+    try {
+      await client.query(query.sql, query.params);
+      await client.query("RELEASE SAVEPOINT coverage_probe");
+    } catch (error) {
+      await client.query("ROLLBACK TO SAVEPOINT coverage_probe");
+      failures.push(`${step.stepName}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   for (const key of DELETE_ROW_KEYS) {
     const { tableName, columnName } = parseUserReferenceKey(key);
     // Identifiers come from this repo's own manifest, never a request; the VALUE is bound.
@@ -245,7 +272,7 @@ async function checkStepsAreExecutable(
     passed: failures.length === 0,
     detail:
       failures.length === 0
-        ? `${String(DELETE_ROW_KEYS.length)} deletes and ${String(NULL_OUT_KEYS.length)} null-outs all legal`
+        ? `${String(planRestrictChildClearanceSteps(probeUserId).length)} clearances, ${String(DELETE_ROW_KEYS.length)} deletes and ${String(NULL_OUT_KEYS.length)} null-outs all legal`
         : `statements the scrub would fail on: ${failures.join(" | ")}`,
   });
 
@@ -293,6 +320,86 @@ async function checkNothingStillReferences(
   };
 }
 
+interface BlockingEdgeRow {
+  readonly child_table: string;
+  readonly child_column: string;
+  readonly blocked_root: string;
+}
+
+/**
+ * Check 7 — every foreign key that would make a `delete_rows` step raise 23503.
+ *
+ * Starts from each `delete_rows` table, follows `ON DELETE cascade` children (a cascade delete is
+ * blocked by ITS RESTRICT children just as surely), and collects every RESTRICT / NO ACTION edge
+ * into the set. Each must be named in `RESTRICT_CHILD_CLEARANCES` with a step the job plans; an
+ * entry matching no edge any more is stale and fails too, so the list cannot rot into coverage of
+ * something that is gone.
+ *
+ * `COLLATE "C"` is not decoration: `relname` is a `name` with collation "C" and the seed values
+ * are text with the default collation, and a recursive CTE refuses the mismatch (42P21).
+ */
+async function checkDeletesAreNotBlocked(client: PoolClient): Promise<CheckOutcome> {
+  const deleteRowTables = [
+    ...new Set(DELETE_ROW_KEYS.map((key) => parseUserReferenceKey(key).tableName)),
+  ];
+  const { rows } = await client.query<BlockingEdgeRow>(
+    `WITH RECURSIVE foreign_key AS (
+       SELECT parent.relname::text COLLATE "C" AS parent_table,
+              child.relname::text COLLATE "C"  AS child_table,
+              att.attname::text                AS child_column,
+              con.confdeltype                  AS delete_rule
+       FROM pg_constraint con
+       JOIN pg_class parent ON parent.oid = con.confrelid
+       JOIN pg_class child  ON child.oid  = con.conrelid
+       JOIN pg_namespace ns ON ns.oid     = child.relnamespace
+       JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = con.conkey[1]
+       WHERE con.contype = 'f' AND ns.nspname = 'public'
+     ),
+     reachable AS (
+       SELECT seed COLLATE "C" AS table_name, seed COLLATE "C" AS blocked_root
+       FROM unnest($1::text[]) AS seed
+       UNION
+       SELECT foreign_key.child_table, reachable.blocked_root
+       FROM foreign_key JOIN reachable ON foreign_key.parent_table = reachable.table_name
+       WHERE foreign_key.delete_rule = 'c'
+     )
+     SELECT DISTINCT foreign_key.child_table, foreign_key.child_column, reachable.blocked_root
+     FROM reachable
+     JOIN foreign_key ON foreign_key.parent_table = reachable.table_name
+     WHERE foreign_key.delete_rule IN ('r', 'a')
+     ORDER BY 1, 2`,
+    [deleteRowTables],
+  );
+
+  const problems: string[] = [];
+  const plannedStepNames = new Set(PLANNED_ANONYMIZATION_STEP_NAMES);
+  const blockingKeys = new Set(rows.map((row) => `${row.child_table}.${row.child_column}`));
+
+  for (const row of rows) {
+    const childKey: `${string}.${string}` = `${row.child_table}.${row.child_column}`;
+    const clearance = RESTRICT_CHILD_CLEARANCES[childKey];
+    if (clearance === undefined) {
+      problems.push(`${childKey} blocks the delete of ${row.blocked_root} and nothing clears it`);
+    } else if (!plannedStepNames.has(clearance.clearedByStep)) {
+      problems.push(`${childKey} names step ${clearance.clearedByStep}, which the job never plans`);
+    }
+  }
+  for (const listedKey of Object.keys(RESTRICT_CHILD_CLEARANCES)) {
+    if (!blockingKeys.has(listedKey)) {
+      problems.push(`${listedKey} is listed as a clearance but no longer blocks any delete`);
+    }
+  }
+
+  return {
+    label: "no delete_rows step is blocked by a RESTRICT child",
+    passed: problems.length === 0,
+    detail:
+      problems.length === 0
+        ? `${String(rows.length)} blocking edge(s) across ${String(deleteRowTables.length)} delete tables, each cleared first`
+        : problems.join(" | "),
+  };
+}
+
 async function main(): Promise<void> {
   const client = await pool.connect();
   let outcomes: readonly CheckOutcome[] = [];
@@ -303,6 +410,7 @@ async function main(): Promise<void> {
     outcomes = [
       ...compareCoverage(references),
       ...(await checkStepsAreExecutable(client, references)),
+      await checkDeletesAreNotBlocked(client),
     ];
   } finally {
     // Always. Nothing this script writes is meant to survive. Guarded so a failing ROLLBACK

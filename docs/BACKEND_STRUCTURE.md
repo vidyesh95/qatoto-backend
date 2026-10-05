@@ -1317,6 +1317,13 @@ and `pnpm db:smoke-data-export` (real upload, real presigned download, real purg
 first signs in for real rather than simulating the hook, because the invariant above is the
 thing most worth proving.
 
+`pnpm db:verify-anonymization-coverage` check 7 (2026-10-05) fails on any RESTRICT / NO ACTION
+foreign key into a `delete_rows` table, or into anything it cascades to, that is not emptied first
+by a step named in `RESTRICT_CHILD_CLEARANCES`. Check 5's probe owns no children and could never
+catch it, which is how two shipped: `research_program_participant` (append-only effort logs and
+contributions; now `retain`, with its `contribution_summary` scrubbed) and `video` (ranking
+snapshots; now cleared by `clear:*` steps that run before the manifest).
+
 ### 11.x Terms acceptance (todo §7, migrations `0219`, `0220`)
 
 Which Terms version an account accepted, when, and on which surface.

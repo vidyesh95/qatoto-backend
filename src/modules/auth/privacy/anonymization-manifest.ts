@@ -603,7 +603,24 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
     },
     "research_program_paper.uploader_user_id": { kind: "null_out" },
-    "research_program_participant.user_id": { kind: "delete_rows" },
+    /*
+     * ⚠️ `retain` IS THE ONLY EXECUTABLE DISPOSITION HERE, AND IT USED TO BE `delete_rows`.
+     * `research_effort_log.participant_id` and `research_contribution_ledger_entry.participant_id`
+     * are `ON DELETE restrict`, and both tables carry an append-only trigger (migration `0029`)
+     * that refuses DELETE — so the row delete raised 23503 for anyone who had logged effort or a
+     * contribution, the step retried until the job dead-lettered, and the account was never
+     * anonymized. `null_out` is not available either: `user_id` is NOT NULL.
+     *
+     * `db:verify-anonymization-coverage` check 5 could not see it — its probe user owns no child
+     * rows, so a RESTRICT child never fires there. Check 7 now finds blocking children structurally.
+     *
+     * The participant's own words leave with the free-text step `scrub:research_program_participant_summary`.
+     */
+    "research_program_participant.user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A shared programme record: the effort logs and contributions hanging off this row are append-only, and every programme total and other participants' figures are summed from them. Attribution is by id, so scrubbing user.name is what removes the identity; the contribution summary is scrubbed separately.",
+    },
     "research_program_post.author_user_id": { kind: "null_out" },
     "research_program_post.hidden_by_user_id": {
       kind: "retain",
@@ -954,3 +971,37 @@ export function parseUserReferenceKey(key: UserReferenceKey): {
     columnName: key.slice(separatorIndex + 1),
   };
 }
+
+/**
+ * `"<child table>.<column>"` for a RESTRICT (or NO ACTION) foreign key that would block a
+ * `delete_rows` step — directly, or through that table's `ON DELETE cascade` descendants.
+ */
+export type RestrictChildKey = `${string}.${string}`;
+
+/**
+ * Every RESTRICT child of a `delete_rows` table, and the step that empties it FIRST.
+ *
+ * ⚠️ WHY THIS LIST EXISTS. A `delete_rows` step against a table with a RESTRICT child raises
+ * 23503 the moment the departing person owns one such child row, and the job dead-letters with
+ * the account half-erased. That shipped twice, once for programme participants (now `retain`,
+ * above) and once for `video` (these two entries), because the coverage script's probe user owns
+ * no children and so can never trip a RESTRICT. `db:verify-anonymization-coverage` check 7 now
+ * asks Postgres for every such edge and fails on any edge missing here, on any `clearedByStep` the
+ * job does not plan, and on any entry that no longer matches an edge.
+ *
+ * A clearance is a DELETE of rows the erasure would have removed anyway had the FK cascaded. An
+ * edge whose child must survive is not a clearance — it is a reason the parent cannot be
+ * `delete_rows`, which is what happened to `research_program_participant`.
+ */
+export const RESTRICT_CHILD_CLEARANCES: Readonly<
+  Record<RestrictChildKey, { readonly clearedByStep: string; readonly note: string }>
+> = {
+  "trending_video_snapshot.video_id": {
+    clearedByStep: "clear:trending_video_snapshot",
+    note: "Hourly ranking history of the creator's videos. Derived, holds no personal data, and ages out after 14 days (prune-engagement-data); the video it ranks is being deleted.",
+  },
+  "video_quality_score_snapshot.video_id": {
+    clearedByStep: "clear:video_quality_score_snapshot",
+    note: "Nightly quality scores of the creator's videos. Derived, holds no personal data, and ages out after 14 days (prune-engagement-data); the video it scores is being deleted.",
+  },
+};
