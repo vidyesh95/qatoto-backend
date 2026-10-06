@@ -32,12 +32,12 @@ A table name is private and costs one `ALTER TABLE`; a storage path is neither.
 
 ## 1. The four arms
 
-| Arm | Public reads | Author writes | Staff moderation | Where the rows come from |
-| --- | --- | --- | --- | --- |
-| Hero carousel | 1 | — | 6 | `pnpm db:seed-blueprint-hero-slides` re-points four seeded rows |
-| Showcase launches | 3 | 3 | 3 | authored |
-| Case studies | 4 | 2 | 2 | authored + `pnpm db:seed-blueprint-case-studies` (10) |
-| Teardowns | 5 | 2 | 2 | authored + `pnpm db:seed-blueprint-teardowns` (12) |
+| Arm               | Public reads | Author writes | Staff moderation | Where the rows come from                                        |
+| ----------------- | ------------ | ------------- | ---------------- | --------------------------------------------------------------- |
+| Hero carousel     | 1            | —             | 6                | `pnpm db:seed-blueprint-hero-slides` re-points four seeded rows |
+| Showcase launches | 3            | 3             | 3                | authored                                                        |
+| Case studies      | 4            | 2             | 2                | authored + `pnpm db:seed-blueprint-case-studies` (10)           |
+| Teardowns         | 5            | 2             | 2                | authored + `pnpm db:seed-blueprint-teardowns` (12)              |
 
 Every route is declared in one file, `src/modules/home/blueprints/blueprints.routes.ts`, mounted at
 `/blueprints` in `src/app.ts`.
@@ -95,8 +95,8 @@ for why quarantine does not reach that arm despite it genuinely hosting files.
 ## 3. The teardown write path
 
 The authoring wizard at `/blueprints/teardowns/new` shipped mock-backed. Its own transport file said
-so: *"there is no `blueprint` table on the Express backend and no submission route to POST to, so
-nothing here persists and nothing here pretends to."* This is the backend that replaces that comment.
+so: _"there is no `blueprint` table on the Express backend and no submission route to POST to, so
+nothing here persists and nothing here pretends to."_ This is the backend that replaces that comment.
 
 ```
 POST /blueprints/teardowns                                    → 202 { submissionId, moderationState, receivedAt }
@@ -124,8 +124,8 @@ pre-existing assertions in `db:verify-teardown-constraints` still pass **unedite
 that prove `draft` and `removed` are refused — which is the tell that the design agrees with the file
 rather than editing it into agreement.
 
-The frontend had already described this table in its own words: the receipt *"carries no slug and no
-public URL, deliberately… its public address is a thing a moderator creates by publishing it."*
+The frontend had already described this table in its own words: the receipt _"carries no slug and no
+public URL, deliberately… its public address is a thing a moderator creates by publishing it."_
 
 ### 3.2 Hybrid storage: five promoted columns, one TEXT document
 
@@ -153,15 +153,15 @@ submission's life: once per queue row, once at publish.
 
 ### 3.3 What the publish writes, and what it deliberately does not
 
-| Table | Written | Why |
-| --- | --- | --- |
-| `teardown` | ✅ | The public row, under the first free slug |
-| `teardown_stats` | ✅ zeros | Unlike the showcase, which mints none — an authored row must be shape-identical to a seeded one |
-| `teardown_part_listing` | ✅ | The author's parts, as a contents page |
-| `teardown_document` | ✅ | Files whose `kind` is a reader's label |
-| `teardown_manufacturing_file` | ✅ | Files whose `kind` is a fab's label |
-| `teardown_material` (+ elements) | ✅ | `assembly_id` and `part_id` both NULL, which the pairing CHECK reads as legal |
-| `teardown_assembly`, `teardown_part`, `teardown_assembly_step`, `teardown_fastener` | ❌ | The wizard collects no geometry |
+| Table                                                                               | Written  | Why                                                                                             |
+| ----------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `teardown`                                                                          | ✅       | The public row, under the first free slug                                                       |
+| `teardown_stats`                                                                    | ✅ zeros | Unlike the showcase, which mints none — an authored row must be shape-identical to a seeded one |
+| `teardown_part_listing`                                                             | ✅       | The author's parts, as a contents page                                                          |
+| `teardown_document`                                                                 | ✅       | Files whose `kind` is a reader's label                                                          |
+| `teardown_manufacturing_file`                                                       | ✅       | Files whose `kind` is a fab's label                                                             |
+| `teardown_material` (+ elements)                                                    | ✅       | `assembly_id` and `part_id` both NULL, which the pairing CHECK reads as legal                   |
+| `teardown_assembly`, `teardown_part`, `teardown_assembly_step`, `teardown_fastener` | ❌       | The wizard collects no geometry                                                                 |
 
 ⚠️ **`teardown_part_listing` IS NOT `teardown_part`, and the frontend draws the same line** — its
 parts step is headed "THE PARTS LIST — AND DELIBERATELY NOT AN ASSEMBLY" while `teardown_assembly` is
@@ -177,7 +177,7 @@ teardowns that have no 3D view — that filter is a bare `EXISTS` over `teardown
 Three values the publish refuses to invent:
 
 - **`part_count` stays NULL.** It is the author's own tally, and the schema is explicit that it is
-  unrelated to how many parts a listing carries — *"148 is not nine and must not become nine."*
+  unrelated to how many parts a listing carries — _"148 is not nine and must not become nine."_
 - **`byte_size` stays NULL** on both file tables. The wire carries a pasted link and no size; the
   alternatives were a network HEAD inside the publish transaction or a moderator typing a number about
   a file they never opened. NULL says "unmeasured"; either of those would have said something false.
@@ -394,14 +394,14 @@ work agrees with those files rather than editing them into agreement.
 This section was a handover list. Every item on it has since shipped, and it is kept as a record
 rather than deleted, because the reasoning is what stops each one being re-introduced.
 
-| # | Asked for | Landed as |
-| --- | --- | --- |
-| 1 | Split `TeardownSubmissionFileSchema` into a document schema (4-value) and a manufacturing-file schema (7-value) | Two schemas and two draft row types; a new document row now defaults to `schematic`. See §3.5 for why the backend still accepts both. |
-| 2 | Stop sending `materials[].id` — the server mints it, and the column is a global primary key with no default | Dropped at the conversion point; the derived material schema ends `.strict()`, so a leftover is a loud refusal rather than a silent strip. |
-| 3 | `byteSize: number \| null` on the read side | Nullable on documents and fabrication files; a model's stays positive and non-null, because that is an upload rather than a pasted link. |
-| 4 | `partsList` on `TeardownBlueprintSchema` | Added **and rendered** — the frontend ships a checked sweep asserting every teardown field has a renderer. |
-| 5 | The admin teardown queue, with a publish form carrying thumbnail, difficulty and an optional slug | `/admin/teardowns`, mirroring the case-study queue, with a live thumbnail preview. |
-| 6 | Retire the `/mine` fixture's `draft` row — the endpoint can never return one | Went with the mock file when the transport was wired. |
+| #   | Asked for                                                                                                       | Landed as                                                                                                                                  |
+| --- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Split `TeardownSubmissionFileSchema` into a document schema (4-value) and a manufacturing-file schema (7-value) | Two schemas and two draft row types; a new document row now defaults to `schematic`. See §3.5 for why the backend still accepts both.      |
+| 2   | Stop sending `materials[].id` — the server mints it, and the column is a global primary key with no default     | Dropped at the conversion point; the derived material schema ends `.strict()`, so a leftover is a loud refusal rather than a silent strip. |
+| 3   | `byteSize: number \| null` on the read side                                                                     | Nullable on documents and fabrication files; a model's stays positive and non-null, because that is an upload rather than a pasted link.   |
+| 4   | `partsList` on `TeardownBlueprintSchema`                                                                        | Added **and rendered** — the frontend ships a checked sweep asserting every teardown field has a renderer.                                 |
+| 5   | The admin teardown queue, with a publish form carrying thumbnail, difficulty and an optional slug               | `/admin/teardowns`, mirroring the case-study queue, with a live thumbnail preview.                                                         |
+| 6   | Retire the `/mine` fixture's `draft` row — the endpoint can never return one                                    | Went with the mock file when the transport was wired.                                                                                      |
 
 **Nothing on this surface is waiting on the frontend.**
 
@@ -434,19 +434,19 @@ routes that share nothing but a row look interchangeable.
 ⚠️ **Id-addressed, which is the opposite of the engagement routes, and the split is principled.** A
 reader is standing on a public page and the slug is the only handle they have; a moderator is
 working a queue that hands them an id, and §5's audit payload is ids only. Slug-addressing would
-also be *unspellable* on the case-study arm, whose `public_slug` is NULL until a moderator mints one.
+also be _unspellable_ on the case-study arm, whose `public_slug` is NULL until a moderator mints one.
 
 ### 9.2 The matrix, and the two refusals worth defending
 
 One file — `blueprint-moderation-transitions.ts` — holds every pair; the service reads it and never
 re-states one.
 
-| teardown, from ↓ | `flag` | `quarantine` | `restore` |
-| --- | --- | --- | --- |
-| `published` | → `flagged` | → `quarantined` | refuse |
-| `flagged` | refuse (already) | → `quarantined` | → `published` |
-| `quarantined` | **refuse** | refuse (already) | → `published` |
-| `pending_review` | refuse | refuse | refuse |
+| teardown, from ↓ | `flag`           | `quarantine`     | `restore`     |
+| ---------------- | ---------------- | ---------------- | ------------- |
+| `published`      | → `flagged`      | → `quarantined`  | refuse        |
+| `flagged`        | refuse (already) | → `quarantined`  | → `published` |
+| `quarantined`    | **refuse**       | refuse (already) | → `published` |
+| `pending_review` | refuse           | refuse           | refuse        |
 
 Case studies **and showcase launches**: the same, minus every quarantine cell. The two arms reach
 that shape for different reasons — see §9.3 — which is why `resolveBlueprintTransition` spells the
@@ -468,9 +468,9 @@ never public.
 
 ~~**No showcase arm at all.**~~ **THE FLAG AND RESTORE VERBS LANDED — and the bullet is kept struck
 through rather than deleted, because it priced the work correctly and that pricing is the reason it
-waited.** It read: *"Adding the verbs there is a CHECK widening, a gate rewrite, `flagged` added to
+waited.** It read: _"Adding the verbs there is a CHECK widening, a gate rewrite, `flagged` added to
 two partial index predicates, and a fix to `showcase_launch_decision_ck` so flagging does not strip
-the public slug — a feature, not an enum value."* All of that was true, and all of it was done.
+the public slug — a feature, not an enum value."_ All of that was true, and all of it was done.
 
 ⚠️ **IT WAS THREE PARTIAL INDEX PREDICATES, NOT TWO.** The bullet counted the two the public feed
 reads — `showcase_launch_public_newest_idx` and `showcase_launch_built_from_idx` — and missed
@@ -485,7 +485,7 @@ together. The failure when they disagree is silent: nothing errors, Postgres jus
 index.
 
 ⚠️ **`quarantine` IS STILL REFUSED ON THIS ARM, AND NOT BY COPYING THE CASE-STUDY RULE.** That arm's
-reason is that a case study has no files. A showcase *has* files — a heading image, write-up images
+reason is that a case study has no files. A showcase _has_ files — a heading image, write-up images
 — so the rule does not transfer, and the refusal rests on two other grounds:
 
 1. **There is no representable withheld state.** `heading_image_url` is NOT NULL, and by the exact
@@ -493,15 +493,15 @@ reason is that a case study has no files. A showcase *has* files — a heading i
    renders an unconditional image — it would survive a quarantine. Withholding only the write-up
    images leaves a Markdown body full of dead `![]()` references, which is a broken page rather than
    a redaction. A showcase quarantine would have to withhold the whole row, and that is `rejected`.
-2. **The third-party failure mode is structurally absent.** A teardown surveys *somebody else's*
+2. **The third-party failure mode is structurally absent.** A teardown surveys _somebody else's_
    shipped product, which is why a stranger's rights claim is its expected failure.
    `showcase_launch_statements_ck` pins a launch to `built_it_ourselves` and `results_are_our_own`,
    so a rights claim against one alleges the maker **lied on that attestation** — a fraud finding,
    answered by `flag` then `reject`, not a withholding pending somebody else's dispute.
 
 `blueprint_content_target_kind` therefore has **three** values, and
-`verify-showcase-launch-constraints` now asserts `flagged` is *accepted* and `quarantined` is still
-*refused*, each with its reasoning in place.
+`verify-showcase-launch-constraints` now asserts `flagged` is _accepted_ and `quarantined` is still
+_refused_, each with its reasoning in place.
 
 ⚠️ **`blueprint_moderation_action_quarantine_arm_ck` IS UNCHANGED AND NOW SAYS MORE THAN IT DID.**
 Written when `target_kind` had two values it read as a statement about case studies; with three it is
@@ -563,11 +563,11 @@ which would be enough:
 2. `platform_audit_entry.actorUserId` is NOT NULL, and an automatic transition names nobody — which
    is exactly why commerce had to build a second apparatus (`action_source = 'automatic'`) to record
    authorless actions. This surface has none and needs none.
-3. `user-reports.service.ts`: *"a number that could trip an automatic action would make brigading
-   measurable and then effective."*
+3. `user-reports.service.ts`: _"a number that could trip an automatic action would make brigading
+   measurable and then effective."_
 
 **Reconciling §2's "a report moves a published row to `flagged`, full stop":** read in place, that
-sentence answers *which state* a report can reach on a one-gate arm, not *who moves it*. Its job is
+sentence answers _which state_ a report can reach on a one-gate arm, not _who moves it_. Its job is
 to justify one gate rather than two — a case study has no files, so `flagged` is the only
 destination a report has there. "Full stop" terminates the list of reachable outcomes. Implemented
 as automaticity it would contradict §5's audit-actor invariant and produce a state change with zero
@@ -580,8 +580,8 @@ is a griefing recipe.
 ### 10.2 Its own table, and the reasons
 
 ⚠️ **Not a widened `user_report`.** This codebase has made that call five times and written it down
-once (`_core.ts`): *"each moderation queue gets its own table rather than a widened `target_kind`,
-because a queue's columns, its reasons and its verdict are its own."* It is not reusable anyway —
+once (`_core.ts`): _"each moderation queue gets its own table rather than a widened `target_kind`,
+because a queue's columns, its reasons and its verdict are its own."_ It is not reusable anyway —
 `user_report.reported_user_id` is NOT NULL onto `user(id)`, and a teardown is not a user.
 
 `target_kind` plus **one nullable real FK per arm**, pinned by `num_nonnulls(...) = 1` — the
@@ -599,9 +599,9 @@ deduplicated**. An anonymous intake would make the queue's depth something anybo
 No idempotency key, because the index already makes a double-submit a 409 rather than a second row.
 
 ⚠️ **Resolved under the READABLE gate, so a quarantined teardown still accepts a report** —
-`claim-targets`' reasoning exactly: *"a second rights holder may have an entirely different objection
+`claim-targets`' reasoning exactly: _"a second rights holder may have an entirely different objection
 from the first… withhold the payload and that claimant can only say 'the whole teardown', which uses
-one quarantine to blunt the control that produced it."*
+one quarantine to blunt the control that produced it."_
 
 ### 10.4 The queue is a new route, not an arm of the three review queues
 
@@ -614,7 +614,7 @@ one quarantine to blunt the control that produced it."*
    sentence `case-study-withheld-name.test.ts` keeps true.
 
 ⚠️ **Dismissing restores nothing.** Nothing flags a row except a moderator deciding to, so a
-dismissal has nothing to undo — and quietly un-flagging something a *different* moderator flagged
+dismissal has nothing to undo — and quietly un-flagging something a _different_ moderator flagged
 would overturn their decision as a side effect of answering a reader. A moderator who wants the row
 back uses `restore`, which costs its own audit entry and its own note.
 
@@ -623,9 +623,9 @@ back uses `restore`, which costs its own audit entry and its own note.
 `blueprint_content_report_status` has carried `actioned` since the intake landed, the queue schema
 has accepted it as a filter, and `MyBlueprintReportView` has declared it — and **nothing in the
 codebase could produce it.** `blueprint_moderation_action.report_id` shipped in the same migration
-and was never written. So a moderator who flagged a row *because of* a report left that report
-`open` forever, and §10.5's whole reason for `/reports/mine` — *"a report that vanishes is
-indistinguishable from one nobody read"* — was defeated by the one path most likely to answer a
+and was never written. So a moderator who flagged a row _because of_ a report left that report
+`open` forever, and §10.5's whole reason for `/reports/mine` — _"a report that vanishes is
+indistinguishable from one nobody read"_ — was defeated by the one path most likely to answer a
 reader.
 
 The three verbs now take an **optional** `reportId`:
@@ -635,12 +635,12 @@ rights claim that never touches the queue (§3.7), so requiring an id would make
 exists for unrecordable. A decision with no report id is a complete decision.
 
 ⚠️ **THIS IS NOT A REPORT MOVING A STATE, AND §10.1 IS UNTOUCHED.** The moderator still chose the
-verb and owns it; the id records *which* open complaint that decision answers. Nothing counts
+verb and owns it; the id records _which_ open complaint that decision answers. Nothing counts
 reports, and no threshold exists to trip. The change looks like it contradicts §10.1, which is why
 the service says so in place.
 
 ⚠️ **THE MODERATION NOTE IS REUSED AS THE RESOLUTION NOTE.** §10.5 says the reporter never sees it,
-and the reason the row was flagged *is* the reason the report was actioned. Asking for two required
+and the reason the row was flagged _is_ the reason the report was actioned. Asking for two required
 notes about one decision produces a second note reading "see above".
 
 ⚠️ **A REPORT ABOUT A DIFFERENT ROW ANSWERS 404, the same bytes as one that does not exist.** The
@@ -657,8 +657,8 @@ still in the state the first one left it.
 
 ### 10.5 What the reporter is told
 
-`GET /blueprints/reports/mine` exists because *"a report that vanishes is indistinguishable from one
-nobody read."* It is deliberately narrow: **no moderator identity** (naming them makes a takedown
+`GET /blueprints/reports/mine` exists because _"a report that vanishes is indistinguishable from one
+nobody read."_ It is deliberately narrow: **no moderator identity** (naming them makes a takedown
 personal), **no resolution note**, and **no count of who else reported the same target** (that makes
 brigading measurable). What it carries is the status.
 
@@ -716,8 +716,8 @@ GET  /blueprints/teardowns/:teardownSlug/fabrication-files/:fileId      302 → 
 
 `object-storage.ts`'s own header decides it: Cloudinary is the IMAGE pipeline here, and everything
 reaching it is first re-encoded by `image.ts`, which answers `NOT_AN_IMAGE` for a PDF.
-`uploadProductModel` is the one `raw` exception, and its stated condition is *"a PUBLIC asset
-rendered in place on a public page"* — a `.step` is not rendered in place, it is downloaded and
+`uploadProductModel` is the one `raw` exception, and its stated condition is _"a PUBLIC asset
+rendered in place on a public page"_ — a `.step` is not rendered in place, it is downloaded and
 opened in somebody's CAD tool. The error vocabulary comes free: `NOT_CONFIGURED | UPLOAD_FAILED |
 DELETE_FAILED` → 503/502/502, which is the stated payoff of that module sharing one vocabulary with
 `cloudinary.ts`.
@@ -738,16 +738,16 @@ the uploader's account id; the smoke asserts both are absent from the payload).
 ⚠️ **`byte_size` IS NOT NULL ON THE UPLOADED ARM ONLY.** §3.3 argued NULL because the two honest
 ways to fill it were a HEAD inside the publish transaction or a moderator typing a number about a
 file they never opened. An upload measures the bytes at intake — the condition that reasoning always
-lacked — so the pasted arm keeps its NULL and §3.3 stays true *of it*.
+lacked — so the pasted arm keeps its NULL and §3.3 stays true _of it_.
 
 ### 11.3 The download gate is LIST, not READABLE
 
 ⚠️ **A THIRD PREDICATE, ON A SURFACE THAT ALREADY KEEPS TWO APART.** A quarantined teardown's page
-answers — that is what READABLE is for — but a quarantine *is* a withholding of the publisher's
+answers — that is what READABLE is for — but a quarantine _is_ a withholding of the publisher's
 files, and `withheldPayload()` already blanks both lists. Serving bytes from a separate route while
 the page hid them would put the control back where it was before it moved server-side.
 
-⚠️ **ONE 404 FOR EVERY REASON**: no such slug, no such file, a file belonging to a *different*
+⚠️ **ONE 404 FOR EVERY REASON**: no such slug, no such file, a file belonging to a _different_
 teardown, and a quarantine are deliberately indistinguishable. Anything finer is an enumeration
 oracle over withheld files.
 
@@ -765,12 +765,12 @@ registered type, so it must admit that and therefore refuses almost nothing. The
 required `format` text part that `teardown-file-bytes.ts` proves against the actual bytes — checked
 in both directions, so a STEP declared as a PDF is refused as loudly as the reverse.
 
-| Format | What is proven |
-| --- | --- |
-| `pdf` | Delegated to `validatePdfBytes` verbatim, reusing `MAX_PAPER_BYTES` because that validator hardcodes the cap in its own `TOO_LARGE` branch |
-| `step` | The two markers ISO 10303-21 mandates: `ISO-10303-21;` … `END-ISO-10303-21;` |
-| `stl` | ASCII framing, or binary's **arithmetic invariant** `84 + 50 × triangleCount` — the strongest check here, and one a truncated file cannot satisfy |
-| `dxf` | ASCII group-code opening plus `EOF`. Binary DXF is refused: one fewer parser surface |
+| Format | What is proven                                                                                                                                    |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pdf`  | Delegated to `validatePdfBytes` verbatim, reusing `MAX_PAPER_BYTES` because that validator hardcodes the cap in its own `TOO_LARGE` branch        |
+| `step` | The two markers ISO 10303-21 mandates: `ISO-10303-21;` … `END-ISO-10303-21;`                                                                      |
+| `stl`  | ASCII framing, or binary's **arithmetic invariant** `84 + 50 × triangleCount` — the strongest check here, and one a truncated file cannot satisfy |
+| `dxf`  | ASCII group-code opening plus `EOF`. Binary DXF is refused: one fewer parser surface                                                              |
 
 `gerber`, `drill`, `pick_and_place` and `bill_of_materials_csv` stay **pasted-link-only**. The first
 two are sniffable and can be added; the last two are plain text with no framing at all, so a
@@ -782,7 +782,7 @@ opens, or that it is safe to hand to a CAD program. A hostile STEP is fully repr
 well-framed one, and a PDF that passes may carry JavaScript, embedded files and external references.
 **Nothing on this path claims the file was scanned, because it was not.** What actually moves the
 needle is delivery: the bytes never render on a Qatoto origin, `Content-Type` is pinned to the
-format *we* detected, and `Content-Disposition: attachment` is set at **PUT** time so the object
+format _we_ detected, and `Content-Disposition: attachment` is set at **PUT** time so the object
 cannot be coaxed into rendering inline even if a URL escapes — which takes PDF active content out of
 the same-origin threat model entirely.
 
@@ -813,14 +813,14 @@ names rather than for the purge STEPS, which call through service wrappers.
 
 What is actually true:
 
-| Family | Disposition on erasure | Orphan? |
-| --- | --- | --- |
-| Research papers | `research_program_paper.uploader_user_id` is **`null_out`** | No — the paper belongs to the program and outlives the uploader |
-| Commerce / product documents | no `user` foreign key at all | No — owned by an organization, so nothing is orphaned |
-| Video documents | `purge_video_document_objects` | No — purged explicitly |
-| Data exports | `purge_data_exports` | No — purged explicitly |
-| Showcase images | `purge_showcase_launch_images` | No — purged explicitly (Cloudinary) |
-| **Teardown files** | `teardown.author_user_id` and `teardown_submission_file_upload.uploaded_by_user_id` are **both `delete_rows`** | **Yes, and `purge_teardown_file_objects` is why this step exists** |
+| Family                       | Disposition on erasure                                                                                         | Orphan?                                                            |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Research papers              | `research_program_paper.uploader_user_id` is **`null_out`**                                                    | No — the paper belongs to the program and outlives the uploader    |
+| Commerce / product documents | no `user` foreign key at all                                                                                   | No — owned by an organization, so nothing is orphaned              |
+| Video documents              | `purge_video_document_objects`                                                                                 | No — purged explicitly                                             |
+| Data exports                 | `purge_data_exports`                                                                                           | No — purged explicitly                                             |
+| Showcase images              | `purge_showcase_launch_images`                                                                                 | No — purged explicitly (Cloudinary)                                |
+| **Teardown files**           | `teardown.author_user_id` and `teardown_submission_file_upload.uploaded_by_user_id` are **both `delete_rows`** | **Yes, and `purge_teardown_file_objects` is why this step exists** |
 
 ⚠️ **THIS FAMILY IS THE EXCEPTION, AND UPLOADS CREATED IT.** Most families need no purge because
 their rows SURVIVE the erasure, so their bytes stay referenced and deleting them would be data loss
@@ -934,7 +934,7 @@ set is `owner_user_id`, `arm`, `label`, `updated_at`, identical for all three wi
 only two queries are "list mine" and "load one".
 
 `blueprint_draft_arm` is its **own** type rather than a widened `blueprint_content_target_kind`.
-Widening that would need an isolated `ALTER TYPE` migration *and* would contradict what §9.3 records
+Widening that would need an isolated `ALTER TYPE` migration _and_ would contradict what §9.3 records
 about it: its members are the arms a moderation VERB can reach. A draft is never moderated.
 
 ⚠️ **AND IT IS NOT `teardown_submission` WITH `moderation_state = 'draft'`.** Four refusals, any one

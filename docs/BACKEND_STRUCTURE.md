@@ -114,24 +114,24 @@ that canonical email (`allowDifferentEmails: true`) and remain one user. See §5
 
 ## 2. The stack
 
-| Concern          | Pick                                           | Why this one                                                                                       |
-| ---------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Server framework | **Express 5**                                  | Minimal, huge community. Run with `tsx` (no build step in dev).                                    |
-| Language         | **TypeScript** (strict)                        | Same language as the frontend — shared types, fewer bugs.                                          |
-| Auth engine      | **Better Auth** (`^1.6`)                       | Password hashing, sessions, cookies, OTP, CSRF, OAuth, WebAuthn. Don't roll your own crypto.       |
-| Database ORM     | **Drizzle ORM**                                | Type-safe queries + migrations. The tables live in `src/db/schema.ts`.                             |
-| Database         | **PostgreSQL** via `pg`                        | Strict types, same engine as prod. `UNIQUE(email)` / `UNIQUE(handle)` enforced at the DB.          |
-| Passkeys         | **`@better-auth/passkey`**                     | WebAuthn relying-party + ceremony handling.                                                        |
-| OTP / OAuth      | **`emailOTP` + social config**                 | OTP for signup/reset; Google + GitHub OAuth.                                                       |
-| Anonymous        | **`anonymous` plugin**                         | Pre-auth guest sessions that can later upgrade to a real account.                                  |
-| Avatar storage   | **Cloudinary** (`src/lib/cloudinary.ts`)       | One deterministic asset per user (`qatoto/avatars/<userId>`). Creds optional → `NOT_CONFIGURED`.   |
-| Image processing | **sharp** (`src/lib/image.ts`)                 | Decodes uploads to prove they're real images, bounds dimensions, re-encodes to webp + strips EXIF. |
+| Concern          | Pick                                                   | Why this one                                                                                       |
+| ---------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Server framework | **Express 5**                                          | Minimal, huge community. Run with `tsx` (no build step in dev).                                    |
+| Language         | **TypeScript** (strict)                                | Same language as the frontend — shared types, fewer bugs.                                          |
+| Auth engine      | **Better Auth** (`^1.6`)                               | Password hashing, sessions, cookies, OTP, CSRF, OAuth, WebAuthn. Don't roll your own crypto.       |
+| Database ORM     | **Drizzle ORM**                                        | Type-safe queries + migrations. The tables live in `src/db/schema.ts`.                             |
+| Database         | **PostgreSQL** via `pg`                                | Strict types, same engine as prod. `UNIQUE(email)` / `UNIQUE(handle)` enforced at the DB.          |
+| Passkeys         | **`@better-auth/passkey`**                             | WebAuthn relying-party + ceremony handling.                                                        |
+| OTP / OAuth      | **`emailOTP` + social config**                         | OTP for signup/reset; Google + GitHub OAuth.                                                       |
+| Anonymous        | **`anonymous` plugin**                                 | Pre-auth guest sessions that can later upgrade to a real account.                                  |
+| Avatar storage   | **Cloudinary** (`src/lib/cloudinary.ts`)               | One deterministic asset per user (`qatoto/avatars/<userId>`). Creds optional → `NOT_CONFIGURED`.   |
+| Image processing | **sharp** (`src/lib/image.ts`)                         | Decodes uploads to prove they're real images, bounds dimensions, re-encodes to webp + strips EXIF. |
 | File uploads     | **multer** (`src/modules/auth/users/upload-avatar.ts`) | In-memory multipart parse for the `photo` field, 5 MB cap, first-pass mimetype gate.               |
-| Email delivery   | **Brevo** (`src/lib/email.ts`)                 | Real transactional email. In dev the OTP is **also** `console.log`'d so you can test offline.      |
-| Validation       | **zod**                                        | Env parsing (`src/config/index.ts`), provider payloads (`oauth-profile.ts`), request bodies.       |
-| Security headers | **helmet**                                     | Sensible default response headers.                                                                 |
-| Cookies          | **cookie-parser**                              | Parses cookies for your own routes (Better Auth reads/writes its own signed cookies).              |
-| CORS             | **cors**                                       | Lets the browser on the frontend origin call the API, with credentials.                            |
+| Email delivery   | **Brevo** (`src/lib/email.ts`)                         | Real transactional email. In dev the OTP is **also** `console.log`'d so you can test offline.      |
+| Validation       | **zod**                                                | Env parsing (`src/config/index.ts`), provider payloads (`oauth-profile.ts`), request bodies.       |
+| Security headers | **helmet**                                             | Sensible default response headers.                                                                 |
+| Cookies          | **cookie-parser**                                      | Parses cookies for your own routes (Better Auth reads/writes its own signed cookies).              |
+| CORS             | **cors**                                               | Lets the browser on the frontend origin call the API, with credentials.                            |
 
 **Still NOT hand-rolled:** no `bcrypt` (argon2id via `@node-rs/argon2`), no hand-written
 sessions / OTP / passkey tables (Better Auth owns those — see §4).
@@ -302,6 +302,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { anonymous, emailOTP, multiSession } from "better-auth/plugins";
+
 import { fetchGitHubPrimaryEmail, readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
 import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
 
@@ -958,14 +959,14 @@ frontend-ahead gap from §1; those calls fail until the backend enables the `pho
 plugin.)
 
 ```ts
-// src/lib/auth-client.ts (frontend)
-import { createAuthClient } from "better-auth/react";
+import { passkeyClient } from "@better-auth/passkey/client";
 import {
     emailOTPClient,
     inferAdditionalFields,
     multiSessionClient,
 } from "better-auth/client/plugins";
-import { passkeyClient } from "@better-auth/passkey/client";
+// src/lib/auth-client.ts (frontend)
+import { createAuthClient } from "better-auth/react";
 
 export const authClient = createAuthClient({
     baseURL: "http://localhost:8000",
@@ -1132,18 +1133,18 @@ finds, plus every column the scrub writes that no pattern would catch (`user.bio
 forum-thread columns). Five kinds, all machine-checked by
 `pnpm db:verify-text-pii-coverage`:
 
-| kind | what it claims | how it is checked |
-|---|---|---|
-| `scrub` | the erasure overwrites it | `stepName` resolves against `PLANNED_ANONYMIZATION_STEP_NAMES`, which the service DERIVES from its own step list |
-| `covered_by_row_delete` | the whole row dies | `manifestKey` is a `delete_rows` entry in the FK manifest whose table IS this table or reaches it by `ON DELETE cascade`, asked of `pg_constraint` |
-| `retain` | left in place | non-empty `lawfulBasis` citing the Art. 17(3) limb |
-| `no_erasure_subject` | a person's name no erasure can reach | a CHECK or a table with no `user` key makes it provable; the note must say which |
-| `not_personal_data` | a company, product, asset id or hash | non-empty note saying what it holds |
+| kind                    | what it claims                       | how it is checked                                                                                                                                  |
+| ----------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scrub`                 | the erasure overwrites it            | `stepName` resolves against `PLANNED_ANONYMIZATION_STEP_NAMES`, which the service DERIVES from its own step list                                   |
+| `covered_by_row_delete` | the whole row dies                   | `manifestKey` is a `delete_rows` entry in the FK manifest whose table IS this table or reaches it by `ON DELETE cascade`, asked of `pg_constraint` |
+| `retain`                | left in place                        | non-empty `lawfulBasis` citing the Art. 17(3) limb                                                                                                 |
+| `no_erasure_subject`    | a person's name no erasure can reach | a CHECK or a table with no `user` key makes it provable; the note must say which                                                                   |
+| `not_personal_data`     | a company, product, asset id or hash | non-empty note saying what it holds                                                                                                                |
 
 `not_personal_data` is a **disposition rather than a regex exclusion** on purpose. A column
 dropped by a pattern is reasoning nobody can read or disagree with; a column carrying "this is a
 mesh node's label, not a person's" is reasoning the next reader can check. It is also what keeps
-the file a *coverage* check rather than a highlights reel.
+the file a _coverage_ check rather than a highlights reel.
 
 **⚠️ WHAT THE SWEEP ACTUALLY FOUND: `user.name` IS COPIED INTO A PUBLIC PAGE.**
 `mintBuyerWorkspace` (`commerce-buyer-workspace.service.ts:85-96`) writes `user.name` into
@@ -1152,13 +1153,13 @@ auto-provisioned shell every buyer gets who never declared a company, because "a
 the account holder's name because that is the only true thing the server knows about who is
 buying". Correct at mint time. Five hops follow, and the table says which stop where:
 
-| hop | where the name lands | disposition |
-|---|---|---|
-| 1 | `user.name` | **scrub** — `scrub_user`, and always was |
-| 2 | `commerce_organization`, three NOT NULL columns | **scrub** — `tombstone:commerce_organization`, scoped to `auto_provisioned` |
-| 3 | `commerce_order.buyer_legal_name_snapshot` / `counterparty_legal_name_snapshot` | **retain** 17(3)(b) — *impossible*, see below |
-| 4 | `commerce_dispute.order_snapshot_json` | **retain** 17(3)(b) and (e) — an immutable JSON copy of hop 3 |
-| 5 | `store_search_document.title` / `organization_display_name` / `search_text` | **scrub** — `tombstone:store_search_document` |
+| hop | where the name lands                                                            | disposition                                                                 |
+| --- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1   | `user.name`                                                                     | **scrub** — `scrub_user`, and always was                                    |
+| 2   | `commerce_organization`, three NOT NULL columns                                 | **scrub** — `tombstone:commerce_organization`, scoped to `auto_provisioned` |
+| 3   | `commerce_order.buyer_legal_name_snapshot` / `counterparty_legal_name_snapshot` | **retain** 17(3)(b) — _impossible_, see below                               |
+| 4   | `commerce_dispute.order_snapshot_json`                                          | **retain** 17(3)(b) and (e) — an immutable JSON copy of hop 3               |
+| 5   | `store_search_document.title` / `organization_display_name` / `search_text`     | **scrub** — `tombstone:store_search_document`                               |
 
 **Hop 2 is the live exposure, and it is not the search index.** `community-forum.service.ts`
 joins `commerce_organization.display_name` and renders it as `authorOrganizationName` on
@@ -1210,7 +1211,7 @@ against a column that defaults `false` is a guard that can only ever pass.
 `commerce_organization_stakeholder.full_name` (a company officer who never consented),
 `commerce_organization_address.recipient_name_encrypted` (a delivery recipient) and
 `commerce_organization_site_audit.auditor_name` (an external auditor) are all `retain` with a
-limb — they are not the erasing user's data, so they are out of *this* job's scope. Each note says
+limb — they are not the erasing user's data, so they are out of _this_ job's scope. Each note says
 the exposure is a **collection** question rather than a non-question. `pitch.external_contact_url`
 is registered as a **named gap**: it is the erasing user's own contact surface, but `pitch` carries
 no `user` reference, and withdrawing a project-owned public offer belongs to a pitch-withdrawal
@@ -1271,11 +1272,11 @@ them; they would serve a state the system cannot enter.
 
 ### Routes
 
-| route | guard | answer |
-|---|---|---|
-| `POST /users/me/deletion-request` | `requireAuth` + limiter | 200; `403 STAFF_ACCOUNT`; `409` if one is active |
-| `POST /users/me/export` | `requireAuth` + `requireIdentifiedUser` + limiter | **202** — a receipt, never a file |
-| `GET /users/me/export` | `requireAuth` + limiter | state, and a 300s presigned link once `ready` |
+| route                             | guard                                             | answer                                           |
+| --------------------------------- | ------------------------------------------------- | ------------------------------------------------ |
+| `POST /users/me/deletion-request` | `requireAuth` + limiter                           | 200; `403 STAFF_ACCOUNT`; `409` if one is active |
+| `POST /users/me/export`           | `requireAuth` + `requireIdentifiedUser` + limiter | **202** — a receipt, never a file                |
+| `GET /users/me/export`            | `requireAuth` + limiter                           | state, and a 300s presigned link once `ready`    |
 
 Deletion takes `requireAuth` **only** — `requireIdentifiedUser` would 403 an anonymous
 account into a dead end where it cannot close itself.
@@ -1420,13 +1421,13 @@ The frontend's AI Assist Mode answers questions with Chrome's built-in Gemini Na
 viewer's own device** whenever it can. This module is the cloud fallback, and it is **Premium AI
 only**: it spends Qatoto's Gemini key.
 
-| Route                                               | Who                         | What                                                     |
-| --------------------------------------------------- | --------------------------- | -------------------------------------------------------- |
-| `POST /assistant/replies`                           | identified + Premium AI     | One reply from Gemini. Stateless: nothing is stored.     |
-| `GET /assistant/cloud-access`                       | any signed-in caller        | `{ hasCloudAccess }` for the caller, read on panel open. |
-| `GET /assistant/admin/cloud-access`                 | `grant_ai_assistant_cloud`  | Active grants, newest first, keyset-paged.               |
-| `POST /assistant/admin/cloud-access`                | `grant_ai_assistant_cloud`  | Grant by exact email. 404 unknown, 409 already active.   |
-| `POST /assistant/admin/cloud-access/:userId/revocation` | `grant_ai_assistant_cloud` | Revoke. 404 if no active grant.                       |
+| Route                                                   | Who                        | What                                                     |
+| ------------------------------------------------------- | -------------------------- | -------------------------------------------------------- |
+| `POST /assistant/replies`                               | identified + Premium AI    | One reply from Gemini. Stateless: nothing is stored.     |
+| `GET /assistant/cloud-access`                           | any signed-in caller       | `{ hasCloudAccess }` for the caller, read on panel open. |
+| `GET /assistant/admin/cloud-access`                     | `grant_ai_assistant_cloud` | Active grants, newest first, keyset-paged.               |
+| `POST /assistant/admin/cloud-access`                    | `grant_ai_assistant_cloud` | Grant by exact email. 404 unknown, 409 already active.   |
+| `POST /assistant/admin/cloud-access/:userId/revocation` | `grant_ai_assistant_cloud` | Revoke. 404 if no active grant.                          |
 
 - **Premium AI is a staff-granted flag, not a subscription.** `assistant_cloud_entitlement`
   (migration `0213`) holds one row per grant; a partial unique index allows one ACTIVE grant per
@@ -1434,8 +1435,7 @@ only**: it spends Qatoto's Gemini key.
   A real subscription later writes the same rows; `hasActiveCloudAccess` is the one reader and
   does not change.
 - **The check runs before any model call.** Without a grant, `/replies` answers **403 with
-  `data.reason: "premium_required"`**, distinct from `requireIdentifiedUser`'s anonymous-account
-  403. The capability on the admin routes is checked inside the service, first.
+  `data.reason: "premium_required"`**, distinct from `requireIdentifiedUser`'s anonymous-account 403. The capability on the admin routes is checked inside the service, first.
 - **`grant_ai_assistant_cloud` is `admin` only** (`platform-role.service.ts`): a per-account
   spending decision belongs beside role management.
 - **Privacy:** `anonymization-manifest.ts` deletes the subject's grants and nulls them out as

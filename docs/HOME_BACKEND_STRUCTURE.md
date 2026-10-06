@@ -67,16 +67,16 @@ is the same error as fabricating a value the server returned as `null`.
 
 ## 1. What exists today, and what it can't do
 
-| Piece                                                        | Location                             | State                                                                            |
-| ------------------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------- |
-| `video` table, ~50 columns                                   | `src/db/schema.ts:9383`              | ✅ built, YouTube-first                                                          |
-| `videoSource` / `youtubeVideoId` + charset CHECK             | `schema.ts:9280`, `:9513-9521`       | ✅ — the CHECK is a **security** constraint, it closes SSRF at the storage layer |
+| Piece                                                        | Location                                            | State                                                                            |
+| ------------------------------------------------------------ | --------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `video` table, ~50 columns                                   | `src/db/schema.ts:9383`                             | ✅ built, YouTube-first                                                          |
+| `videoSource` / `youtubeVideoId` + charset CHECK             | `schema.ts:9280`, `:9513-9521`                      | ✅ — the CHECK is a **security** constraint, it closes SSRF at the storage layer |
 | Owner-scoped `/videos` CRUD and publish                      | `src/modules/studio/videos/videos.routes.ts:38-120` | ✅ built, **all `requireAuth`**                                                  |
-| `contentReviewAction` audit log, anime review queue          | —                                    | 🗑️ removed with the anime vertical                                               |
-| **Any public read route**                                    | —                                    | 🚫 does not exist                                                                |
-| **Taxonomy** (categories with slugs + images)                | —                                    | 🚫 `video.category` is nullable free text                                        |
-| **Engagement** (view, like, comment, share, save, subscribe) | —                                    | 🚫 no tables at all                                                              |
-| **Ranking / recommendation**                                 | —                                    | 🚫 nothing                                                                       |
+| `contentReviewAction` audit log, anime review queue          | —                                                   | 🗑️ removed with the anime vertical                                               |
+| **Any public read route**                                    | —                                                   | 🚫 does not exist                                                                |
+| **Taxonomy** (categories with slugs + images)                | —                                                   | 🚫 `video.category` is nullable free text                                        |
+| **Engagement** (view, like, comment, share, save, subscribe) | —                                                   | 🚫 no tables at all                                                              |
+| **Ranking / recommendation**                                 | —                                                   | 🚫 nothing                                                                       |
 
 Three properties of the existing table shape everything below:
 
@@ -186,20 +186,20 @@ be `isActive`. See [STUDIO_BACKEND_STRUCTURE.md](STUDIO_BACKEND_STRUCTURE.md) §
 
 ### 3.1 Tables
 
-| Table                 | Key                                                                                                           | Notes                                                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `videoViewSession`    | `id`; **unique `(videoId, viewerFingerprint, viewDayBucket)`**                                                | One row per viewer, per video, per UTC day. That constraint is the anti-replay boundary — see §3.2.                                             |
-| `videoLike`           | PK `(videoId, userId)`, **reverse index `(userId, videoId)`**, listing index `(userId, createdAt DESC, videoId DESC)` | The reverse index is what turns "which of these 24 cards have I liked?" into one join. Copies `researchProgramPostReaction` (`schema.ts:8621`). The listing index carries `createdAt`, which the reverse one does not — §5.2d. |
-| `videoSave`           | PK `(videoId, userId)`, index `(userId, createdAt, videoId)`                                                  | Watch-later. Its viewer index leads with `createdAt` where `videoLike`'s does not, because a saved list is RENDERED and a like set is only probed — which is why §5.2d's listing needed no new index here. |
-| `videoComment`        | `id`; index `(videoId, createdAt DESC) WHERE parent_comment_id IS NULL`, index `(parentCommentId, createdAt)` | One level of threading only. `isDeleted` + `deletedAt` tombstone so deleting a parent does not orphan its replies. `body` CHECK length 1..2000. |
-| `videoCommentLike`    | PK `(commentId, userId)`                                                                                      |                                                                                                                                                 |
-| `videoShare`          | `id`; index `(videoId, createdAt)`                                                                            | `channel` enum, `userId` nullable.                                                                                                              |
-| `creatorSubscription` | PK `(subscriberId, creatorId)`, reverse index, listing index `(subscriberId, createdAt DESC, creatorId DESC)`, CHECK `subscriber <> creator` | The listing index is §5.2d's; neither the PK nor the reverse index carries `createdAt`.                                                          |
-| `videoPlaybackError`  | `id`; unique `(videoId, viewerFingerprint, reportDayBucket)`                                                  | Feeds the fast dead-player path, §8.2.                                                                                                          |
-| `videoStats`          | PK `videoId`                                                                                                  | Counter cache. §3.4.                                                                                                                            |
-| `creatorStats`        | PK `userId`                                                                                                   | `subscriberCount`, `publishedVideoCount`, `totalViewCount`.                                                                                     |
-| `videoNotInterested`  | PK `(viewerId, videoId)`, index `(videoId)` for the FK cascade                                                | §5.2b. **Viewer leads**, unlike `videoLike` — the only read is the feed's per-viewer probe. No counter, by design.                              |
-| `creatorMute`         | PK `(muterId, creatorId)`, index `(creatorId)` for the cascade, CHECK `muter <> creator`                       | §5.2b. The inverse of `creatorSubscription` and NOT its mirror: no `creatorStats` counter moves, because a public mute count is hostile.        |
+| Table                 | Key                                                                                                                                          | Notes                                                                                                                                                                                                                          |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `videoViewSession`    | `id`; **unique `(videoId, viewerFingerprint, viewDayBucket)`**                                                                               | One row per viewer, per video, per UTC day. That constraint is the anti-replay boundary — see §3.2.                                                                                                                            |
+| `videoLike`           | PK `(videoId, userId)`, **reverse index `(userId, videoId)`**, listing index `(userId, createdAt DESC, videoId DESC)`                        | The reverse index is what turns "which of these 24 cards have I liked?" into one join. Copies `researchProgramPostReaction` (`schema.ts:8621`). The listing index carries `createdAt`, which the reverse one does not — §5.2d. |
+| `videoSave`           | PK `(videoId, userId)`, index `(userId, createdAt, videoId)`                                                                                 | Watch-later. Its viewer index leads with `createdAt` where `videoLike`'s does not, because a saved list is RENDERED and a like set is only probed — which is why §5.2d's listing needed no new index here.                     |
+| `videoComment`        | `id`; index `(videoId, createdAt DESC) WHERE parent_comment_id IS NULL`, index `(parentCommentId, createdAt)`                                | One level of threading only. `isDeleted` + `deletedAt` tombstone so deleting a parent does not orphan its replies. `body` CHECK length 1..2000.                                                                                |
+| `videoCommentLike`    | PK `(commentId, userId)`                                                                                                                     |                                                                                                                                                                                                                                |
+| `videoShare`          | `id`; index `(videoId, createdAt)`                                                                                                           | `channel` enum, `userId` nullable.                                                                                                                                                                                             |
+| `creatorSubscription` | PK `(subscriberId, creatorId)`, reverse index, listing index `(subscriberId, createdAt DESC, creatorId DESC)`, CHECK `subscriber <> creator` | The listing index is §5.2d's; neither the PK nor the reverse index carries `createdAt`.                                                                                                                                        |
+| `videoPlaybackError`  | `id`; unique `(videoId, viewerFingerprint, reportDayBucket)`                                                                                 | Feeds the fast dead-player path, §8.2.                                                                                                                                                                                         |
+| `videoStats`          | PK `videoId`                                                                                                                                 | Counter cache. §3.4.                                                                                                                                                                                                           |
+| `creatorStats`        | PK `userId`                                                                                                                                  | `subscriberCount`, `publishedVideoCount`, `totalViewCount`.                                                                                                                                                                    |
+| `videoNotInterested`  | PK `(viewerId, videoId)`, index `(videoId)` for the FK cascade                                                                               | §5.2b. **Viewer leads**, unlike `videoLike` — the only read is the feed's per-viewer probe. No counter, by design.                                                                                                             |
+| `creatorMute`         | PK `(muterId, creatorId)`, index `(creatorId)` for the cascade, CHECK `muter <> creator`                                                     | §5.2b. The inverse of `creatorSubscription` and NOT its mirror: no `creatorStats` counter moves, because a public mute count is hostile.                                                                                       |
 
 New enums, snake_case labels per the repo rule:
 
@@ -308,14 +308,14 @@ this section is both of them.
 `VIEW_SESSION_RETENTION_DAYS`, so "how long have I watched this year" is unanswerable a quarter of
 the way into the year. **And nothing carries an hour.** A session row spans a whole UTC day, so
 attributing its seconds to the hour of its last beacon would file a three-hour evening sitting
-into one bucket. That histogram would not be missing; it would be *wrong, plausibly*, which is
+into one bucket. That histogram would not be missing; it would be _wrong, plausibly_, which is
 worse.
 
-| Table | Grain | Written by | Retention |
-| --- | --- | --- | --- |
-| `user_activity_hour` | user × UTC date × UTC hour | `recordViewBeacon`, per beacon | `ACTIVITY_HOUR_RETENTION_DAYS` (90) |
-| `user_watch_daily` | user × UTC date | `rollup-user-watch-activity`, nightly | `WATCH_ROLLUP_RETENTION_DAYS` (762 — 25 months) |
-| `platform_activity_hour_daily` | UTC date × hour, **no user id** | same job, same scan | 762 |
+| Table                          | Grain                           | Written by                            | Retention                                       |
+| ------------------------------ | ------------------------------- | ------------------------------------- | ----------------------------------------------- |
+| `user_activity_hour`           | user × UTC date × UTC hour      | `recordViewBeacon`, per beacon        | `ACTIVITY_HOUR_RETENTION_DAYS` (90)             |
+| `user_watch_daily`             | user × UTC date                 | `rollup-user-watch-activity`, nightly | `WATCH_ROLLUP_RETENTION_DAYS` (762 — 25 months) |
+| `platform_activity_hour_daily` | UTC date × hour, **no user id** | same job, same scan                   | 762                                             |
 
 **The hour counter is per-user rather than a 24-row platform counter on purpose.** Twenty-four
 rows incremented by every beacon on the site is a lock hotspot on the hottest write path there
@@ -329,7 +329,7 @@ user agent; an hour-by-hour profile keyed on one describes a coffee shop. **Ever
 on this has to say that signed-out watching is not counted.**
 
 **`ACTIVITY_HOUR_RETENTION_DAYS` equals `VIEW_SESSION_RETENTION_DAYS`, and must stay equal.** The
-hour table is *finer*-grained than the sessions it derives from — it says which hour of which day
+hour table is _finer_-grained than the sessions it derives from — it says which hour of which day
 a named account was watching — so a longer horizon there would quietly undo §3.2's promise by
 keeping a sharper record after the blunter one was deleted.
 
@@ -469,10 +469,10 @@ query-time `NOT EXISTS` and **nothing else**: the dismissed video vanished and t
 nothing from the dismissal, so the feed kept serving the same kind of video. The hard filter is
 unchanged — this is additive.
 
-| Table column | Meaning |
-| --- | --- |
-| `negative_signal_count` | dismissals in this category / on this creator, **plus `MUTE_SIGNAL_WEIGHT` per mute** |
-| `negative_signal_component_points` | the penalty **actually applied**, already clamped |
+| Table column                       | Meaning                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------- |
+| `negative_signal_count`            | dismissals in this category / on this creator, **plus `MUTE_SIGNAL_WEIGHT` per mute** |
+| `negative_signal_component_points` | the penalty **actually applied**, already clamped                                     |
 
 **It is a SUBTRAHEND, not a fourth component.** `AFFINITY_SCORE_COMPONENT_BUDGETS` still holds
 three entries summing to 100 and `assertBudgetsSumTo` still passes; `NEGATIVE_SIGNAL_BUDGET_POINTS`
@@ -814,11 +814,11 @@ not post twice.
 
 The write half of `mode=watched`: a viewer editing their own history, behind `/history`.
 
-| Method   | Path                            | Auth     | Limiter               |
-| -------- | ------------------------------- | -------- | --------------------- |
+| Method   | Path                             | Auth     | Limiter               |
+| -------- | -------------------------------- | -------- | --------------------- |
 | `DELETE` | `/watch-history/videos/:videoId` | required | `watchHistoryLimiter` |
 | `PUT`    | `/watch-history/videos/:videoId` | required | `watchHistoryLimiter` |
-| `DELETE` | `/watch-history`                | required | `watchHistoryLimiter` |
+| `DELETE` | `/watch-history`                 | required | `watchHistoryLimiter` |
 
 `DELETE` on a video removes it; `PUT` is Undo. The verb pair on one path is the like/save idiom —
 one nullable column with two states, so both directions are idempotent. Clear-all has no undo:
@@ -859,12 +859,12 @@ every card the viewer removed on purpose over the previous 90 days.
 The two NEGATIVE viewer signals, and the first in the schema: every viewer→content and
 viewer→creator relation before them records what someone wants more of.
 
-| Method          | Path                              | Auth                  | Limiter                 |
-| --------------- | --------------------------------- | --------------------- | ----------------------- |
-| `PUT`/`DELETE`  | `/videos/:videoId/not-interested` | session, **not** full | `feedPreferenceLimiter` |
-| `PUT`/`DELETE`  | `/creators/:creatorId/mute`       | session, **not** full | `feedPreferenceLimiter` |
-| `GET`           | `/users/me/muted-creators`        | session               | —                       |
-| `GET`           | `/users/me/not-interested-videos` | session               | —                       |
+| Method         | Path                              | Auth                  | Limiter                 |
+| -------------- | --------------------------------- | --------------------- | ----------------------- |
+| `PUT`/`DELETE` | `/videos/:videoId/not-interested` | session, **not** full | `feedPreferenceLimiter` |
+| `PUT`/`DELETE` | `/creators/:creatorId/mute`       | session, **not** full | `feedPreferenceLimiter` |
+| `GET`          | `/users/me/muted-creators`        | session               | —                       |
+| `GET`          | `/users/me/not-interested-videos` | session               | —                       |
 
 Tables `video_not_interested (viewer_id, video_id)` and `creator_mute (muter_id, creator_id)`,
 both the `creator_subscription` shape: composite PK, one index for the FK cascade, a self-check on
@@ -940,13 +940,13 @@ are written, which diverges from every other public profile text in the schema �
 defaults to `private`, `community_cofounder_profile` to `draft` behind moderation. That divergence is
 only defensible with a reactive path, and this is it.
 
-| Method | Path                                 | Auth                          | Limiter               |
-| ------ | ------------------------------------ | ----------------------------- | --------------------- |
-| `POST` | `/users/:userId/reports`             | full account                  | `userReportLimiter`   |
-| `GET`  | `/users/admin/reports`               | `moderate_content` in-service | `contentReviewLimiter` |
+| Method | Path                                       | Auth                          | Limiter                |
+| ------ | ------------------------------------------ | ----------------------------- | ---------------------- |
+| `POST` | `/users/:userId/reports`                   | full account                  | `userReportLimiter`    |
+| `GET`  | `/users/admin/reports`                     | `moderate_content` in-service | `contentReviewLimiter` |
 | `POST` | `/users/admin/reports/:reportId/decisions` | `moderate_content` in-service | `contentReviewLimiter` |
-| `POST` | `/users/admin/profile-text/restore`  | `moderate_content` in-service | `contentReviewLimiter` |
-| `GET`  | `/users/me/profile-reports`          | session                       | —                     |
+| `POST` | `/users/admin/profile-text/restore`        | `moderate_content` in-service | `contentReviewLimiter` |
+| `GET`  | `/users/me/profile-reports`                | session                       | —                      |
 
 Both `admin` writes take `idempotency({ required: true, scope: "user" })`. Tables `user_report` and
 `user_moderation_action`, plus `user.profile_moderation_state`. Migrations `0140_user_report_enums`
@@ -978,13 +978,13 @@ The fourth report fork on this platform, after R&D, commerce and community. Each
 records why it refused to generalize the last, and the reason is always the same: two queues
 gated by different capabilities in one table is the coupling capabilities exist to prevent.
 
-| Method | Path                                                    | Auth                          | Limiter                    |
-| ------ | ------------------------------------------------------- | ----------------------------- | -------------------------- |
-| `POST` | `/videos/:videoId/reports`                              | full account                  | `videoContentReportLimiter` |
-| `GET`  | `/videos/admin/content-reports`                         | `moderate_content` in-service | `contentReviewLimiter`     |
-| `POST` | `/videos/admin/content-reports/:reportId/decisions`     | `moderate_content` in-service | `contentReviewLimiter`     |
-| `POST` | `/videos/admin/content/restore`                         | `moderate_content` in-service | `contentReviewLimiter`     |
-| `GET`  | `/users/me/video-reports`                               | session                       | —                          |
+| Method | Path                                                | Auth                          | Limiter                     |
+| ------ | --------------------------------------------------- | ----------------------------- | --------------------------- |
+| `POST` | `/videos/:videoId/reports`                          | full account                  | `videoContentReportLimiter` |
+| `GET`  | `/videos/admin/content-reports`                     | `moderate_content` in-service | `contentReviewLimiter`      |
+| `POST` | `/videos/admin/content-reports/:reportId/decisions` | `moderate_content` in-service | `contentReviewLimiter`      |
+| `POST` | `/videos/admin/content/restore`                     | `moderate_content` in-service | `contentReviewLimiter`      |
+| `GET`  | `/users/me/video-reports`                           | session                       | —                           |
 
 Tables `video_content_report` and `video_moderation_action`, plus
 `video.moderation_visibility_state`. Migrations `0128_video_moderation_enums` (split for
@@ -1037,11 +1037,11 @@ Tables `video_content_report` and `video_moderation_action`, plus
 The three POSITIVE collections, read back. §5.2b's two negative signals shipped with their
 listings; these three shipped their WRITE halves in §3.1 and had no listing at all until now.
 
-| Method | Path                       | Auth    | Limiter |
-| ------ | -------------------------- | ------- | ------- |
-| `GET`  | `/users/me/liked-videos`   | session | —       |
-| `GET`  | `/users/me/saved-videos`   | session | —       |
-| `GET`  | `/users/me/subscriptions`  | session | —       |
+| Method | Path                      | Auth    | Limiter |
+| ------ | ------------------------- | ------- | ------- |
+| `GET`  | `/users/me/liked-videos`  | session | —       |
+| `GET`  | `/users/me/saved-videos`  | session | —       |
+| `GET`  | `/users/me/subscriptions` | session | —       |
 
 No new table. `video_like`, `video_save` and `creator_subscription` have been filling since
 §3.1 through `PUT`/`DELETE /videos/:videoId/like`, `.../save` and `/creators/:creatorId/subscribe`,
@@ -1110,11 +1110,11 @@ links, confirmed in a browser as Next's 404 page. The frontend's own library sur
 subscribed creators as unclickable text to avoid joining them. Two URL shapes for one destination
 is the tell: nobody could have been right, because there was nothing to be right about.
 
-| Method | Path | Auth | Limiter |
-| --- | --- | --- | --- |
-| `GET` | `/channels` | optional | `feedReadLimiter` |
-| `GET` | `/channels/:handle` | optional | `feedReadLimiter` |
-| `GET` | `/channels/:handle/videos` | optional | `feedReadLimiter` |
+| Method | Path                       | Auth     | Limiter           |
+| ------ | -------------------------- | -------- | ----------------- |
+| `GET`  | `/channels`                | optional | `feedReadLimiter` |
+| `GET`  | `/channels/:handle`        | optional | `feedReadLimiter` |
+| `GET`  | `/channels/:handle/videos` | optional | `feedReadLimiter` |
 
 **`GET /channels` — the public channel directory, and its only consumer is `sitemap.ts`.** The
 channel page is public and was announced in no sitemap for one reason: there was no public
@@ -1201,11 +1201,11 @@ router, not the videos router, and that placement is forced rather than chosen: 
 `videosRouter` at `/videos` first, so any two-segment `/videos/X` is permanently shadowed by that
 router's `GET /:videoId`. `/users/me/video-reports` records the same constraint.
 
-| Method | Path                       | Auth    | Limiter | Notes                                                                  |
-| ------ | -------------------------- | ------- | ------- | ---------------------------------------------------------------------- |
+| Method | Path                        | Auth    | Limiter | Notes                                                                                                                                                                                                     |
+| ------ | --------------------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET`  | `/users/me/creator-summary` | session | —       | Lifetime totals behind `/studio/analytics`. **Zero, not null**, for a creator with no `creator_stats` row — see the service for why this is the opposite call to `/me/watch-time` and why both are right. |
-| `GET`  | `/users/me/video-analytics` | session | —       | Per-video counters, `?page&limit` only. ⚠️ **No `?sort=`** — `video_stats` has no index to order by, and the query schema is `.strict()`, so sending one is a `422`. |
-| `GET`  | `/users/me/video-comments`  | session | —       | Every comment across the caller's own videos, newest first — the data behind `/studio/comments`. |
+| `GET`  | `/users/me/video-analytics` | session | —       | Per-video counters, `?page&limit` only. ⚠️ **No `?sort=`** — `video_stats` has no index to order by, and the query schema is `.strict()`, so sending one is a `422`.                                      |
+| `GET`  | `/users/me/video-comments`  | session | —       | Every comment across the caller's own videos, newest first — the data behind `/studio/comments`.                                                                                                          |
 
 **THE COUNTERS ARE QATOTO-SIDE.** A YouTube-hosted video's own view count lives in that creator's
 YouTube Studio; these count watching that happened HERE, through the §3.3 beacon. Rendering one as
@@ -1254,17 +1254,17 @@ cron fires a `-tick` queue, the tick quantizes `now` to a UTC boundary and enque
 with an explicit `asOf` plus an idempotency key derived from it. This is the only place in the
 domain where `new Date()` is called.
 
-| Job                                      | Cron               | Why this slot                                                                              |
-| ---------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------ |
-| `recompute-video-durations`              | `08 1 * * *`       | must precede quality — completion needs a denominator                                      |
-| `recompute-video-quality-scores`         | `25 1 * * *`       | after durations                                                                            |
-| `recompute-platform-category-popularity` | `40 1 * * *`       | after quality; feeds cold start                                                            |
-| `recompute-user-affinities`              | `50 1 * * *`       | after popularity                                                                           |
-| `recompute-trending-videos`              | `18 * * * *`       | **hourly.** A "trending" chip recomputed nightly is a lie about what it says.              |
-| `recompute-trending-searches`            | `28 * * * *`       | **hourly.** Prunes `search_query_log` past 30 days UNCONDITIONALLY, then publishes ≤5 terms with ≥5 distinct weekly fingerprints in 7 days, minus suppressions |
-| `verify-youtube-video`                   | on demand, backoff | §8.3 deferred verification                                                                 |
-| `revalidate-youtube-embeds`              | `10 5 * * *`       | backstop for §8.2                                                                          |
-| `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` dropped at 90. **Dry-run by default** — see below |
+| Job                                      | Cron               | Why this slot                                                                                                                                                                                       |
+| ---------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `recompute-video-durations`              | `08 1 * * *`       | must precede quality — completion needs a denominator                                                                                                                                               |
+| `recompute-video-quality-scores`         | `25 1 * * *`       | after durations                                                                                                                                                                                     |
+| `recompute-platform-category-popularity` | `40 1 * * *`       | after quality; feeds cold start                                                                                                                                                                     |
+| `recompute-user-affinities`              | `50 1 * * *`       | after popularity                                                                                                                                                                                    |
+| `recompute-trending-videos`              | `18 * * * *`       | **hourly.** A "trending" chip recomputed nightly is a lie about what it says.                                                                                                                       |
+| `recompute-trending-searches`            | `28 * * * *`       | **hourly.** Prunes `search_query_log` past 30 days UNCONDITIONALLY, then publishes ≤5 terms with ≥5 distinct weekly fingerprints in 7 days, minus suppressions                                      |
+| `verify-youtube-video`                   | on demand, backoff | §8.3 deferred verification                                                                                                                                                                          |
+| `revalidate-youtube-embeds`              | `10 5 * * *`       | backstop for §8.2                                                                                                                                                                                   |
+| `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` dropped at 90. **Dry-run by default** — see below                                                                                                          |
 | `publish-scheduled-videos`               | `* * * * *`        | the `scheduled` → `published` hop (STUDIO §4). **Every minute, deliberately**: a creator who set 09:00 does not accept 09:59, and the sweep is one indexed range scan over rows whose time has come |
 
 > **TRENDING TAGS RIDE ON `recompute-trending-videos`; THEY ARE NOT A JOB (2026-09-28).** The

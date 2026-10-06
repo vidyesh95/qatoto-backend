@@ -383,6 +383,6 @@ basis points, ships at zero here per §10.
    amount field to edit on any body. Post a `destinationAccountId`, a `platformFeeInCents` and a
    `status`; each must be a `422` from `.strict()`, not a silent overwrite.
 5. **Four-eyes test.** Request and approve a release as the same user → `422
-SELF_APPROVAL_FORBIDDEN`. Grant yourself the approving role and retry → refused.
+   SELF_APPROVAL_FORBIDDEN`. Grant yourself the approving role and retry → refused.
 6. **Replay test.** Deliver the same settlement event twice; the second must return success and
    change no balance.

@@ -108,13 +108,13 @@ and these scripts:
 }
 ```
 
-| Script                           | Does                                                                                 |
-| -------------------------------- | ------------------------------------------------------------------------------------ |
-| `dev`                            | Auto-restarts on save, runs TS directly via `tsx` — no build step.                   |
-| `build`                          | `tsc` → plain JS in `dist/` for deploy.                                              |
+| Script                           | Does                                                                                                                                                                                                                   |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dev`                            | Auto-restarts on save, runs TS directly via `tsx` — no build step.                                                                                                                                                     |
+| `build`                          | `tsc` → plain JS in `dist/` for deploy.                                                                                                                                                                                |
 | `db:generate`                    | Diffs `src/db/schema.ts` against the newest snapshot in `drizzle/meta/` and writes the SQL, the next snapshot and the journal entry. **Broken for migrations 0126–0146 and repaired by the `0146` baseline — see §6.** |
-| `db:migrate`                     | Applies pending migrations to Postgres.                                              |
-| `db:backfill-*` / `db:cleanup-*` | One-off / cron maintenance scripts — see §11 and BACKEND_STRUCTURE §5g.              |
+| `db:migrate`                     | Applies pending migrations to Postgres.                                                                                                                                                                                |
+| `db:backfill-*` / `db:cleanup-*` | One-off / cron maintenance scripts — see §11 and BACKEND_STRUCTURE §5g.                                                                                                                                                |
 
 > **Changed from the old flow:** the schema is **not** generated from `auth.ts` by the
 > Better Auth CLI anymore. `src/db/schema.ts` is committed and edited by hand, and `db:generate`
@@ -169,8 +169,10 @@ TCP keepalives.
 
 ```ts
 import { readFileSync } from "node:fs";
+
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+
 import { config } from "#src/config/index.js";
 import * as schema from "#src/db/schema.js";
 
@@ -211,6 +213,7 @@ import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { anonymous, emailOTP } from "better-auth/plugins";
+
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
@@ -306,6 +309,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import logger from "morgan";
+
 import { config } from "#src/config/index.js";
 import { auth } from "#src/lib/auth.js";
 // ... requestId, error/not-found handlers, routers ...
@@ -435,7 +439,7 @@ Tables (auth-owned + the identity columns/table we own):
 >    migration does not make it pending, because pending-ness is decided by `created_at` alone.
 > 2. **The only value that matters is the ledger's MAXIMUM `created_at`.** If it ever moves
 >    backwards — a deleted top row, or a hand-inserted row stamped with `now()` instead of the
->    journal's `when` — then *everything after that point re-runs*, against objects that already
+>    journal's `when` — then _everything after that point re-runs_, against objects that already
 >    exist. That is the shape of the failure recorded below.
 > 3. Content-hash drift is real and worth avoiding, but it is **not** what selects migrations. A
 >    changed hash affects the record, not the run.
@@ -446,14 +450,14 @@ Tables (auth-owned + the identity columns/table we own):
 >
 > **MEASURED 2026-08-31, after `0159` was applied:**
 >
-> | | |
-> | --- | --- |
-> | `drizzle/meta/_journal.json` entries | 160 (`0000`–`0159`), `when` values monotonically increasing |
-> | rows in `drizzle.__drizzle_migrations` | 159 |
-> | journal entries with **no** ledger row | **2** — `0147_video_moderation_notification_enums`, `0149_anime_hero_and_series_slug` |
-> | ledger rows matching **no** journal entry | **1** — `created_at = 2026-08-29T11:50:36.499Z`, between `0153` and `0154` |
-> | ledger `max(created_at)` | `1788190794631` — exactly `0159`'s `when`, and exactly the journal max |
-> | **journal entries the migrator would apply** | **0 — `db:migrate` is a clean no-op today** |
+> |                                              |                                                                                       |
+> | -------------------------------------------- | ------------------------------------------------------------------------------------- |
+> | `drizzle/meta/_journal.json` entries         | 160 (`0000`–`0159`), `when` values monotonically increasing                           |
+> | rows in `drizzle.__drizzle_migrations`       | 159                                                                                   |
+> | journal entries with **no** ledger row       | **2** — `0147_video_moderation_notification_enums`, `0149_anime_hero_and_series_slug` |
+> | ledger rows matching **no** journal entry    | **1** — `created_at = 2026-08-29T11:50:36.499Z`, between `0153` and `0154`            |
+> | ledger `max(created_at)`                     | `1788190794631` — exactly `0159`'s `when`, and exactly the journal max                |
+> | **journal entries the migrator would apply** | **0 — `db:migrate` is a clean no-op today**                                           |
 >
 > **The SCHEMA is correct; only the bookkeeping is inaccurate.** Every object those two unrecorded
 > migrations create was confirmed present: the `redirected_to_source` label on
@@ -564,6 +568,7 @@ For **your own** protected routes, ask Better Auth who the user is —
 
 ```ts
 import { fromNodeHeaders } from "better-auth/node";
+
 import { auth } from "#src/lib/auth.js";
 
 export async function requireAuth(req, res, next) {
@@ -626,7 +631,7 @@ JS; the browser attaches it automatically.
 - **Login:** `POST /api/auth/sign-in/email { email, password, rememberMe }`.
 - **OAuth:** `sign-in/social` (Google/GitHub) — verified-email match links onto the
   existing user; a link never overwrites a user-set name/photo. `allowDifferentEmails:
-true` also lets a **signed-in** user link a trusted provider on a different email
+  true` also lets a **signed-in** user link a trusted provider on a different email
   (session is the trust anchor — no sessionless auto-merge).
 - **Forgot password:** `send-verification-otp { email, type: "forget-password" }` →
   `email-otp/reset-password { email, otp, password }`. No custom endpoint needed.
@@ -651,10 +656,10 @@ Add `passkeyClient` and `inferAdditionalFields` so the client type includes
 `session.user.handle`:
 
 ```ts
+import { passkeyClient } from "@better-auth/passkey/client";
+import { emailOTPClient, inferAdditionalFields } from "better-auth/client/plugins";
 // src/lib/auth-client.ts (frontend)
 import { createAuthClient } from "better-auth/react";
-import { emailOTPClient, inferAdditionalFields } from "better-auth/client/plugins";
-import { passkeyClient } from "@better-auth/passkey/client";
 
 export const authClient = createAuthClient({
     baseURL: "http://localhost:8000",
@@ -743,7 +748,7 @@ Each step is a small, runnable win.
 - **Shared rate-limit store for prod.** Both limiters are **in-memory** (per-process).
   Multi-instance / serverless lets attackers round-robin instances → move to a shared
   store: Express limiters → `rate-limit-redis`; Better Auth → `rateLimit.storage:
-"database"` (adds a `rateLimit` table) or `"secondary-storage"`.
+  "database"` (adds a `rateLimit` table) or `"secondary-storage"`.
 - **Lock down `GET /users` / `GET /users/:id`** — currently public list/read endpoints.
 
 ### Already done: OTP / auth rate limiting

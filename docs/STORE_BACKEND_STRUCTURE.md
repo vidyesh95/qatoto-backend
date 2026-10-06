@@ -195,7 +195,7 @@ them; the buyer's counterparty on any such engagement is the **provider organiza
 platform. Three consequences bind the backend:
 
 - **A provider-sourced number is the provider's.** It travels with the identity of whoever quoted
-  it, and the wire shape must make rendering it *without* that identity impossible rather than
+  it, and the wire shape must make rendering it _without_ that identity impossible rather than
   merely discouraged — the mechanism A13 already established for declared-versus-measured stats.
   §19.9's `providerQuote` is the freight instance of this.
 - **A quote is not a booking.** Rating from a card reserves nothing, confers no capacity, and
@@ -466,7 +466,7 @@ exists to order things users can actually see.
 **A pending request does not block the listing.** The seller publishes immediately, the product parks
 in `misc`, and `product.pendingCategoryRequestId` points back at the request. That column is the
 **only** link, and it is what makes approval surgical: the verdict rehomes the products belonging to
-*this* request and leaves genuine `misc` listings alone. Repointing by `WHERE category_id = misc`
+_this_ request and leaves genuine `misc` listings alone. Repointing by `WHERE category_id = misc`
 would sweep up unrelated sellers' products, so no code path may do it.
 
 Five rules the shipped surface enforces, each of which a future edit will be tempted to relax:
@@ -481,7 +481,7 @@ Five rules the shipped surface enforces, each of which a future edit will be tem
   slug is a public URL identity — linked and indexed the moment the category is published — and a
   category that needs a different one is a new category.
 - **The moderator chooses the slug, not the requester.** It exists only on the approve arm of the
-  verdict, which is a discriminated union: a rejection *requires* a note, an approval does not.
+  verdict, which is a discriminated union: a rejection _requires_ a note, an approval does not.
 - **Route order is load-bearing.** Express matches in declaration order, so the literal
   `/admin/categories/reorder` must precede `/admin/categories/:categoryId` or every reorder 404s with
   `"reorder"` captured as a category id.
@@ -528,15 +528,15 @@ organization trade state, and category state must all be eligible.
 `commerce_provider_kind`
 
 - seeded values:
-  - `freight_forwarder`
-  - `logistics_operator`
-  - `customs_broker`
-  - `insurance_provider`
-  - `inspection_agency`
-  - `testing_certification_lab`
-  - `marketing_agency`
-  - `warehouse_provider`
-  - `foreign_exchange_facilitator`
+    - `freight_forwarder`
+    - `logistics_operator`
+    - `customs_broker`
+    - `insurance_provider`
+    - `inspection_agency`
+    - `testing_certification_lab`
+    - `marketing_agency`
+    - `warehouse_provider`
+    - `foreign_exchange_facilitator`
 
 `commerce_provider_kind_link` is many-to-many because one verified organization may operate, for
 example, freight forwarding and warehousing. Verification is recorded per kind, not globally.
@@ -604,7 +604,7 @@ ownership, and all required service-specific fields.
 `commerce_quote`
 
 - RFQ, provider organization, status: `draft | submitted | superseded | accepted | declined |
-withdrawn | expired`
+  withdrawn | expired`
 - latest revision number, timestamps
 - unique provider per RFQ unless the buyer explicitly re-invites after closure
 
@@ -652,7 +652,7 @@ quantity, and selected variant/options only. It does not store an authoritative 
 - buyer and one counterparty organization
 - source: `direct_checkout | accepted_quote`
 - `state`: `pending_payment | payment_processing | confirmed | in_fulfillment |
-partially_completed | completed | cancelled | disputed`
+  partially_completed | completed | cancelled | disputed`
 - immutable legal names, addresses, currency, totals, terms, and accepted quote revision
 - `incoterm_snapshot` carries the same `commerce_incoterm` enum as the revision it is copied from
   (Phase 23, `0116`, A40). It carried NO constraint of any kind before that — a snapshot less
@@ -747,7 +747,7 @@ merely because an order row exists.
 
 - accepted service quote/order line, provider organization, buyer organization
 - `state`: `awaiting_provider | scheduled | in_progress | awaiting_buyer | completed |
-cancelled | disputed`
+  cancelled | disputed`
 - independent timestamps and deliverable acceptance
 
 `commerce_order_service_link`
@@ -880,19 +880,19 @@ organization member IDs, moderation notes, and storage object keys.
 
 ### 6.1 Organizations and providers
 
-| Method | Route                                                       | Result                                  |
-| ------ | ----------------------------------------------------------- | --------------------------------------- |
-| POST   | `/commerce/organizations`                                   | Create pending organization; idempotent |
-| GET    | `/commerce/organizations/mine`                              | Membership-scoped organizations         |
+| Method | Route                                                       | Result                                                          |
+| ------ | ----------------------------------------------------------- | --------------------------------------------------------------- |
+| POST   | `/commerce/organizations`                                   | Create pending organization; idempotent                         |
+| GET    | `/commerce/organizations/mine`                              | Membership-scoped organizations                                 |
 | PATCH  | `/commerce/organizations/:organizationId`                   | Authorized profile update; `countryCode` completes an A37 shell |
-| POST   | `/commerce/organizations/:organizationId/members`           | Invite member                           |
-| PATCH  | `/commerce/organizations/:organizationId/members/:memberId` | Role/state update                       |
-| POST   | `/commerce/providers/:organizationId/profile`               | Create provider profile                 |
-| POST   | `/commerce/providers/:organizationId/offerings`             | Create draft offering                   |
-| PATCH  | `/commerce/service-offerings/:offeringId`                   | Update owned draft                      |
-| POST   | `/commerce/service-offerings/:offeringId/submit`            | Submit for moderation                   |
-| GET    | `/commerce/service-offerings/:offeringId/coverage`          | Owner's lanes, any state + `isEditable` |
-| POST   | `/commerce/providers/:organizationId/evidence`              | Upload verification evidence            |
+| POST   | `/commerce/organizations/:organizationId/members`           | Invite member                                                   |
+| PATCH  | `/commerce/organizations/:organizationId/members/:memberId` | Role/state update                                               |
+| POST   | `/commerce/providers/:organizationId/profile`               | Create provider profile                                         |
+| POST   | `/commerce/providers/:organizationId/offerings`             | Create draft offering                                           |
+| PATCH  | `/commerce/service-offerings/:offeringId`                   | Update owned draft                                              |
+| POST   | `/commerce/service-offerings/:offeringId/submit`            | Submit for moderation                                           |
+| GET    | `/commerce/service-offerings/:offeringId/coverage`          | Owner's lanes, any state + `isEditable`                         |
+| POST   | `/commerce/providers/:organizationId/evidence`              | Upload verification evidence                                    |
 
 Moderation routes live under the existing platform capability model and are not granted by an
 organization role.
@@ -933,70 +933,70 @@ RFQ, validates expiry and authority, then creates order snapshots atomically.
 
 ### 6.3 Cart, checkout, orders, and payments
 
-| Method | Route                                       | Result                                                    |
-| ------ | ------------------------------------------- | --------------------------------------------------------- |
-| GET    | `/commerce/cart`                            | Active organization cart with server-priced projection    |
-| PUT    | `/commerce/cart/items/:productId`           | Set desired quantity                                      |
-| DELETE | `/commerce/cart/items/:productId`           | Remove line                                               |
+| Method | Route                                       | Result                                                                                                      |
+| ------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| GET    | `/commerce/cart`                            | Active organization cart with server-priced projection                                                      |
+| PUT    | `/commerce/cart/items/:productId`           | Set desired quantity                                                                                        |
+| DELETE | `/commerce/cart/items/:productId`           | Remove line                                                                                                 |
 | POST   | `/commerce/checkout/prepare`                | Validate cart, reserve stock, return authoritative totals. Optional `items` scopes it to named lines (§4.8) |
-| POST   | `/commerce/checkout/confirm`                | Create checkout group and counterparty orders             |
-| GET    | `/commerce/orders`                          | Buyer orders, cursor paginated                            |
-| GET    | `/commerce/orders/:orderId`                 | Authorized order detail                                   |
-| GET    | `/commerce/provider/orders`                 | Seller/provider work queue                                |
-| POST   | `/commerce/orders/:orderId/cancel`          | Policy-checked cancellation                               |
-| POST   | `/commerce/orders/:orderId/payment-intents` | Create/reuse payment intent                               |
-| GET    | `/commerce/payments/:paymentIntentId`       | Poll payment state                                        |
-| POST   | `/commerce/orders/:orderId/refunds`         | Authorized refund request                                 |
+| POST   | `/commerce/checkout/confirm`                | Create checkout group and counterparty orders                                                               |
+| GET    | `/commerce/orders`                          | Buyer orders, cursor paginated                                                                              |
+| GET    | `/commerce/orders/:orderId`                 | Authorized order detail                                                                                     |
+| GET    | `/commerce/provider/orders`                 | Seller/provider work queue                                                                                  |
+| POST   | `/commerce/orders/:orderId/cancel`          | Policy-checked cancellation                                                                                 |
+| POST   | `/commerce/orders/:orderId/payment-intents` | Create/reuse payment intent                                                                                 |
+| GET    | `/commerce/payments/:paymentIntentId`       | Poll payment state                                                                                          |
+| POST   | `/commerce/orders/:orderId/refunds`         | Authorized refund request                                                                                   |
 
 All create/confirm/payment/refund calls require `Idempotency-Key`. A `202` means processing has
 started, not that payment, booking, testing, or settlement succeeded.
 
 ### 6.4 Fulfillment, messages, and trust
 
-| Method | Route                                                     | Result                                                   |
-| ------ | --------------------------------------------------------- | -------------------------------------------------------- |
-| POST   | `/commerce/orders/:orderId/shipments`                     | Seller creates shipment plan                             |
-| POST   | `/commerce/shipments/:shipmentId/events`                  | Authorized append-only event                             |
-| GET    | `/commerce/service-engagements`                           | Buyer/provider engagement list                           |
-| POST   | `/commerce/service-engagements/:engagementId/transitions` | Valid state transition                                   |
-| POST   | `/commerce/threads`                                       | Create or return scoped thread                           |
-| GET    | `/commerce/threads/:threadId/messages`                    | Cursor-paginated authorized messages                     |
-| POST   | `/commerce/threads/:threadId/messages`                    | Append message                                           |
-| POST   | `/commerce/orders/:orderId/disputes`                      | Open dispute with idempotency                            |
-| POST   | `/commerce/completions/:completionId/reviews`             | Verified review                                          |
-| POST   | `/commerce/reports`                                       | Report product/review/question/answer/organization — A12 |
-| GET    | `/commerce/admin/content-reports`                         | Moderation queue — A12                                   |
-| POST   | `/commerce/admin/content-reports/:reportId/decisions`     | Action or dismiss a report — A12                         |
-| POST   | `/commerce/admin/content/restore`                         | Un-hide content — A12                                    |
-| GET    | `/commerce/admin/withdrawn-answers`                       | Withdrawn answers, from org audit chains — A12           |
-| GET    | `/commerce/admin/withdrawn-questions`                     | Withdrawn questions, from seller org audit chains — A12  |
-| POST   | `/commerce/products/:productId/inquiries`                 | Open or return a pre-sales inquiry — A14                 |
-| GET    | `/commerce/inquiries`                                     | Buyer/seller inquiry inbox — A14                         |
-| GET    | `/commerce/completions`                                   | Buyer completions + `hasReview` — A22                    |
-| PUT    | `/commerce/answers/:answerId/helpful`                     | Endorse an answer — A24                                  |
-| DELETE | `/commerce/answers/:answerId/helpful`                     | Withdraw the endorsement — A24                           |
-| GET    | `/commerce/disputes`                                      | Participant-scoped dispute list — A28                    |
-| GET    | `/commerce/disputes/:disputeId`                           | One dispute, with its timeline; 404 to a non-party — A28 |
-| GET    | `/commerce/provider/shipments`                            | Cross-order logistics queue — A29                        |
-| POST   | `/commerce/documents`                                     | Upload a trade attachment; 202, `pending_scan` — A30     |
-| GET    | `/commerce/documents/:documentId`                         | Decrypt and stream an authorized attachment — A30        |
-| GET    | `/commerce/threads`                                       | Thread inbox; `?resourceKind=`. Frees settlement — A38   |
-| GET    | `/commerce/refunds`                                       | Refunds on the caller's orders; `?orderId=` — A38        |
-| GET    | `/commerce/documents`                                     | The caller's own trade attachments, metadata only — A38  |
-| GET    | `/commerce/shipments`                                     | The buyer's inbound queue; A29's twin — A38              |
-| GET    | `/commerce/provider/quotes`                               | A provider's own bids, drafts included — A38             |
-| GET    | `/commerce/seller/questions`                              | Cross-listing question queue; `?unansweredOnly=` — A38   |
-| GET    | `/commerce/seller/reviews`                                | The seller's review inbox; `?unreplied=` — A38           |
-| PATCH  | `/commerce/reviews/:reviewId`                             | The author's ONE edit, within 30 days. No DELETE — A38   |
-| POST   | `/commerce/disputes/:disputeId/notes`                     | Either party speaks, while open; 404 to a non-party — A40 |
-| GET    | `/commerce/shipments/:shipmentId`                         | One shipment WITH ITS LEGS — the only read that returns them |
-| POST   | `/commerce/shipment-legs/:legId/commands`                 | `book`/`depart`/`arrive`/`complete`/`report_exception`/`cancel` |
-| GET    | `/commerce/shipment-legs/:legId/events`                   | One leg's history; finer-grained than its shipment's      |
-| POST   | `/commerce/service-engagements/:engagementId/commands`    | Phase 6 engagement command rail                           |
-| POST   | `/commerce/shipments/:shipmentId/legs`                    | Add legs to an existing shipment; counterparty only — A43 |
-| —      | `product.sourcing_quote_product_line_id`                  | The seller's cost basis; no new route — A44                |
-| —      | `commerce_checkout_prepare.requested_freight_mode`        | The buyer's requested mode; rides `checkout/prepare` — A45 |
-| POST   | `/commerce/shipment-legs/:legId/assignment`               | Attach or detach the logistics engagement; `null` detaches — A43 |
+| Method | Route                                                     | Result                                                                 |
+| ------ | --------------------------------------------------------- | ---------------------------------------------------------------------- |
+| POST   | `/commerce/orders/:orderId/shipments`                     | Seller creates shipment plan                                           |
+| POST   | `/commerce/shipments/:shipmentId/events`                  | Authorized append-only event                                           |
+| GET    | `/commerce/service-engagements`                           | Buyer/provider engagement list                                         |
+| POST   | `/commerce/service-engagements/:engagementId/transitions` | Valid state transition                                                 |
+| POST   | `/commerce/threads`                                       | Create or return scoped thread                                         |
+| GET    | `/commerce/threads/:threadId/messages`                    | Cursor-paginated authorized messages                                   |
+| POST   | `/commerce/threads/:threadId/messages`                    | Append message                                                         |
+| POST   | `/commerce/orders/:orderId/disputes`                      | Open dispute with idempotency                                          |
+| POST   | `/commerce/completions/:completionId/reviews`             | Verified review                                                        |
+| POST   | `/commerce/reports`                                       | Report product/review/question/answer/organization — A12               |
+| GET    | `/commerce/admin/content-reports`                         | Moderation queue — A12                                                 |
+| POST   | `/commerce/admin/content-reports/:reportId/decisions`     | Action or dismiss a report — A12                                       |
+| POST   | `/commerce/admin/content/restore`                         | Un-hide content — A12                                                  |
+| GET    | `/commerce/admin/withdrawn-answers`                       | Withdrawn answers, from org audit chains — A12                         |
+| GET    | `/commerce/admin/withdrawn-questions`                     | Withdrawn questions, from seller org audit chains — A12                |
+| POST   | `/commerce/products/:productId/inquiries`                 | Open or return a pre-sales inquiry — A14                               |
+| GET    | `/commerce/inquiries`                                     | Buyer/seller inquiry inbox — A14                                       |
+| GET    | `/commerce/completions`                                   | Buyer completions + `hasReview` — A22                                  |
+| PUT    | `/commerce/answers/:answerId/helpful`                     | Endorse an answer — A24                                                |
+| DELETE | `/commerce/answers/:answerId/helpful`                     | Withdraw the endorsement — A24                                         |
+| GET    | `/commerce/disputes`                                      | Participant-scoped dispute list — A28                                  |
+| GET    | `/commerce/disputes/:disputeId`                           | One dispute, with its timeline; 404 to a non-party — A28               |
+| GET    | `/commerce/provider/shipments`                            | Cross-order logistics queue — A29                                      |
+| POST   | `/commerce/documents`                                     | Upload a trade attachment; 202, `pending_scan` — A30                   |
+| GET    | `/commerce/documents/:documentId`                         | Decrypt and stream an authorized attachment — A30                      |
+| GET    | `/commerce/threads`                                       | Thread inbox; `?resourceKind=`. Frees settlement — A38                 |
+| GET    | `/commerce/refunds`                                       | Refunds on the caller's orders; `?orderId=` — A38                      |
+| GET    | `/commerce/documents`                                     | The caller's own trade attachments, metadata only — A38                |
+| GET    | `/commerce/shipments`                                     | The buyer's inbound queue; A29's twin — A38                            |
+| GET    | `/commerce/provider/quotes`                               | A provider's own bids, drafts included — A38                           |
+| GET    | `/commerce/seller/questions`                              | Cross-listing question queue; `?unansweredOnly=` — A38                 |
+| GET    | `/commerce/seller/reviews`                                | The seller's review inbox; `?unreplied=` — A38                         |
+| PATCH  | `/commerce/reviews/:reviewId`                             | The author's ONE edit, within 30 days. No DELETE — A38                 |
+| POST   | `/commerce/disputes/:disputeId/notes`                     | Either party speaks, while open; 404 to a non-party — A40              |
+| GET    | `/commerce/shipments/:shipmentId`                         | One shipment WITH ITS LEGS — the only read that returns them           |
+| POST   | `/commerce/shipment-legs/:legId/commands`                 | `book`/`depart`/`arrive`/`complete`/`report_exception`/`cancel`        |
+| GET    | `/commerce/shipment-legs/:legId/events`                   | One leg's history; finer-grained than its shipment's                   |
+| POST   | `/commerce/service-engagements/:engagementId/commands`    | Phase 6 engagement command rail                                        |
+| POST   | `/commerce/shipments/:shipmentId/legs`                    | Add legs to an existing shipment; counterparty only — A43              |
+| —      | `product.sourcing_quote_product_line_id`                  | The seller's cost basis; no new route — A44                            |
+| —      | `commerce_checkout_prepare.requested_freight_mode`        | The buyer's requested mode; rides `checkout/prepare` — A45             |
+| POST   | `/commerce/shipment-legs/:legId/assignment`               | Attach or detach the logistics engagement; `null` detaches — A43       |
 | GET    | `/commerce/sourcing/quote-lines`                          | The caller's ACCEPTED quote product lines; the cost-basis picker — A46 |
 
 ⚠️ **THE FIRST FOUR ROWS ABOVE ARE NOT NEW.** They shipped with Phase 6 and this table never listed
@@ -1023,7 +1023,6 @@ test, so a wrong-kind engagement belonging to another order answers `PROVIDER_KI
 than `NOT_FOUND` — a small existence leak. It is kept because reordering it would change the status
 code `POST /orders/:orderId/shipments` already returns, which is a contract change and not a
 refactor.
-
 
 **`paymentIntentId` joined both order projections** rather than becoming a list route. An order
 carries at most one live intent — `commerce_payment_intent_active_order_uidx` is what makes that
@@ -1092,15 +1091,15 @@ unnecessary.
 Certifications sit on `commerce-seller-profile.routes.ts` rather than here, and three of them are
 newer than Phase 17:
 
-| Method | Route                                                                          | Result                                                    |
-| ------ | ------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| GET    | `/commerce/organizations/:organizationId/seller-profile`                       | The owner's own read; visibility is not consulted          |
-| GET    | `/commerce/organizations/:organizationId/certifications`                       | The seller's list, every state                             |
-| POST   | `/commerce/organizations/:organizationId/certifications`                       | Claim + evidence, one multipart. **Idempotency-Key**, 201  |
-| GET    | `/commerce/organizations/:organizationId/certifications/:id/evidence`          | The certificate itself, decrypted and streamed             |
-| POST   | `/commerce/organizations/:organizationId/certifications/:id/withdraw`          | The seller retracts its own. **Idempotency-Key**           |
-| GET    | `/commerce/admin/certifications`                                               | The moderation queue, oldest first, `?state=` and a cursor |
-| POST   | `/commerce/admin/certifications/:certificationId/decision`                     | `approve` / `reject` with a reason. **Idempotency-Key**    |
+| Method | Route                                                                 | Result                                                     |
+| ------ | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| GET    | `/commerce/organizations/:organizationId/seller-profile`              | The owner's own read; visibility is not consulted          |
+| GET    | `/commerce/organizations/:organizationId/certifications`              | The seller's list, every state                             |
+| POST   | `/commerce/organizations/:organizationId/certifications`              | Claim + evidence, one multipart. **Idempotency-Key**, 201  |
+| GET    | `/commerce/organizations/:organizationId/certifications/:id/evidence` | The certificate itself, decrypted and streamed             |
+| POST   | `/commerce/organizations/:organizationId/certifications/:id/withdraw` | The seller retracts its own. **Idempotency-Key**           |
+| GET    | `/commerce/admin/certifications`                                      | The moderation queue, oldest first, `?state=` and a cursor |
+| POST   | `/commerce/admin/certifications/:certificationId/decision`            | `approve` / `reject` with a reason. **Idempotency-Key**    |
 
 Literal `/factories/inquiries/*` paths are declared **before** `/factories/:factorySlug/inquiries`,
 which is the same depth; `commerce-factories.routes.order.test.ts` asserts it.
@@ -1156,17 +1155,17 @@ addressing an owner gets.
 Per A35's rule: a route that ships without a row here is invisible to the next reader, so the rows
 land in the same change as the routes.
 
-| Method      | Route                                                          | Result                                                                                                      |
-| ----------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| POST        | `/commerce/admin/freight-rate-cards`                           | Create a lane card **with its bands and its volumetric divisor**; supersedes the incumbent. Idempotency-Key |
-| PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId`               | `shorten_window` or `withdraw` — narrowing only. Idempotency-Key                                            |
-| POST        | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Append one band; refused once the card is in force. Idempotency-Key                                         |
-| PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Replace the whole ordered set; same guard. Idempotency-Key                                                  |
-| POST        | `/commerce/admin/customs-dwell-estimates`                      | Record a dwell figure; closes the open-ended row on that scope. Idempotency-Key                             |
-| PATCH       | `/commerce/admin/customs-dwell-estimates/:dwellEstimateId`     | Retire it by closing its window. Idempotency-Key                                                            |
-| GET         | `/commerce/admin/freight-rate-cards`                           | §19.10. Filters lane, `mode`, provider, `state`; rows are the write projection plus `bandsEditable`         |
-| GET         | `/commerce/admin/customs-dwell-estimates`                      | §19.10. Same gate. `any` selects the NULL-scoped rows; `openOnly` narrows to open windows                   |
-| GET         | `/commerce/orders/:orderId/arrival-window`                     | §19.4's projection. Optional `?mode=`; order membership required, `404` otherwise                           |
+| Method | Route                                                      | Result                                                                                                      |
+| ------ | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| POST   | `/commerce/admin/freight-rate-cards`                       | Create a lane card **with its bands and its volumetric divisor**; supersedes the incumbent. Idempotency-Key |
+| PATCH  | `/commerce/admin/freight-rate-cards/:rateCardId`           | `shorten_window` or `withdraw` — narrowing only. Idempotency-Key                                            |
+| POST   | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`    | Append one band; refused once the card is in force. Idempotency-Key                                         |
+| PATCH  | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`    | Replace the whole ordered set; same guard. Idempotency-Key                                                  |
+| POST   | `/commerce/admin/customs-dwell-estimates`                  | Record a dwell figure; closes the open-ended row on that scope. Idempotency-Key                             |
+| PATCH  | `/commerce/admin/customs-dwell-estimates/:dwellEstimateId` | Retire it by closing its window. Idempotency-Key                                                            |
+| GET    | `/commerce/admin/freight-rate-cards`                       | §19.10. Filters lane, `mode`, provider, `state`; rows are the write projection plus `bandsEditable`         |
+| GET    | `/commerce/admin/customs-dwell-estimates`                  | §19.10. Same gate. `any` selects the NULL-scoped rows; `openOnly` narrows to open windows                   |
+| GET    | `/commerce/orders/:orderId/arrival-window`                 | §19.4's projection. Optional `?mode=`; order membership required, `404` otherwise                           |
 
 All six writes **and both admin reads** are gated on `moderate_commerce` **checked in-service**,
 before any id or filter value is read, so neither the capability nor a card id is probeable from the
@@ -1196,7 +1195,8 @@ Responses use canonical projections and stable tagged errors:
 
 ```ts
 type CommerceResult<TValue, TError> =
-    { success: true; value: TValue } | { success: false; error: TError };
+    | { success: true; value: TValue }
+    | { success: false; error: TError };
 
 type QuoteAcceptanceError =
     | { type: "NOT_FOUND" }
@@ -1440,46 +1440,48 @@ Scheduled jobs:
 3. The client polls `GET /commerce/payments/:paymentIntentId` until `state === "requires_action"`
    and `providerPaymentRef` is set, then opens Checkout:
 
-   ```ts
-   // Next.js: <Script src="https://checkout.razorpay.com/v1/checkout.js" />
-   // NEXT_PUBLIC_RAZORPAY_KEY_ID only. The key SECRET never reaches the browser.
-   const checkout = new window.Razorpay({
-     key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-     order_id: paymentIntent.providerPaymentRef,
-     amount: paymentIntent.amountInCents, // paise; informational — the order fixes the amount
-     currency: paymentIntent.currency,
-     handler: (checkoutResult) =>
-       postJson(`/commerce/payments/${paymentIntent.id}/razorpay-verification`, {
-         razorpayOrderId: checkoutResult.razorpay_order_id,
-         razorpayPaymentId: checkoutResult.razorpay_payment_id,
-         razorpaySignature: checkoutResult.razorpay_signature,
-       }),
-     modal: { ondismiss: () => showMessage("Payment cancelled. You can try again.") },
-   });
-   checkout.on("payment.failed", (failure) => showError(failure.error.description));
-   checkout.open();
-   ```
+    ```ts
+    // Next.js: <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+    // NEXT_PUBLIC_RAZORPAY_KEY_ID only. The key SECRET never reaches the browser.
+    const checkout = new window.Razorpay({
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        order_id: paymentIntent.providerPaymentRef,
+        amount: paymentIntent.amountInCents, // paise; informational — the order fixes the amount
+        currency: paymentIntent.currency,
+        handler: (checkoutResult) =>
+            postJson(`/commerce/payments/${paymentIntent.id}/razorpay-verification`, {
+                razorpayOrderId: checkoutResult.razorpay_order_id,
+                razorpayPaymentId: checkoutResult.razorpay_payment_id,
+                razorpaySignature: checkoutResult.razorpay_signature,
+            }),
+        modal: { ondismiss: () => showMessage("Payment cancelled. You can try again.") },
+    });
+    checkout.on("payment.failed", (failure) => showError(failure.error.description));
+    checkout.open();
+    ```
 
-   A dismissed modal or a declined card leaves the intent `requires_action` (the Razorpay order is
-   `created`/`attempted`), so "try again" reopens Checkout with the SAME `order_id`.
+    A dismissed modal or a declined card leaves the intent `requires_action` (the Razorpay order is
+    `created`/`attempted`), so "try again" reopens Checkout with the SAME `order_id`.
+
 4. `POST /commerce/payments/:paymentIntentId/razorpay-verification` — `requireAuth`, buyer
    organization, paying role (`owner | administrator | buyer | finance`). No `Idempotency-Key`.
    Body is `.strict()` camelCase: `razorpayOrderId` (`order_…`), `razorpayPaymentId` (`pay_…`),
    `razorpaySignature` (64 lowercase hex).
 
-   | Outcome | Status |
-   | --- | --- |
-   | malformed / missing / extra field | 422 |
-   | intent unknown, another org's, or the caller is the counterparty | 404 |
-   | buyer-org member without a paying role | 403 |
-   | not a Razorpay intent, or order id ≠ the intent's `providerPaymentRef` | 409 |
-   | HMAC-SHA256(`order_id|payment_id`, key secret) mismatch — nothing written | 400 |
-   | Razorpay unreachable | 503 |
-   | verified; body `data.state` is `settled`, or still `requires_action` if Razorpay has not marked the order paid | 200 |
+    | Outcome                                                                                                        | Status                                              |
+    | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+    | malformed / missing / extra field                                                                              | 422                                                 |
+    | intent unknown, another org's, or the caller is the counterparty                                               | 404                                                 |
+    | buyer-org member without a paying role                                                                         | 403                                                 |
+    | not a Razorpay intent, or order id ≠ the intent's `providerPaymentRef`                                         | 409                                                 |
+    | HMAC-SHA256(`order_id                                                                                          | payment_id`, key secret) mismatch — nothing written | 400 |
+    | Razorpay unreachable                                                                                           | 503                                                 |
+    | verified; body `data.state` is `settled`, or still `requires_action` if Razorpay has not marked the order paid | 200                                                 |
 
-   **The signature is necessary, not sufficient.** After it verifies, the server re-fetches the
-   order from Razorpay and settles only on `paid`. The client reads `data.state`, and keeps polling
-   `GET /commerce/payments/:id` on `requires_action`.
+    **The signature is necessary, not sufficient.** After it verifies, the server re-fetches the
+    order from Razorpay and settles only on `paid`. The client reads `data.state`, and keeps polling
+    `GET /commerce/payments/:id` on `requires_action`.
+
 5. Backstops: `POST /webhooks/payments/razorpay` (raw body, `X-Razorpay-Signature` =
    HMAC-SHA256(raw body, `RAZORPAY_WEBHOOK_SECRET`); 503 when unconfigured) and
    `reconcileCommercePayments`. Verification, webhook and reconcile all call
@@ -1714,7 +1716,7 @@ Minimum order is 100 paise.
   and A25's organization search document rather than a parallel table set (§16). The directory
   substrate is `store_search_document` where `documentKind = 'organization' AND isEligible`, inner
   joined to `commerce_seller_profile` and narrowed to `businessType IN ('manufacturer',
-'manufacturer_trading')` — a trading company is not a factory.
+  'manufacturer_trading')` — a trading company is not a factory.
 - The three conflicts of §16.2 were resolved first, and all three decisions are recorded:
   **the capability enum widened additively** (`0099`), **a nullable `standardCode`** over a seeded
   eight-value enum beside the free-text certification name (`0100`), and **`site_audited` was given
@@ -1821,7 +1823,7 @@ Three independent pieces, no shared migration:
 
 - ~~`model_number` into `store_search_document` plus an exact-match rank branch — **no migration**~~
   — **SHIPPED, migration `0154`.** The "no migration" claim contradicted this same bullet's own
-  instruction to put the column *into* `store_search_document`; §21.1 records what it cost;
+  instruction to put the column _into_ `store_search_document`; §21.1 records what it cost;
 - `product_selling_state` enum and column, a filter and a facet bucket;
 - `commerce_product_document` on the public object-storage path, with the scan pipeline in front
   of it and the explicit byte cleanup behind it.
@@ -2335,7 +2337,7 @@ basis finds out at invoice time. The MOQ pair is both-or-neither: a bare `500` i
 500 pieces and 500 cartons are different businesses.
 
 `exportMarkets[]` — **and this one needs a decision before a column.** "ISO country codes this factory
-has actually shipped to" is a *derived* claim, computable from settled order delivery addresses. If it
+has actually shipped to" is a _derived_ claim, computable from settled order delivery addresses. If it
 is instead seller-declared it must be labelled declared, per A13's rule that a derived stat and a
 declared stat are visibly different on the wire — which is why the storefront carries `declaredProfile`
 and `measuredMetrics` and nothing else. Pick one and put it in the matching member. An empty array is
@@ -2444,7 +2446,7 @@ Copying a shipped shape is worth more here than a clean-sheet design.
 - `state`: `pending_review | open | answered | locked`
 - `acceptedReplyId` (nullable), `replyCount`, `lastActivityAt`, timestamps
 - `board`: `sourcing | logistics_and_customs | compliance_and_certification |
-payments_and_trade_finance | manufacturing | selling_on_qatoto`
+  payments_and_trade_finance | manufacturing | selling_on_qatoto`
 - queue index `(state, createdAt, id)`; browse index `(board, state, lastActivityAt, id)`
 
 **Six boards, matching the work rather than the org chart**, each mapping to a thing a business gets
@@ -2550,7 +2552,7 @@ response body must be unable to support.
 
 1. **A stated capital range is self-reported and unverified.** Nobody checked. No field, label,
    derived value or aggregate may imply "committed", "funded", "raised", "escrowed" or "available",
-   and the projection labels the figure as declared *in the row*, not in a tooltip a renderer can drop.
+   and the projection labels the figure as declared _in the row_, not in a tooltip a renderer can drop.
    A number that looks audited is worse than no number.
 2. **A profile is not an offer and Qatoto is not a broker.** Listing yourself is not soliciting
    investment; reading a profile is not receiving advice. There is no "invest" affordance, no "matched"
@@ -2588,14 +2590,14 @@ response body must be unable to support.
 **The near-miss, and why it stays a near-miss.** `talent_profile` is already user-scoped with
 availability, visibility, skills and a compensation ask, and it is genuinely close. **Do not extend
 it.** The R&D talent directory reads that table, and a cofounder row landing in "people open to work
-on your project" is a different claim about a different person's intent. Reuse its *shape* — and
+on your project" is a different claim about a different person's intent. Reuse its _shape_ — and
 `talent_profile_skill`'s tag-table pattern for `sectors` — not its rows.
 
 Three projection rules:
 
 - **`capitalRange` is both-or-neither, and the whole object is nullable rather than its fields.** Half
   a range is not "a floor with no ceiling", it is an unanswerable question. `null` means they did not
-  say; it is not zero, and a renderer must show an absence. A blank field is *omitted* from the create
+  say; it is not zero, and a renderer must show an absence. A blank field is _omitted_ from the create
   body, never sent as `0` — `0` for a capital minimum publishes an offer of nothing, and `0` basis
   points publishes an expectation of no stake, which nobody means.
 - **`not_looking` stays visible in the directory** rather than being filtered out. A profile is also a
@@ -2689,7 +2691,7 @@ from. That shipped, and it stands.
 What it cannot express is a **choice**. The mock sheet decomposes the journey into an
 international leg and an inland leg and lets the buyer pick a mode per leg, with a price and a
 duration behind each option. Coverage does not carry either number per mode — it says a provider
-*serves* this lane, not what it *charges* or how long it *takes* by sea versus by air. So the
+_serves_ this lane, not what it _charges_ or how long it _takes_ by sea versus by air. So the
 sheet sums local floats today, which is the client establishing a price, which §0 forbids.
 
 The missing input is not an endpoint. It is **data nobody has bought**: forwarders sell lane
@@ -2746,7 +2748,7 @@ Nothing models this today. `customs_broker` exists as a `commerce_provider_kind`
 offerings carry lead times, but "clearance on this lane for this commodity takes 3–10 days" is
 stored nowhere, and an offering's lead time is the broker's own turnaround, not the port's.
 
-**A domestic lane has no customs leg at all.** That is an *absent* component, not a zero-day one,
+**A domestic lane has no customs leg at all.** That is an _absent_ component, not a zero-day one,
 and §19.4's projection must be able to say which — see the two-facts rule below.
 
 ### 19.4 The arrival window
@@ -2798,7 +2800,7 @@ the client always has something honest to render when `arrivalWindow` is `null` 
 15–25 days after order · shipping and clearance not yet estimated" — rather than an empty state.
 
 **No arrival window before an order exists.** With no clock start there is no calendar, so a
-product page shows *durations* only. This is why the PDP and the order page differ, and it is not
+product page shows _durations_ only. This is why the PDP and the order page differ, and it is not
 an inconsistency.
 
 ### 19.5 Public API
@@ -2818,9 +2820,9 @@ an inconsistency.
 
 - **A rate card produces a range with its provenance, never a single day.** `sourceForwarderName`
   and `validUntil` travel with every option; an expired card is not a price.
-- **An uncovered lane returns an empty `options[]`, never a zero**, and an uncovered *leg* never
+- **An uncovered lane returns an empty `options[]`, never a zero**, and an uncovered _leg_ never
   makes a journey **cheaper**. A15's and A16's rule, unchanged — but read the next bullet with it,
-  because the *shape* that satisfies it changed in Phase 26. Until then this bullet was implemented
+  because the _shape_ that satisfies it changed in Phase 26. Until then this bullet was implemented
   as "an uncovered leg makes the whole journey unpriceable", which was stricter than the rule it
   came from: the guard is against a total that looks complete while a leg is missing, not against
   pricing the legs that priced beside a **named** absence. `journeys[]` still means end to end and
@@ -2849,7 +2851,7 @@ an inconsistency.
 `src/components/home/store/sheets/delivery-sheet.tsx` was **held at `TRANSPORT: mock` against this
 section** — the one store sheet deliberately left unwired. §19.2–§19.4 are now built, so it can be
 wired; with no rate cards loaded it must render the named absences (`unavailableReasons`,
-`unpriceableReasons`, `missingComponents`) rather than a zero or a date. `sections/delivery-cost.tsx` wires against the *existing* A16 estimate and
+`unpriceableReasons`, `missingComponents`) rather than a zero or a date. `sections/delivery-cost.tsx` wires against the _existing_ A16 estimate and
 degrades to the manufacturing lead time plus "shipping to be arranged" when the estimate array is
 empty; it must not render a date or a zero.
 
@@ -2971,14 +2973,14 @@ only ever made about one decision.
 
 #### Behaves as Alibaba does
 
-| This backend | Alibaba |
-| ------------ | ------- |
-| No delivery date until a rated option is selected; lead time plus "shipping to be arranged" until then | Same |
-| Per-mode options carrying a price **and** a transit range | Same — sea, air and express side by side |
-| The buyer selects the mode; the server never picks one | Same |
-| Manufacturing lead time as a range, tied to the quantity band | Same — tiered lead times on the listing |
-| A weight-band ladder with a per-unit rate and a minimum charge | Same — the standard forwarder tariff shape |
-| Provenance and an expiry on every quoted number | Same — Alibaba's quotes carry a validity |
+| This backend                                                                                           | Alibaba                                    |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| No delivery date until a rated option is selected; lead time plus "shipping to be arranged" until then | Same                                       |
+| Per-mode options carrying a price **and** a transit range                                              | Same — sea, air and express side by side   |
+| The buyer selects the mode; the server never picks one                                                 | Same                                       |
+| Manufacturing lead time as a range, tied to the quantity band                                          | Same — tiered lead times on the listing    |
+| A weight-band ladder with a per-unit rate and a minimum charge                                         | Same — the standard forwarder tariff shape |
+| Provenance and an expiry on every quoted number                                                        | Same — Alibaba's quotes carry a validity   |
 
 #### Deliberately stricter than Alibaba
 
@@ -3006,20 +3008,21 @@ as product decisions.
     `projectFreight` reads only `journeys[]`, so the order arrival window and checkout prepare keep
     answering `unknown / leg_uncovered` **by construction**. ⚠️ **Do not feed `partialJourneys` into
     an arrival window.** An arrival window is a time promise about delivery to the buyer; a partial
-    journey ends at the destination *country* with a leg nobody has arranged, and its honestly
+    journey ends at the destination _country_ with a leg nobody has arranged, and its honestly
     shorter transit days would read as a faster delivery rather than a shorter route.
 
-    **What is still open is the Incoterm concept itself.** Phase 26 ships the *effect* — the buyer
+    **What is still open is the Incoterm concept itself.** Phase 26 ships the _effect_ — the buyer
     sees the ocean rate and is told which leg it stops short of — without an incoterm input, because
     there was none to read: `commerce_incoterm` sat on two nullable columns
     (`commerce_quote_revision.incoterm`, `commerce_order.incoterm_snapshot`), both of which exist
-    only *after* a buyer already has a priced offer. **Migration `0222` (2026-10-05) adds the
+    only _after_ a buyer already has a priced offer. **Migration `0222` (2026-10-05) adds the
     seller-declared term, `product.default_incoterm`** — nullable, set on create and PATCH, returned
     on the owner and public product reads, and shown on the product page as the seller's
     declaration. ⚠️ **It is DISPLAY ONLY.** The catalog checkout still writes `incoterm_snapshot`
     NULL, the delivery estimate does not read it, and no leg is modelled from it: making a listing
     default bind an order is the §19.9 concept that stays open. Phase 23's vocabulary (A40) is still
     vocabulary only as far as anything branching on it goes.
+
 - **Customs dwell is exposed as its own component.** Alibaba does not surface it; it bundles
   clearance into the estimate or sells DDP. Here the backend is **more** transparent than Alibaba,
   not less, which is the intended direction.
@@ -3117,8 +3120,8 @@ provider's estimate against that declaration and never a fixed charge.
 ### 19.10 The two admin reads — **SHIPPED, no migration**
 
 Phase 20 shipped six admin writes and no admin read. `commerce-freight-rates.routes.ts` declared six
-handlers and zero `router.get`, and its header stated the position outright: *"THE READS ARE NOT HERE
-AND WILL NOT BE"* — §19.5 extended the buyer-facing reads instead.
+handlers and zero `router.get`, and its header stated the position outright: _"THE READS ARE NOT HERE
+AND WILL NOT BE"_ — §19.5 extended the buyer-facing reads instead.
 
 That position was right about the **buyer's** reads and wrong about the **operator's**. This section
 is why, and what shipped.
@@ -3188,7 +3191,7 @@ display rule the console derives.
 Filters: `destinationCountryCode`, `originCountryCode`, `commodityScopeCategoryId`, `openOnly`,
 `limit`, `cursor`. Rows are the existing `AdminCustomsDwellEstimate` projection. Same envelope, same
 `(validFrom DESC, id ASC)` order. `openOnly=true` means `validUntil IS NULL` — the table has no
-`state`, so an open window *is* an unretired estimate. **`openOnly=false` narrows nothing** and is
+`state`, so an open window _is_ an unretired estimate. **`openOnly=false` narrows nothing** and is
 identical to omitting the key; it is not a request for the retired rows. That is the `reviewable`
 shape used elsewhere in commerce, and it is what unticking a checkbox means — a `false` that meant
 "closed only" would leave no spelling for "show me everything". Retired-only, if ever wanted, wants
@@ -3222,7 +3225,7 @@ correct `409` as a broken page.
 
 #### The design question this raised, and how it was settled
 
-The two requirements above pull against each other. Rows must be the *existing* projection — no
+The two requirements above pull against each other. Rows must be the _existing_ projection — no
 read-only variant, one vocabulary. But a list that cannot distinguish a staged card from one in force
 hides the only property that decides which controls apply.
 
@@ -3300,13 +3303,13 @@ authored by hand against these six routes.
 `unavailableReasons` is populated only when a lane produced no options at all, and every entry is
 reported rather than defaulted (§19.6). Read as a checklist against the sequence above:
 
-| Reason | What is actually missing |
-| --- | --- |
-| `no_active_rate_card` | No card whose window is open on this lane, mode and currency. Step 1, or a `validFrom` still in the future |
-| `card_has_no_breaks` | A card exists with an empty ladder — only reachable by deleting bands, since create requires 1..20 |
-| `below_smallest_break` | Step 4. The card is loaded and the consignment is lighter than its smallest floor |
-| `volume_not_declared` | The consignment, not the card: a positive volume floor cannot be cleared by an undeclared volume |
-| `consignment_not_measurable` | The consignment again: no usable weight, so chargeable weight has no value |
+| Reason                       | What is actually missing                                                                                   |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `no_active_rate_card`        | No card whose window is open on this lane, mode and currency. Step 1, or a `validFrom` still in the future |
+| `card_has_no_breaks`         | A card exists with an empty ladder — only reachable by deleting bands, since create requires 1..20         |
+| `below_smallest_break`       | Step 4. The card is loaded and the consignment is lighter than its smallest floor                          |
+| `volume_not_declared`        | The consignment, not the card: a positive volume floor cannot be cleared by an undeclared volume           |
+| `consignment_not_measurable` | The consignment again: no usable weight, so chargeable weight has no value                                 |
 
 Only the first three are the author's to fix. The last two are a listing's shipping facts (§19.9a),
 and a lane can be perfectly authored and still report them.
@@ -3324,7 +3327,7 @@ and a lane can be perfectly authored and still report them.
 
 #### What this section does not do
 
-It makes the tables **authorable**, not **filled** — *by an operator*. ⚠️ **AND THAT WAS THE WHOLE
+It makes the tables **authorable**, not **filled** — _by an operator_. ⚠️ **AND THAT WAS THE WHOLE
 PROBLEM, WHICH THIS SECTION STATED AS A PURCHASE.** "Forwarders sell lane price lists, Qatoto has
 bought none" reads as a budget line and is really an access one: the six routes above are
 `moderate_commerce`, so the only person who may type a forwarder's tariff is staff. §19.12 opens
@@ -3369,12 +3372,12 @@ route suite were untouched.
 members both error unions include verbatim, so each service returns it unwrapped and still switches
 exhaustively over its own union.
 
-| Route | Notes |
-| --- | --- |
-| `GET /commerce/provider/freight-rate-cards` | Own cards only, keyset-paged; reuses §19.10's list projection |
-| `POST /commerce/provider/freight-rate-cards` | Bands required in the same call (1..20), one transaction |
-| `PATCH /commerce/provider/freight-rate-cards/:rateCardId` | Withdraw / retire only |
-| `POST`/`PATCH .../breaks` | Staged cards only, same `assertCardAcceptsBreakWrites` |
+| Route                                                     | Notes                                                         |
+| --------------------------------------------------------- | ------------------------------------------------------------- |
+| `GET /commerce/provider/freight-rate-cards`               | Own cards only, keyset-paged; reuses §19.10's list projection |
+| `POST /commerce/provider/freight-rate-cards`              | Bands required in the same call (1..20), one transaction      |
+| `PATCH /commerce/provider/freight-rate-cards/:rateCardId` | Withdraw / retire only                                        |
+| `POST`/`PATCH .../breaks`                                 | Staged cards only, same `assertCardAcceptsBreakWrites`        |
 
 **No customs-dwell twin, and that is not an omission.** `commerce_customs_dwell_estimate` has no
 provider column — it is scoped by destination, origin and commodity, and it is platform-wide. A
@@ -3531,11 +3534,11 @@ it is checked per statement, so the first supersession on any lane failed with `
 
 Three constraints, none of them deferrable, rule out the obvious order entirely:
 
-| Constraint | What it forbids |
-| --- | --- |
-| `commerce_freight_rate_card_active_uidx` | two ACTIVE cards on one lane, so the successor cannot be inserted while the incumbent is still active |
-| `commerce_freight_rate_card_lifecycle_ck` | `state = 'superseded'` with a NULL successor — and a CHECK can **never** be deferred in Postgres |
-| the `superseded_by_rate_card_id` FK | naming a row that does not exist yet |
+| Constraint                                | What it forbids                                                                                       |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `commerce_freight_rate_card_active_uidx`  | two ACTIVE cards on one lane, so the successor cannot be inserted while the incumbent is still active |
+| `commerce_freight_rate_card_lifecycle_ck` | `state = 'superseded'` with a NULL successor — and a CHECK can **never** be deferred in Postgres      |
+| the `superseded_by_rate_card_id` FK       | naming a row that does not exist yet                                                                  |
 
 **The fix is an ordering, not a migration.** The incumbent is PARKED as `withdrawn` first, which
 satisfies the lifecycle CHECK with a NULL successor and frees the partial unique index; the
@@ -3727,7 +3730,7 @@ responsible only for text.
 ⚠️ **`store_search_document` still needs the attribute VALUES in its indexed text**, for the same
 reason it already folds in specification keys, values and groups (`store-search.service.ts:1080-1083`).
 A buyer typing "5V regulator" in the free-text box must match a product whose voltage is a
-structured value; otherwise structuring a field would make it *less* findable than leaving it as
+structured value; otherwise structuring a field would make it _less_ findable than leaving it as
 free text, and sellers would rationally stop filling the form in.
 
 ### 20.6 Facets, and the rule that keeps the UI quiet
@@ -3736,11 +3739,11 @@ free text, and sellers would rationally stop filling the form in.
 **only when `category` is set** and only for attributes in the resolved inherited set with
 `isFilterable = true`:
 
-| `valueKind` | Facet shape |
-| ----------- | ----------- |
-| `enum` | `{ attributeKey, label, groupLabel, buckets: [{ value, label, count }] }` |
-| `number` | `{ attributeKey, label, unitLabel, numericScale, minScaled, maxScaled, count }` |
-| `text` | **never** — a text attribute is display-only |
+| `valueKind` | Facet shape                                                                     |
+| ----------- | ------------------------------------------------------------------------------- |
+| `enum`      | `{ attributeKey, label, groupLabel, buckets: [{ value, label, count }] }`       |
+| `number`    | `{ attributeKey, label, unitLabel, numericScale, minScaled, maxScaled, count }` |
+| `text`      | **never** — a text attribute is display-only                                    |
 
 **A category with no filterable attributes returns an empty array, and the client renders no new
 control.** That is the whole of the UI-complexity guarantee: Books & Media pays nothing,
@@ -3839,9 +3842,9 @@ column, so a buyer orders a thing that no longer exists and finds out in a messa
 
 ```ts
 export const productSellingStateEnum = pgEnum("product_selling_state", [
-  "selling",
-  "paused",
-  "discontinued",
+    "selling",
+    "paused",
+    "discontinued",
 ]);
 ```
 
@@ -3864,7 +3867,7 @@ seller said so.
 `commerce_encrypted_document` is envelope-encrypted, organization-private, virus-scanned and
 linked to RFQs, quote revisions and thread messages. It is the right home for a business
 registration certificate and the wrong home for a datasheet, which is published material a buyer
-reads *before* deciding to talk to anybody.
+reads _before_ deciding to talk to anybody.
 
 `commerce_product_document`, modelled on **`video_document`** (`studio.ts:628`) — the only public
 object-storage document in the codebase — rather than on the encrypted store:
@@ -3920,26 +3923,27 @@ commerce_product_document
   WRONG.** It read "reuse `document-scanner.adapter.ts` and `sweep-pending-document-scans.ts`",
   and only the first half of that is possible.
 
-  `DocumentScannerAdapter` genuinely is reusable: `scanDocument` takes
-  `{ documentId, plaintextBytes, mediaType, declaredByteSize }` and returns
-  `clean | infected | unscannable`. It knows nothing about encryption or about any table.
+    `DocumentScannerAdapter` genuinely is reusable: `scanDocument` takes
+    `{ documentId, plaintextBytes, mediaType, declaredByteSize }` and returns
+    `clean | infected | unscannable`. It knows nothing about encryption or about any table.
 
-  Everything above it is welded to `commerce_encrypted_document`.
-  `scanEncryptedDocument` selects from that table, branches on ITS `state` column, and reaches the
-  bytes through `downloadPrivateCommerceDocument` + `decryptCommerceDocument` — there is no
-  already-plaintext branch. `applyScanVerdict`, `sweepPendingDocumentScans` and
-  `countPendingDocumentScans` all name the same table, and the `scan-encrypted-document` job's
-  payload is `{ documentId }` with **no field saying which table that id belongs to**.
+    Everything above it is welded to `commerce_encrypted_document`.
+    `scanEncryptedDocument` selects from that table, branches on ITS `state` column, and reaches the
+    bytes through `downloadPrivateCommerceDocument` + `decryptCommerceDocument` — there is no
+    already-plaintext branch. `applyScanVerdict`, `sweepPendingDocumentScans` and
+    `countPendingDocumentScans` all name the same table, and the `scan-encrypted-document` job's
+    payload is `{ documentId }` with **no field saying which table that id belongs to**.
 
-  Two facts decide this rather than a preference. **`video_document` — the precedent this table
-  copies — is not scanned at all**: `attachVideoDocument` validates the PDF bytes and stores them.
-  And the only working scanner is an EICAR-only fake; `clamav` is a configurable value with no
-  implementation, returning `SCANNER_UNAVAILABLE`.
+    Two facts decide this rather than a preference. **`video_document` — the precedent this table
+    copies — is not scanned at all**: `attachVideoDocument` validates the PDF bytes and stores them.
+    And the only working scanner is an EICAR-only fake; `clamav` is a configurable value with no
+    implementation, returning `SCANNER_UNAVAILABLE`.
 
-  So: either add a second scan service, job and `state` column for unencrypted documents, or ship
-  unscanned as `video_document` does — and in that case **the route answers 201, not 202**, and no
-  copy anywhere may say the file is being checked. Choose before writing the table; the `state`
-  column only exists in the first branch.
+    So: either add a second scan service, job and `state` column for unencrypted documents, or ship
+    unscanned as `video_document` does — and in that case **the route answers 201, not 202**, and no
+    copy anywhere may say the file is being checked. Choose before writing the table; the `state`
+    column only exists in the first branch.
+
 - New `products` key prefix in `object-storage.ts:48-51` and a
   `PRODUCT_DOCUMENT_URL_TTL_SECONDS` beside the other four.
 - **⚠️ THE CASCADE CLEANS ROWS, NOT BYTES.** `deleteProduct` must delete the objects explicitly,
@@ -4106,7 +4110,7 @@ constraint keeps reviewer attribution and `moderator_curated` in lockstep in bot
 **Shipped since:** the nightly `derive-product-relations` co-occurrence job (§15.9, Phase 9) now
 writes `derived_cooccurrence` rows, which nothing produced when the source kind first shipped.
 
-**Still absent:** ranking and recommendation *selection* (Phase 10+).
+**Still absent:** ranking and recommendation _selection_ (Phase 10+).
 
 ---
 
@@ -4282,7 +4286,7 @@ photos, four freight-access rows, visit policy, two stakeholders) and
 `sheets/verified-capabilities-sheet.tsx` (four capabilities, five certifications).
 
 **What existed:** `commerce_organization` — **16 columns**, none of them profile depth.
-`commerce_provider_profile` exists but is keyed to *service providers*; a manufacturer selling
+`commerce_provider_profile` exists but is keyed to _service providers_; a manufacturer selling
 products had no profile row at all. Of the six mock stats:
 
 | Stat                                   | Before Phase 12                                                                                                                                                    |
@@ -4321,11 +4325,11 @@ buyer never saw.
 service layer had been right the whole time; the routes above it had not, and each gap was invisible
 from either side alone:
 
-| Gap                                                                                                                                                                                                                          | What shipped                                                                                                                                                                                                                                     |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`standardCode` was unreachable.** `submitCertification` took it and wrote it, but `SubmitCertificationSchema` had no such key and is `.strict()`, so every row ever created carried `null` — and §16.2's filter matches only rows with a code | The key exists on the body, optional, mirrored from `commerceCertificationStandardCodeEnum`. **Nothing infers it from `standardName`**: a fuzzy match would put a factory into a compliance filter it never claimed |
-| **No seller-side profile read.** Both public projections are gated on `tradeState = 'active' AND visibility = 'public'`, so a private or not-yet-active organization could write every field on this surface and never read one back | `GET /commerce/organizations/:organizationId/seller-profile`, `PROFILE_MANAGERS` only, reusing `loadSellerDeclaredProfiles` rather than a parallel projection. A missing row answers `{ declaredProfile: null }` with a **200** |
-| **The decision route had no queue and `withdrawn` had no writer.** No route listed a pending certification, so no id could be learned and nothing was ever approved — which is the second reason the directory facet matched nothing | `GET /commerce/admin/certifications` (oldest first, keyset, `moderate_commerce` checked before any id is read) and `POST /commerce/organizations/:organizationId/certifications/:certificationId/withdraw`, `certification_withdrawn` on the org chain (`0156`) |
+| Gap                                                                                                                                                                                                                                             | What shipped                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`standardCode` was unreachable.** `submitCertification` took it and wrote it, but `SubmitCertificationSchema` had no such key and is `.strict()`, so every row ever created carried `null` — and §16.2's filter matches only rows with a code | The key exists on the body, optional, mirrored from `commerceCertificationStandardCodeEnum`. **Nothing infers it from `standardName`**: a fuzzy match would put a factory into a compliance filter it never claimed                                             |
+| **No seller-side profile read.** Both public projections are gated on `tradeState = 'active' AND visibility = 'public'`, so a private or not-yet-active organization could write every field on this surface and never read one back            | `GET /commerce/organizations/:organizationId/seller-profile`, `PROFILE_MANAGERS` only, reusing `loadSellerDeclaredProfiles` rather than a parallel projection. A missing row answers `{ declaredProfile: null }` with a **200**                                 |
+| **The decision route had no queue and `withdrawn` had no writer.** No route listed a pending certification, so no id could be learned and nothing was ever approved — which is the second reason the directory facet matched nothing            | `GET /commerce/admin/certifications` (oldest first, keyset, `moderate_commerce` checked before any id is read) and `POST /commerce/organizations/:organizationId/certifications/:certificationId/withdraw`, `certification_withdrawn` on the org chain (`0156`) |
 
 **The evidence read is what makes the decision honest, and it audits itself.** `decideCertification`
 asks a moderator to publish a compliance claim to every buyer browsing the directory, and until this
@@ -4926,7 +4930,7 @@ access per request.
 uploads in this backend were verification evidence, customization assets and A21's image multiparts,
 none of which a buyer composing an RFQ can use — so `documentIds` was a field that existed and could
 not be filled, and `/store/rfqs/new` shipped with no attachment step at all. On a sourcing request
-that is a real loss: the drawing *is* the requirement.
+that is a real loss: the drawing _is_ the requirement.
 
 **Both halves shipped together, because either alone is useless.** The RFQ read projects
 `encryptedDocumentId` and mints no URL, so an upload without a download would have left the composer
@@ -5173,8 +5177,8 @@ route, it adds the row in the same change.
 **Needed by:** `sheets/delivery-sheet.tsx` — the per-leg mode picker with a price and a duration
 behind each option, and a running estimate.
 
-**What was wrong:** A16's coverage-derived estimate knows a provider *serves* a lane. It cannot say
-what that lane *costs* by sea versus by air, because coverage carries neither number per mode. So
+**What was wrong:** A16's coverage-derived estimate knows a provider _serves_ a lane. It cannot say
+what that lane _costs_ by sea versus by air, because coverage carries neither number per mode. So
 the sheet summed local floats, which is the client establishing a price, which §0 forbids. The
 missing input was never an endpoint — it was **data nobody had bought**.
 
@@ -5195,7 +5199,7 @@ forwarder's and the wire shape makes rendering it as the platform's impossible (
 
 **Still open — two things, and only one of them is technical.**
 
-*Commercial:* the tables ship **empty**. No forwarder lane list has been purchased and no broker
+_Commercial:_ the tables ship **empty**. No forwarder lane list has been purchased and no broker
 dwell figure recorded, so every lane is currently uncovered. There is no seed, deliberately. Until
 rows are loaded, the sheet's honest render is "ships in 15–25 days · shipping and clearance not yet
 estimated" — exactly what §19.4 designed the `null` window to make expressible.
@@ -5215,7 +5219,7 @@ is now a business act rather than a missing surface: a forwarder must hold a `ve
 Until one does, these routes answer `403` and every lane keeps answering `no_active_rate_card` —
 which is §19.4's designed blank, not a defect.
 
-*Technical:* **closed.** Chargeable weight shipped in `0109` — every option now prices on
+_Technical:_ **closed.** Chargeable weight shipped in `0109` — every option now prices on
 `max(actual, volumetric)` under the forwarder's own divisor and reports which basis won. Everything
 remaining in §19.9's divergence list is a deliberate choice, not a defect.
 
@@ -5303,17 +5307,17 @@ that no list route ever produced.** Every such route works exactly once — in t
 minted the id — and is unreachable after a reload. The failure presents as an empty screen rather
 than an error, which is why it kept surviving review.
 
-| Closed | The id nobody could obtain |
-| --- | --- |
-| `GET /commerce/threads` | `POST /commerce/threads` returned a `threadId` and nothing else yielded one. **This also closed §14's settlement agreements**, whose `GET\|POST /threads/:threadId/settlement-agreements` take the same id — one missing read, two dead features. |
-| `paymentIntentId` on the order projections | `POST /orders/:orderId/payment-intents` minted one and `GET /payments/:paymentIntentId` consumed one. Reload the order and the buyer could not pay it. |
-| `GET /commerce/refunds` | Refunds were POST-only. A buyer could request one and neither party could see that they had. |
-| `GET /commerce/provider/quotes` | `/rfqs/:rfqId/quotes` is RFQ-scoped and `/provider/rfqs` lists the WORK — an RFQ leaves that queue when it closes, taking any quote on it out of reach. |
-| `GET /commerce/documents` | A30 shipped upload and download. `documentIds` and `encryptedDocumentIds` could only be filled with an id minted in the same session. |
-| `GET /commerce/shipments` | A29 shipped the provider half and left the buyer the workaround A29 had rejected for the provider. |
-| `GET /commerce/seller/questions` | A9 shipped the answer write and only public per-product reads. A seller with two hundred listings could answer a question and could not find one. |
-| `GET /commerce/seller/reviews` | The reply write took an id only the public reads produced. |
-| `PATCH /commerce/reviews/:reviewId` | A review was permanent; a mistyped rating stood forever. |
+| Closed                                     | The id nobody could obtain                                                                                                                                                                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /commerce/threads`                    | `POST /commerce/threads` returned a `threadId` and nothing else yielded one. **This also closed §14's settlement agreements**, whose `GET\|POST /threads/:threadId/settlement-agreements` take the same id — one missing read, two dead features. |
+| `paymentIntentId` on the order projections | `POST /orders/:orderId/payment-intents` minted one and `GET /payments/:paymentIntentId` consumed one. Reload the order and the buyer could not pay it.                                                                                            |
+| `GET /commerce/refunds`                    | Refunds were POST-only. A buyer could request one and neither party could see that they had.                                                                                                                                                      |
+| `GET /commerce/provider/quotes`            | `/rfqs/:rfqId/quotes` is RFQ-scoped and `/provider/rfqs` lists the WORK — an RFQ leaves that queue when it closes, taking any quote on it out of reach.                                                                                           |
+| `GET /commerce/documents`                  | A30 shipped upload and download. `documentIds` and `encryptedDocumentIds` could only be filled with an id minted in the same session.                                                                                                             |
+| `GET /commerce/shipments`                  | A29 shipped the provider half and left the buyer the workaround A29 had rejected for the provider.                                                                                                                                                |
+| `GET /commerce/seller/questions`           | A9 shipped the answer write and only public per-product reads. A seller with two hundred listings could answer a question and could not find one.                                                                                                 |
+| `GET /commerce/seller/reviews`             | The reply write took an id only the public reads produced.                                                                                                                                                                                        |
+| `PATCH /commerce/reviews/:reviewId`        | A review was permanent; a mistyped rating stood forever.                                                                                                                                                                                          |
 
 **Where a filter carries the feature.** `?unansweredOnly=` and `?unreplied=` are not conveniences —
 they are the whole point of their routes. Both resolve against facts the schema already maintains:
@@ -5335,12 +5339,12 @@ would turn an attachment picker into a cross-organization file browser.
 The audit that produced this entry called a permanent review a defect and asked for edit and
 delete. **Both platforms were checked before deciding, and the answer changed the design.**
 
-| | Amazon | Alibaba | Here |
-| --- | --- | --- | --- |
-| Buyer edit | Anytime, unlimited | Once, within 30 days | **Once, within 30 days** |
-| Buyer delete | Anytime | Not offered | **Not offered** |
-| Seller reply edit | — | Once, within 30 days | **Once, within 30 days** |
-| Helpful votes on edit | Reset | — | **Reset, and the rows deleted** |
+|                       | Amazon             | Alibaba              | Here                            |
+| --------------------- | ------------------ | -------------------- | ------------------------------- |
+| Buyer edit            | Anytime, unlimited | Once, within 30 days | **Once, within 30 days**        |
+| Buyer delete          | Anytime            | Not offered          | **Not offered**                 |
+| Seller reply edit     | —                  | Once, within 30 days | **Once, within 30 days**        |
+| Helpful votes on edit | Reset              | —                    | **Reset, and the rows deleted** |
 
 Amazon is permissive and funds an anti-manipulation enforcement arm to absorb the consequences.
 Alibaba bounds the problem in the data model instead. **This platform has no enforcement arm, so
@@ -5352,13 +5356,13 @@ buyer organization, and no review without a real completion. Incentivized and un
 are structurally impossible, which neither platform achieves as cleanly. Every vector below is
 about mutation AFTER publication.
 
-| Vector | Closed by |
-| --- | --- |
-| **Extortion** — "pay me or the 1-star stays"; on five-figure orders this is a business model | No author delete. Removal goes through A12's content report, so a seller must convince a MODERATOR rather than the buyer |
-| **Vote laundering** — a review earns endorsements as praise, is rewritten as a complaint, and keeps the social proof | `helpfulCount` zeroed and `commerce_review_vote` rows deleted on edit |
-| **Aggregate oscillation** — flipping 5↔1 on a seller with few reviews | One edit, ever |
-| **Retaliation timing** — waiting for the repeat order to ship, then rewriting the old review | 30 days from `createdAt` |
-| **Reply swap** — a conciliatory public reply removed once the buyer relents | The same window and cap on `PUT\|DELETE /reviews/:reviewId/reply`, which had neither |
+| Vector                                                                                                               | Closed by                                                                                                                |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Extortion** — "pay me or the 1-star stays"; on five-figure orders this is a business model                         | No author delete. Removal goes through A12's content report, so a seller must convince a MODERATOR rather than the buyer |
+| **Vote laundering** — a review earns endorsements as praise, is rewritten as a complaint, and keeps the social proof | `helpfulCount` zeroed and `commerce_review_vote` rows deleted on edit                                                    |
+| **Aggregate oscillation** — flipping 5↔1 on a seller with few reviews                                                | One edit, ever                                                                                                           |
+| **Retaliation timing** — waiting for the repeat order to ship, then rewriting the old review                         | 30 days from `createdAt`                                                                                                 |
+| **Reply swap** — a conciliatory public reply removed once the buyer relents                                          | The same window and cap on `PUT\|DELETE /reviews/:reviewId/reply`, which had neither                                     |
 
 **`editedAt` is projected publicly, and that is the point.** A rewrite that does not announce
 itself is the manipulation rather than the correction. It doubles as the has-spent-the-one-edit
@@ -5391,7 +5395,7 @@ over `product`; every filter read `store_search_document`. The two had already d
 - **Stock.** `mapProductCard` derives stock from the ACTIVE VARIANT SUM (`store-catalog.service.ts`),
   and A25 made the document's `stock_state` variant-aware for exactly that reason. The facet's raw
   SQL read `p.stock_quantity` alone. So a category page could render **"In stock (12)" above twelve
-  cards reading *Unavailable*** — same request, same products, two answers.
+  cards reading _Unavailable_** — same request, same products, two answers.
 - **Price.** The facet published `product.price_in_cents`; the document stores
   `min(active variant price) ?? product.priceInCents`. A variant-priced listing was counted at a
   price no buyer could filter to.
@@ -5539,8 +5543,7 @@ still means nothing to the rating.
 #### A dispute had no way to say anything after it was opened
 
 `commerce_dispute_event.note_added` had existed since `0052` **with no writer**, while A28's
-participant read has rendered the timeline — `note` included, no `eventKind` filter — since Phase
-15. So a note had somewhere to appear all along and nothing to put there: a buyer could open a
+participant read has rendered the timeline — `note` included, no `eventKind` filter — since Phase 15. So a note had somewhere to appear all along and nothing to put there: a buyer could open a
 dispute over a six-figure order and then say nothing further, and the seller could read the
 accusation and not answer it.
 
@@ -5623,11 +5626,11 @@ account". Phase 14 built the vocabulary; nothing moved the payment path onto it.
 
 #### What each rail posts now
 
-| Rail | On settlement | On refund |
-| --- | --- | --- |
-| `direct_processor` | `direct_settled`: `settlement_funding_memo −X`, `settlement_released_memo +X` | one entry: `settlement_released_memo −Y`, `settlement_refunded_memo +Y` |
-| `internal_custody` | unchanged: `buyer_clearing −X`, `order_held +X` | unchanged, both entries |
-| `direct_offline`, `external_escrow` | refused before a payment intent exists | — |
+| Rail                                | On settlement                                                                 | On refund                                                               |
+| ----------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `direct_processor`                  | `direct_settled`: `settlement_funding_memo −X`, `settlement_released_memo +X` | one entry: `settlement_released_memo −Y`, `settlement_refunded_memo +Y` |
+| `internal_custody`                  | unchanged: `buyer_clearing −X`, `order_held +X`                               | unchanged, both entries                                                 |
+| `direct_offline`, `external_escrow` | refused before a payment intent exists                                        | —                                                                       |
 
 **NO CUSTODY HOP on `direct_processor`, and the rail map already said so.** The processor settles
 buyer straight to the seller's own account, so the money never rests anywhere Qatoto can see;
@@ -5790,10 +5793,10 @@ The command rail (`POST /shipment-legs/:legId/commands`) could move legs it had 
 
 **Two routes, both counterparty-only:**
 
-| Method | Route | Result |
-| ------ | ----- | ------ |
-| POST | `/commerce/shipments/:shipmentId/legs` | 201 `{ shipmentId, legs[] }` |
-| POST | `/commerce/shipment-legs/:legId/assignment` | 200, the updated leg |
+| Method | Route                                       | Result                       |
+| ------ | ------------------------------------------- | ---------------------------- |
+| POST   | `/commerce/shipments/:shipmentId/legs`      | 201 `{ shipmentId, legs[] }` |
+| POST   | `/commerce/shipment-legs/:legId/assignment` | 200, the updated leg         |
 
 **Why assignment is not a sixth command arm**, which is the tempting shape given `report_exception`
 is already a command that changes no state. `executeShipmentLegCommand` authorizes in two branches:
@@ -5862,8 +5865,8 @@ and route-order sweeps all pass.
 (frontend `todo.md` §A).
 
 **The defect, and why the obvious fix did not work.** `commerce-earnings.service.ts` ended with a
-section headed "No profit": *"Nothing in this backend records what a seller PAID for anything — no
-cost of goods, no expense, no purchase record."* True. The tempting repair — derive it from quotes
+section headed "No profit": _"Nothing in this backend records what a seller PAID for anything — no
+cost of goods, no expense, no purchase record."_ True. The tempting repair — derive it from quotes
 the seller accepted — **does not work**, because `commerce_quote_product_line` references
 `commerce_rfq_product_line`, whose `product_id` is **nullable**: an RFQ line is usually free text
 describing a thing that does not exist yet. There is no FK path from a listing to the quote that
@@ -5873,7 +5876,7 @@ sourced it, so the link has to be explicit.
 partial index. Settable through the existing create and update routes; **no new endpoint.**
 
 **The good news underneath it.** `commerce_quote_product_line.unit_price_in_cents` is **already per
-unit**, so the batch-to-order-line apportionment the frontend `todo.md` said to settle *before*
+unit**, so the batch-to-order-line apportionment the frontend `todo.md` said to settle _before_
 building anything **is not needed and none is invented**. That was the blocker, and reading the
 column dissolved it.
 
@@ -5886,13 +5889,13 @@ refusal covers "no such line", "not yours" and "never accepted" — splitting th
 field into an oracle for probing other organizations' quote-line ids.
 
 **The read: `sourcingCost`, in its own member, never subtracted.** Exactly `commissionOwed`'s
-treatment for exactly its reason — *"A client is free to render them together. It is not free to add
-them."* Three separate reasons it is not a margin:
+treatment for exactly its reason — _"A client is free to render them together. It is not free to add
+them."_ Three separate reasons it is not a margin:
 
 1. **Coverage.** Almost no listing is sourced through a Qatoto quote. So
    `uncounted.orderLinesWithNoSourcingRecord` ships beside it — the denominator, reported rather
    than hidden. The frontend `todo.md` warned a cost over 12 of 47 orders is worse than none; that
-   is true of a cost presented *alone*, and stops being true when the uncovered count travels with
+   is true of a cost presented _alone_, and stops being true when the uncovered count travels with
    it. **Nothing may render `sourcingCost` without it.**
 2. **Completeness.** Storage, freight, duties and labour are still unrecorded. Warehouse fees are a
    flat per-engagement `fee_in_cents` on `commerce_quote_service_line` with no quantity and no
@@ -5925,7 +5928,7 @@ whatever the buyer had chosen.
 **What shipped:** `commerce_checkout_prepare.requested_freight_mode` and
 `commerce_order.requested_freight_mode_snapshot`, both nullable, both `commerce_shipment_leg_mode`
 — **no new enum**, per §19.2's rule against minting a second one. Four members, no `multimodal`: a
-buyer picks a way of travelling, and multimodal is what a *sequence of legs* is.
+buyer picks a way of travelling, and multimodal is what a _sequence of legs_ is.
 
 `PrepareCheckoutSchema` gains `requestedFreightMode`. **`ConfirmCheckoutSchema` deliberately does
 not** — the buyer chose at prepare, when they could see the lane, and letting confirm override it
@@ -5943,7 +5946,7 @@ the seller when they plan the route. `null` means "not asked or not chosen", nev
 
 ⚠️ **HOW LITTLE THIS CHANGES TODAY, said plainly.** The prepare's `arrivalWindow` stays `null`
 regardless, because there is no `confirmedAt` to start the clock — that function's own header says
-so. What improves is the freight *component*: `mode_not_selected` becomes a real day range, or
+so. What improves is the freight _component_: `mode_not_selected` becomes a real day range, or
 `mode_not_covered`, or `no_active_rate_card`. Every lane answers the last of those today, because
 rate cards ship empty by design (§18 is a purchase, not code). The value is that the buyer's request
 stops being discarded, and that the **seller can now read it** — added to both order projections,
@@ -5962,12 +5965,12 @@ answers every query correctly and merely wastes a row per listing).
 
 Read paths were exercised over HTTP as the seeded demo seller:
 
-| Read | Result |
-| ---- | ------ |
-| `GET /products/:id` | `sourcingQuoteProductLineId: null` present — the read that stops the editor wiping a link |
-| `GET /commerce/sourcing/quote-lines` | 200, `{ items: [], page: { nextCursor: null, hasMore: false } }` |
-| `GET /commerce/provider/earnings` | `sourcingCost: []` (absent, not zero) and **`uncounted.orderLinesWithNoSourcingRecord: 18`** |
-| `GET /commerce/orders/:orderId` | `requestedFreightModeSnapshot: null` — "not asked", which is correct |
+| Read                                 | Result                                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `GET /products/:id`                  | `sourcingQuoteProductLineId: null` present — the read that stops the editor wiping a link    |
+| `GET /commerce/sourcing/quote-lines` | 200, `{ items: [], page: { nextCursor: null, hasMore: false } }`                             |
+| `GET /commerce/provider/earnings`    | `sourcingCost: []` (absent, not zero) and **`uncounted.orderLinesWithNoSourcingRecord: 18`** |
+| `GET /commerce/orders/:orderId`      | `requestedFreightModeSnapshot: null` — "not asked", which is correct                         |
 
 The `18` is worth noting: it is real data, over eighteen genuinely sold order lines, and it is the
 coverage denominator doing its job — every one of them has no cost basis, which is exactly why
@@ -5994,7 +5997,7 @@ window remains unobservable until a forwarder lane list is bought.
 
 **Why the obvious read does not work, and this is the whole justification.**
 `GET /commerce/quotes/:quoteId` is the only other route that emits a `commerce_quote_product_line.id`
-— but it projects the **latest** revision (falling back to the latest *submitted* one for a buyer),
+— but it projects the **latest** revision (falling back to the latest _submitted_ one for a buyer),
 while `assertSourcingQuoteLineUsable` requires `acceptedRevisionNumber === revisionNumber`. On a
 quote that was accepted and then had a revision appended, those disagree, and the existing walk
 **cannot produce a linkable id at all**. Where it can, reaching it costs three round trips per quote

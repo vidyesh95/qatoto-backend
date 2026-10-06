@@ -14,13 +14,13 @@ it from being built before its lever existed, and the same rule governs whatever
 
 Every API client in `qatoto-frontend/src/lib/blueprints/` maps to an active Express route in [`blueprints.routes.ts`](file:///Users/vinitchuri/code/backend/qatoto-backend/src/modules/home/blueprints/blueprints.routes.ts):
 
-| Arm | Public Reads | Author Writes | Engagement | Moderation / Staff |
-| :--- | :--- | :--- | :--- | :--- |
-| **Hero Carousel** | `GET /hero-slides` | — | — | Full CRUD + atomic reordering (`/admin/hero-slides/*`) |
-| **Showcase Launches** | Feed (`/showcases`), slugs (`/slugs`), detail (`/:launchSlug`) | Multipart submit (`POST /showcases`), write-up image uploads, `/mine` | View beacons, likes, upvotes, threaded comments with likes | Review queue & publish/reject, reader reports, plus `flag` / `restore` (`/admin/showcases/*`) |
-| **Case Studies** | Index (`/case-studies`), slugs, options, detail (`/:caseStudySlug`) | JSON submit (`POST /case-studies`), cursor-paged `/mine` | View beacons, likes | Review queue (with withheld company reveal) + flag/restore |
-| **Teardowns** | Index (`/teardowns`), options, slugs, detail, claim targets, market signal, gated file + model downloads | Submission intake (`POST /teardowns`) with assembly geometry, file uploads (`/uploads`), `/mine` and `/mine/:submissionId` | View beacons, likes, saves, threaded comments with likes | Review queue + flag, quarantine, and restore verbs |
-| **Cross-arm** | `/engagement/state` | `/drafts` (autosave + resume, all three wizards) | `/comments/:commentId` (edit/delete/like) | `/admin/content-reports` (reader report queue + dismissal) |
+| Arm                   | Public Reads                                                                                             | Author Writes                                                                                                              | Engagement                                                 | Moderation / Staff                                                                            |
+| :-------------------- | :------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------- | :-------------------------------------------------------------------------------------------- |
+| **Hero Carousel**     | `GET /hero-slides`                                                                                       | —                                                                                                                          | —                                                          | Full CRUD + atomic reordering (`/admin/hero-slides/*`)                                        |
+| **Showcase Launches** | Feed (`/showcases`), slugs (`/slugs`), detail (`/:launchSlug`)                                           | Multipart submit (`POST /showcases`), write-up image uploads, `/mine`                                                      | View beacons, likes, upvotes, threaded comments with likes | Review queue & publish/reject, reader reports, plus `flag` / `restore` (`/admin/showcases/*`) |
+| **Case Studies**      | Index (`/case-studies`), slugs, options, detail (`/:caseStudySlug`)                                      | JSON submit (`POST /case-studies`), cursor-paged `/mine`                                                                   | View beacons, likes                                        | Review queue (with withheld company reveal) + flag/restore                                    |
+| **Teardowns**         | Index (`/teardowns`), options, slugs, detail, claim targets, market signal, gated file + model downloads | Submission intake (`POST /teardowns`) with assembly geometry, file uploads (`/uploads`), `/mine` and `/mine/:submissionId` | View beacons, likes, saves, threaded comments with likes   | Review queue + flag, quarantine, and restore verbs                                            |
+| **Cross-arm**         | `/engagement/state`                                                                                      | `/drafts` (autosave + resume, all three wizards)                                                                           | `/comments/:commentId` (edit/delete/like)                  | `/admin/content-reports` (reader report queue + dismissal)                                    |
 
 All 33 backend blueprint test suites (830 tests), 6 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly. The full project gate is 208 files / 4049 tests.
 
@@ -31,6 +31,7 @@ All 33 backend blueprint test suites (830 tests), 6 database constraint verifica
 If you are planning the next phase of capabilities, the following features are not yet implemented by design (detailed in [`BLUEPRINTS_BACKEND_STRUCTURE.md`](file:///Users/vinitchuri/code/backend/qatoto-backend/docs/BLUEPRINTS_BACKEND_STRUCTURE.md)):
 
 ### ~~A. 3D CAD/Assembly Geometry for User-Submitted Teardowns~~ — **DONE**
+
 - **Landed:** `POST /blueprints/teardowns` now accepts `assembly`, `assemblySteps` and `fasteners`,
   the publish writes all four viewer tables, and `.glb` uploads share the file upload route.
 - ⚠️ **The four tables needed no DDL to accept authored rows** — they were built for this shape. The
@@ -42,11 +43,12 @@ If you are planning the next phase of capabilities, the following features are n
   `BLUEPRINTS_BACKEND_STRUCTURE.md` §12.
 
 ### ~~B. Reader Reports and Post-Publish Moderation on Showcase Launches~~ — **DONE**
+
 - **Landed:** `showcase_launch` now admits `flagged`, readers can report a launch
   (`POST /blueprints/showcases/:launchSlug/reports`), and moderators can `flag` / `restore` it
   (`POST /blueprints/admin/showcases/:launchId/moderation-state`).
 - ⚠️ **`quarantine` is still refused on this arm, deliberately.** Not because a showcase has no files
-  — it has a heading image and write-up images — but because they are the maker's *own* by
+  — it has a heading image and write-up images — but because they are the maker's _own_ by
   attestation, and because `heading_image_url` is NOT NULL so there is no representable withheld
   state. See `BLUEPRINTS_BACKEND_STRUCTURE.md` §9.3.
 - ⚠️ **A flag does not hide anything.** The page still answers, the row stays in the feed, and the
@@ -57,6 +59,7 @@ If you are planning the next phase of capabilities, the following features are n
   had shipped unreachable — see `BLUEPRINTS_BACKEND_STRUCTURE.md` §10.7.
 
 ### ~~C. Direct File Uploads for Teardown Documents & Fabrication Files~~ — **DONE**
+
 - **Landed:** `POST /blueprints/teardowns/uploads` accepts `.pdf`, `.step`, `.stl` and `.dxf`, stores
   them in the private Backblaze bucket, and serves them through two gated routes that mint a
   300-second presign per request. Both file tables carry a `pasted_link | uploaded` union.
@@ -68,6 +71,7 @@ If you are planning the next phase of capabilities, the following features are n
 - **Still pasted-link-only:** `gerber`, `drill`, `pick_and_place`, `bill_of_materials_csv`.
 
 ### ~~D. Server-Side Draft Storage & Edit-and-Resubmit~~ — **DONE**
+
 - **Landed:** `/blueprints/drafts` serves all three wizards from one table, with optimistic
   concurrency so two tabs cannot silently overwrite each other. `GET /blueprints/teardowns/mine/:submissionId`
   lets an author pre-fill a fresh submission from their own rejected one.
@@ -79,6 +83,7 @@ If you are planning the next phase of capabilities, the following features are n
   that exactly one route serves such a name. See `BLUEPRINTS_BACKEND_STRUCTURE.md` §13.
 
 ### ~~E. Direct Rights-Claim / DMCA Intake~~ — SHIPPED, as a moderator queue and NOT as a DMCA process
+
 - `POST /teardowns/:teardownSlug/claims` stores a sworn claim in `blueprint_rights_claim` (migrations
   0209–0210); `GET /admin/rights-claims` and `POST /admin/rights-claims/:claimId/dismiss` are its
   queue, and a flag or quarantine answers one through `rightsClaimId`. See
@@ -95,17 +100,18 @@ To have frontend and backend run seamlessly in your local or production environm
 
 1. **Run Database Seeds:**
    Ensure all blueprint seed scripts have been executed so initial rows are populated:
-   ```bash
-   pnpm db:seed-blueprint-hero-slides
-   pnpm db:seed-blueprint-teardowns
-   pnpm db:seed-blueprint-case-studies
-   pnpm db:seed-blueprint-store-categories
-   ```
 
-   Object storage (Backblaze B2) must be configured for the teardown upload and download routes;
-   without it those routes answer 503 and the smoke scripts skip that half loudly.
+    ```bash
+    pnpm db:seed-blueprint-hero-slides
+    pnpm db:seed-blueprint-teardowns
+    pnpm db:seed-blueprint-case-studies
+    pnpm db:seed-blueprint-store-categories
+    ```
+
+    Object storage (Backblaze B2) must be configured for the teardown upload and download routes;
+    without it those routes answer 503 and the smoke scripts skip that half loudly.
 
 2. **Remove Frontend `noindex` and Restore Sitemap:**
    Once seeded, in `qatoto-frontend`:
-   - Remove `robots: { index: false, follow: false }` across the 7 blueprint routes (e.g., `src/app/(home)/blueprints/page.tsx`, `teardowns/page.tsx`, `showcase/page.tsx`, `case-studies/page.tsx`, and detail pages).
-   - Restore the `/blueprints` entries in `qatoto-frontend/src/app/sitemap.ts`.
+    - Remove `robots: { index: false, follow: false }` across the 7 blueprint routes (e.g., `src/app/(home)/blueprints/page.tsx`, `teardowns/page.tsx`, `showcase/page.tsx`, `case-studies/page.tsx`, and detail pages).
+    - Restore the `/blueprints` entries in `qatoto-frontend/src/app/sitemap.ts`.
