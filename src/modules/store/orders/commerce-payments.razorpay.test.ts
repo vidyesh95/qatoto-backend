@@ -249,4 +249,62 @@ describe("confirmProviderPaymentIntent", () => {
     expect(queuedSelectResults).toHaveLength(1);
     expect(transactionMock).not.toHaveBeenCalled();
   });
+
+  it("returns NOT_FOUND if the intent is missing", async () => {
+    queuedSelectResults.push([]);
+
+    const result = await confirmProviderPaymentIntent("pi_1", NOW);
+
+    expect(result.success ? null : result.error.type).toBe("NOT_FOUND");
+    expect(retrievePaymentIntent).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("returns INVALID_STATE if the intent has no providerPaymentRef", async () => {
+    queuedSelectResults.push([intentRow({ providerPaymentRef: null })]);
+
+    const result = await confirmProviderPaymentIntent("pi_1", NOW);
+
+    expect(result.success ? null : result.error.type).toBe("INVALID_STATE");
+    expect(retrievePaymentIntent).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it.each([{ state: "requires_action" }, { state: "processing" }])(
+    "returns the intent without a transaction if the provider reports $state",
+    async ({ state }) => {
+      queuedSelectResults.push([intentRow()]);
+      providerReports(state);
+
+      const result = await confirmProviderPaymentIntent("pi_1", NOW);
+
+      expect(result.success ? result.value.state : result.error.type).toBe("requires_action");
+      expect(retrievePaymentIntent).toHaveBeenCalledWith(RAZORPAY_ORDER_ID);
+      expect(transactionMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([{ state: "settled" }, { state: "authorized" }, { state: "failed" }, { state: "cancelled" }])(
+    "executes a transaction and returns the refreshed intent if the provider reports $state",
+    async ({ state }) => {
+      queuedSelectResults.push([intentRow()], [intentRow({ state, providerPaymentRef: RAZORPAY_ORDER_ID })]);
+      providerReports(state);
+
+      const result = await confirmProviderPaymentIntent("pi_1", NOW);
+
+      expect(result.success ? result.value.state : result.error.type).toBe(state);
+      expect(retrievePaymentIntent).toHaveBeenCalledWith(RAZORPAY_ORDER_ID);
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("returns NOT_FOUND if the intent is missing after the transaction", async () => {
+    queuedSelectResults.push([intentRow()], []);
+    providerReports("settled");
+
+    const result = await confirmProviderPaymentIntent("pi_1", NOW);
+
+    expect(result.success ? null : result.error.type).toBe("NOT_FOUND");
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+  });
 });
