@@ -316,6 +316,28 @@ describe("commerce payments routes", () => {
   describe("POST /commerce/orders/:orderId/refunds", () => {
     const path = "/commerce/orders/order_1/refunds";
 
+    it("answers 401 for a signed-out caller", async () => {
+      signOut();
+
+      const response = await request(app)
+        .post(path)
+        .set("Idempotency-Key", "refund_key_x")
+        .send({ amountInCents: 5_000, reason: "Item not shipped." });
+
+      expect(response.status).toBe(401);
+      expect(createRefund).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown query key with 422", async () => {
+      const response = await request(app)
+        .post(`${path}?nonsense=1`)
+        .set("Idempotency-Key", "refund_key_x")
+        .send({ amountInCents: 5_000, reason: "Item not shipped." });
+
+      expect(response.status).toBe(422);
+      expect(createRefund).not.toHaveBeenCalled();
+    });
+
     it("requires an Idempotency-Key header", async () => {
       const response = await request(app).post(path).send({ reason: "Item not shipped." });
 
@@ -378,6 +400,70 @@ describe("commerce payments routes", () => {
         .send({ reason: "Damaged in transit." });
 
       expect(response.status).toBe(502);
+    });
+
+    it("maps NOT_FOUND to 404", async () => {
+      createRefund.mockResolvedValue({ success: false, error: { type: "NOT_FOUND" } });
+
+      const response = await request(app)
+        .post(path)
+        .set("Idempotency-Key", "refund_key_error_1")
+        .send({ amountInCents: 5_000 });
+
+      expect(response.status).toBe(404);
+    });
+
+    it("maps FORBIDDEN to 403", async () => {
+      createRefund.mockResolvedValue({ success: false, error: { type: "FORBIDDEN" } });
+
+      const response = await request(app)
+        .post(path)
+        .set("Idempotency-Key", "refund_key_error_2")
+        .send({ amountInCents: 5_000 });
+
+      expect(response.status).toBe(403);
+    });
+
+    it("maps INVALID_STATE to 409", async () => {
+      createRefund.mockResolvedValue({
+        success: false,
+        error: { type: "INVALID_STATE", message: "Order is not paid" },
+      });
+
+      const response = await request(app)
+        .post(path)
+        .set("Idempotency-Key", "refund_key_error_3")
+        .send({ amountInCents: 5_000 });
+
+      expect(response.status).toBe(409);
+    });
+
+    it("maps CONFLICT to 409", async () => {
+      createRefund.mockResolvedValue({
+        success: false,
+        error: { type: "CONFLICT", message: "Refund already exists" },
+      });
+
+      const response = await request(app)
+        .post(path)
+        .set("Idempotency-Key", "refund_key_error_4")
+        .send({ amountInCents: 5_000 });
+
+      expect(response.status).toBe(409);
+    });
+
+    it("maps PROVIDER_UNAVAILABLE to 503", async () => {
+      createRefund.mockResolvedValue({
+        success: false,
+        error: { type: "PROVIDER_UNAVAILABLE", reason: "API down" },
+      });
+
+      const response = await request(app)
+        .post(path)
+        .set("Idempotency-Key", "refund_key_error_5")
+        .send({ amountInCents: 5_000 });
+
+      expect(response.status).toBe(503);
     });
 
     it("rejects an unknown body field with 422", async () => {
