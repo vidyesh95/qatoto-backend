@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { type ClientRateLimitInfo, type Options, type Store } from "express-rate-limit";
 
 import { isRateLimitStoreShared } from "#src/config/index.js";
@@ -285,7 +285,7 @@ export class PostgresRateLimitStore implements Store {
 
   /** Scoped to this limiter — the instance IS the namespace, so this cannot reset a sibling. */
   async resetAll(): Promise<void> {
-    await db.execute(sql`DELETE FROM ${rateLimitBucket} WHERE namespace = ${this.namespace}`);
+    await db.delete(rateLimitBucket).where(eq(rateLimitBucket.namespace, this.namespace));
   }
 
   async get(key: string): Promise<ClientRateLimitInfo | undefined> {
