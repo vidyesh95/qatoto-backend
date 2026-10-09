@@ -130,19 +130,17 @@ function assertNonNegativeSafeInteger(
  * it makes completion approximately zero, which is the safe direction.
  */
 export function pinReportedDurationSeconds(reportedDurationSeconds: number): number {
-  assertNonNegativeSafeInteger(
-    "pinReportedDurationSeconds",
-    "reportedDurationSeconds",
-    reportedDurationSeconds,
-  );
+  if (reportedDurationSeconds < 0 || !Number.isSafeInteger(reportedDurationSeconds)) {
+    throw new Error(
+      `pinReportedDurationSeconds: reportedDurationSeconds must be a non-negative safe integer, got ${String(reportedDurationSeconds)}`,
+    );
+  }
 
-  if (reportedDurationSeconds < MINIMUM_REPORTED_DURATION_SECONDS) {
-    return MINIMUM_REPORTED_DURATION_SECONDS;
-  }
-  if (reportedDurationSeconds > MAXIMUM_REPORTED_DURATION_SECONDS) {
-    return MAXIMUM_REPORTED_DURATION_SECONDS;
-  }
-  return reportedDurationSeconds;
+  return reportedDurationSeconds < MINIMUM_REPORTED_DURATION_SECONDS
+    ? MINIMUM_REPORTED_DURATION_SECONDS
+    : reportedDurationSeconds > MAXIMUM_REPORTED_DURATION_SECONDS
+      ? MAXIMUM_REPORTED_DURATION_SECONDS
+      : reportedDurationSeconds;
 }
 
 /**
