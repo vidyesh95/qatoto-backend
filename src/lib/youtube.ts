@@ -61,7 +61,7 @@ export function extractYoutubeVideoId(rawUrl: string): string | null {
 
   // Accept bare ids and schemeless links alike — both are shapes the frontend accepts,
   // and both are why the create schema must NOT wrap this in a `z.url()` (§7).
-  if (YOUTUBE_VIDEO_ID_PATTERN.test(trimmedUrl)) return trimmedUrl;
+  if (trimmedUrl.length === 11 && YOUTUBE_VIDEO_ID_PATTERN.test(trimmedUrl)) return trimmedUrl;
 
   const urlWithScheme = /^https?:\/\//i.test(trimmedUrl) ? trimmedUrl : `https://${trimmedUrl}`;
 
@@ -85,11 +85,12 @@ export function extractYoutubeVideoId(rawUrl: string): string | null {
   const watchVideoId = parsedUrl.searchParams.get("v");
   if (watchVideoId) return toVideoId(watchVideoId);
 
-  const matchingPrefix = YOUTUBE_PATH_PREFIXES.find((pathPrefix) =>
-    parsedUrl.pathname.startsWith(pathPrefix),
-  );
-  if (matchingPrefix) {
-    return toVideoId(parsedUrl.pathname.slice(matchingPrefix.length));
+  const pathname = parsedUrl.pathname;
+  for (let i = 0; i < YOUTUBE_PATH_PREFIXES.length; i++) {
+    const prefix = YOUTUBE_PATH_PREFIXES[i];
+    if (pathname.startsWith(prefix)) {
+      return toVideoId(pathname.slice(prefix.length));
+    }
   }
 
   return null;

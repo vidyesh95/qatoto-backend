@@ -44,12 +44,15 @@ export function divRoundHalfAwayFromZero(numerator: bigint, denominator: bigint)
     return quotient;
   }
 
-  const absoluteRemainderDoubled = (remainder < 0n ? -remainder : remainder) * 2n;
-  const absoluteDenominator = denominator < 0n ? -denominator : denominator;
-  const resultSign = numerator < 0n !== denominator < 0n ? -1n : 1n;
+  let absRemDoubled = remainder * 2n;
+  if (absRemDoubled < 0n) absRemDoubled = -absRemDoubled;
+  let absDenom = denominator;
+  if (absDenom < 0n) absDenom = -absDenom;
 
   // >=, not >: an exact half rounds AWAY from zero, which is what Postgres does.
-  return absoluteRemainderDoubled >= absoluteDenominator ? quotient + resultSign : quotient;
+  return absRemDoubled >= absDenom
+    ? quotient + (numerator < 0n !== denominator < 0n ? -1n : 1n)
+    : quotient;
 }
 
 interface ApportionmentSlot {
