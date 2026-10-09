@@ -136,10 +136,11 @@ export function pinReportedDurationSeconds(reportedDurationSeconds: number): num
     reportedDurationSeconds,
   );
 
-  return Math.max(
-    MINIMUM_REPORTED_DURATION_SECONDS,
-    Math.min(reportedDurationSeconds, MAXIMUM_REPORTED_DURATION_SECONDS),
-  );
+  return reportedDurationSeconds < MINIMUM_REPORTED_DURATION_SECONDS
+    ? MINIMUM_REPORTED_DURATION_SECONDS
+    : reportedDurationSeconds > MAXIMUM_REPORTED_DURATION_SECONDS
+      ? MAXIMUM_REPORTED_DURATION_SECONDS
+      : reportedDurationSeconds;
 }
 
 /**
