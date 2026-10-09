@@ -11,6 +11,7 @@ import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { account, accountDeletionRequest, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
+import { logger } from "#src/lib/logger.js";
 import { fetchGitHubPrimaryEmail, readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
 import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
 import { recordOAuthSignUpTermsAcceptance } from "#src/modules/auth/terms/terms-acceptance.service.js";
@@ -26,7 +27,11 @@ async function sendOtpEmail(params: {
   readonly type: string;
 }): Promise<Awaited<ReturnType<typeof sendTransactionalEmail>>> {
   if (config.NODE_ENV === "development") {
-    console.log(`OTP for ${params.email} (${params.type}): ${params.otp}`);
+    logger.debug("OTP generated", {
+      email: params.email,
+      type: params.type,
+      otp: params.otp,
+    });
   }
 
   const subject =
