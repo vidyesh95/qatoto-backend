@@ -1,17 +1,26 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const mockResolveCommercePaymentProvider = vi.hoisted(() => vi.fn());
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockResolveCommercePaymentProvider = vi.hoisted(() => vi.fn<any>());
 
-const mockDbUpdate = vi.hoisted(() => vi.fn());
-const mockDbSet = vi.hoisted(() => vi.fn());
-const mockDbWhere = vi.hoisted(() => vi.fn());
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockDbUpdate = vi.hoisted(() => vi.fn<any>());
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockDbSet = vi.hoisted(() => vi.fn<any>());
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockDbWhere = vi.hoisted(() => vi.fn<any>());
 const mockDbTransaction = vi.hoisted(() =>
-  vi.fn(async (cb) =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  vi.fn<any>(async (cb: any) =>
     cb({
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      for: vi.fn().mockResolvedValue([]),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      select: vi.fn<any>().mockReturnThis(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      from: vi.fn<any>().mockReturnThis(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      where: vi.fn<any>().mockReturnThis(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for: vi.fn<any>().mockResolvedValue([]),
       update: mockDbUpdate,
     }),
   ),
@@ -42,7 +51,8 @@ vi.mock("drizzle-orm", async (importOriginal) => {
   const actual = await importOriginal<typeof import("drizzle-orm")>();
   return {
     ...actual,
-    eq: vi.fn(),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    eq: vi.fn<any>(),
   };
 });
 
@@ -139,8 +149,10 @@ describe("processCommercePaymentOutboxRow", () => {
     mockResolveCommercePaymentProvider.mockReturnValue({
       success: true,
       value: {
-        createPaymentIntent: vi.fn().mockRejectedValue(new Error("Provider failed intent")),
-        createRefund: vi.fn(),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        createPaymentIntent: vi.fn<any>().mockRejectedValue(new Error("Provider failed intent")),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        createRefund: vi.fn<any>(),
       },
     });
 
@@ -171,7 +183,8 @@ describe("processCommercePaymentOutboxRow", () => {
     mockResolveCommercePaymentProvider.mockReturnValue({
       success: true,
       value: {
-        createRefund: vi.fn().mockRejectedValue(new Error("Provider failed refund")),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        createRefund: vi.fn<any>().mockRejectedValue(new Error("Provider failed refund")),
       },
     });
 
