@@ -1057,20 +1057,23 @@ export async function appendRevision(
       );
     }
 
-    for (const productLine of input.productLines) {
-      const lineTotalInCents = productLine.quantity * productLine.unitPriceInCents;
-      await transaction.insert(commerceQuoteProductLine).values({
-        revisionId: revision.id,
-        rfqProductLineId: productLine.rfqProductLineId,
-        quantity: productLine.quantity,
-        unitPriceInCents: productLine.unitPriceInCents,
-        lineTotalInCents,
-        titleSnapshot: productLine.titleSnapshot,
-        specificationSnapshot: productLine.specificationSnapshot,
-        leadTimeDays: productLine.leadTimeDays ?? null,
-        exclusionsSnapshot: productLine.exclusionsSnapshot ?? null,
-        siblingOrder: productLine.siblingOrder,
+    if (input.productLines.length > 0) {
+      const productLineValues = input.productLines.map((productLine) => {
+        const lineTotalInCents = productLine.quantity * productLine.unitPriceInCents;
+        return {
+          revisionId: revision.id,
+          rfqProductLineId: productLine.rfqProductLineId,
+          quantity: productLine.quantity,
+          unitPriceInCents: productLine.unitPriceInCents,
+          lineTotalInCents,
+          titleSnapshot: productLine.titleSnapshot,
+          specificationSnapshot: productLine.specificationSnapshot,
+          leadTimeDays: productLine.leadTimeDays ?? null,
+          exclusionsSnapshot: productLine.exclusionsSnapshot ?? null,
+          siblingOrder: productLine.siblingOrder,
+        };
       });
+      await transaction.insert(commerceQuoteProductLine).values(productLineValues);
     }
 
     for (const serviceLine of input.serviceLines) {
