@@ -46,7 +46,7 @@ vi.mock("#src/modules/store/storefront/commerce-payment-provider.adapter.js", ()
   resolveCommercePaymentProvider: () => resolveCommercePaymentProvider(),
 }));
 
-const { verifyRazorpayCheckout, confirmProviderPaymentIntent } =
+const { verifyRazorpayCheckout, confirmProviderPaymentIntent, confirmRazorpayOrderFromWebhook } =
   await import("#src/modules/store/orders/commerce-payments.service.js");
 
 const BUYER_ORGANIZATION_ID = "org_buyer";
@@ -248,5 +248,43 @@ describe("confirmProviderPaymentIntent", () => {
     // The queued intent row was never consumed: the refusal came before any read.
     expect(queuedSelectResults).toHaveLength(1);
     expect(transactionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("confirmRazorpayOrderFromWebhook", () => {
+  beforeEach(() => {
+    queuedSelectResults.length = 0;
+    vi.clearAllMocks();
+    transactionMock.mockResolvedValue(undefined);
+    resolveCommercePaymentProvider.mockReturnValue({
+      success: true,
+      value: { providerName: "razorpay", retrievePaymentIntent },
+    });
+  });
+
+  it("returns null if no intent matches the webhook order ID", async () => {
+    queuedSelectResults.push([]);
+
+    const result = await confirmRazorpayOrderFromWebhook(RAZORPAY_ORDER_ID, NOW);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.value).toBeNull();
+    }
+    expect(retrievePaymentIntent).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("defers to confirmProviderPaymentIntent when an intent is found", async () => {
+    queuedSelectResults.push([{ id: "pi_1" }], [intentRow({ state: "requires_action" })]);
+    providerReports("requires_action");
+
+    const result = await confirmRazorpayOrderFromWebhook(RAZORPAY_ORDER_ID, NOW);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.value?.state).toBe("requires_action");
+    }
+    expect(retrievePaymentIntent).toHaveBeenCalledWith(RAZORPAY_ORDER_ID);
   });
 });
