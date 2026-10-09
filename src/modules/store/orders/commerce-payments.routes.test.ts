@@ -287,6 +287,30 @@ describe("commerce payments routes", () => {
 
       expect(response.status).toBe(422);
     });
+
+    it("maps NOT_FOUND to 404", async () => {
+      listRefunds.mockResolvedValue({ success: false, error: { type: "NOT_FOUND" } });
+
+      const response = await request(app).get(`${path}?orderId=order_1`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it("maps FORBIDDEN to 403", async () => {
+      listRefunds.mockResolvedValue({ success: false, error: { type: "FORBIDDEN" } });
+
+      const response = await request(app).get(`${path}?orderId=order_1`);
+
+      expect(response.status).toBe(403);
+    });
+
+    it("maps PROVIDER_UNAVAILABLE to 503", async () => {
+      listRefunds.mockResolvedValue({ success: false, error: { type: "PROVIDER_UNAVAILABLE", reason: "timeout" } });
+
+      const response = await request(app).get(`${path}?orderId=order_1`);
+
+      expect(response.status).toBe(503);
+    });
   });
 
   describe("POST /commerce/orders/:orderId/refunds", () => {
