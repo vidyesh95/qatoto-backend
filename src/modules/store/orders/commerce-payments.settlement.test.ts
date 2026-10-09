@@ -78,12 +78,6 @@ describe("A41 · a payment posts only what its rail permits", () => {
     });
   }
 
-  for (const rail of UNPAYABLE_RAILS) {
-    it(`refuses to plan anything on ${rail}, which takes no payment intent`, () => {
-      expect(() => planSettlementPostings(rail, ORDER_ID, AMOUNT)).toThrow(/takes no payment intent/);
-      expect(() => planRefundPostings(rail, ORDER_ID, AMOUNT)).toThrow(/takes no payment intent/);
-    });
-  }
 });
 
 describe("A41 · the direct_processor rail settles buyer to seller", () => {
@@ -161,5 +155,25 @@ describe("A41 · the frozen rail still posts what it always did", () => {
     ].flatMap((posting) => posting.lines.map((line) => line.accountKind));
 
     expect(planned).not.toContain("seller_payable");
+  });
+});
+
+
+describe("A41 · Unhandled rails", () => {
+  for (const rail of UNPAYABLE_RAILS) {
+    it(`refuses to plan anything on ${rail}, which takes no payment intent`, () => {
+      expect(() => planSettlementPostings(rail, ORDER_ID, AMOUNT)).toThrow(/takes no payment intent/);
+      expect(() => planRefundPostings(rail, ORDER_ID, AMOUNT)).toThrow(/takes no payment intent/);
+    });
+  }
+
+  it("throws Unhandled settlement rail for invalid rail in planSettlementPostings", () => {
+    // @ts-expect-error Testing invalid rail
+    expect(() => planSettlementPostings("invalid_rail", ORDER_ID, AMOUNT)).toThrow(/Unhandled settlement rail/);
+  });
+
+  it("throws Unhandled settlement rail for invalid rail in planRefundPostings", () => {
+    // @ts-expect-error Testing invalid rail
+    expect(() => planRefundPostings("invalid_rail", ORDER_ID, AMOUNT)).toThrow(/Unhandled settlement rail/);
   });
 });
