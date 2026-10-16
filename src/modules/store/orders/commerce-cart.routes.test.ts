@@ -160,7 +160,7 @@ describe("commerce cart and checkout routes", () => {
 
     /**
      * `errors`, NEVER `data`. This controller used to answer with
-     * `data: error.flatten().fieldErrors`, and the client's envelope reader only ever looks at
+     * `data: z.flattenError(error).fieldErrors`, and the client's envelope reader only ever looks at
      * `errors` — so every 422 across cart, checkout, orders and quotes arrived in the browser
      * with no field detail at all. The status was right and the response was useless.
      */

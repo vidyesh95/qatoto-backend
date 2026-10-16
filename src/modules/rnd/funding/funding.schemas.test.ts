@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 
 // The controller imports its services, which pull in the db pool at module scope. Stub the
@@ -99,7 +100,7 @@ describe("the pledge body", () => {
     // `formErrors` and NOT in `fieldErrors` — which is precisely why
     // `respondValidationFailed` merges `formErrors` under the reserved key `form`. A test
     // that looked in `fieldErrors` would find `{}` and pass a schema that rejected nothing.
-    const formErrors = parsed.success ? [] : parsed.error.flatten().formErrors;
+    const formErrors = parsed.success ? [] : z.flattenError(parsed.error).formErrors;
     // BOTH unknown keys named in one response, not just the first — a 422 that reports one
     // of two problems sends the client back for a second round trip.
     expect(formErrors.join(" ")).toContain("currency");
