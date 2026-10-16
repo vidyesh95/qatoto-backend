@@ -110,14 +110,14 @@ vi.mock("#src/modules/store/organizations/require-active-commerce-organization.j
 }));
 
 const createPaymentIntent = vi.fn<(...args: readonly unknown[]) => unknown>();
-const getPaymentIntent = vi.fn<(...args: readonly unknown[]) => unknown>();
+const mockGetPaymentIntentService = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listRefunds = vi.fn<(...args: readonly unknown[]) => unknown>();
 const createRefund = vi.fn<(...args: readonly unknown[]) => unknown>();
 const verifyRazorpayCheckout = vi.fn<(...args: readonly unknown[]) => unknown>();
 vi.mock("#src/modules/store/orders/commerce-payments.service.js", () => ({
   verifyRazorpayCheckout: (...args: readonly unknown[]) => verifyRazorpayCheckout(...args),
   createPaymentIntent: (...args: readonly unknown[]) => createPaymentIntent(...args),
-  getPaymentIntent: (...args: readonly unknown[]) => getPaymentIntent(...args),
+  getPaymentIntent: (...args: readonly unknown[]) => mockGetPaymentIntentService(...args),
   listRefunds: (...args: readonly unknown[]) => listRefunds(...args),
   createRefund: (...args: readonly unknown[]) => createRefund(...args),
 }));
@@ -229,25 +229,47 @@ describe("commerce payments routes", () => {
       const response = await request(app).get(path);
 
       expect(response.status).toBe(401);
-      expect(getPaymentIntent).not.toHaveBeenCalled();
+      expect(mockGetPaymentIntentService).not.toHaveBeenCalled();
     });
 
     it("loads the intent and passes the resolved actor through", async () => {
-      getPaymentIntent.mockResolvedValue({ success: true, value: { id: "pi_1", state: "pending" } });
+      mockGetPaymentIntentService.mockResolvedValue({ success: true, value: { id: "pi_1", state: "pending" } });
 
       const response = await request(app).get(path);
 
       expect(response.status).toBe(200);
-      expect(getPaymentIntent).toHaveBeenCalledWith(ACTOR, "pi_1");
+      expect(mockGetPaymentIntentService).toHaveBeenCalledWith(ACTOR, "pi_1");
       expect(response.body.data).toEqual({ id: "pi_1", state: "pending" });
     });
 
     it("maps NOT_FOUND to 404 for a payment intent belonging to another organization", async () => {
-      getPaymentIntent.mockResolvedValue({ success: false, error: { type: "NOT_FOUND" } });
+      mockGetPaymentIntentService.mockResolvedValue({ success: false, error: { type: "NOT_FOUND" } });
 
       const response = await request(app).get(path);
 
       expect(response.status).toBe(404);
+    });
+
+    it("rejects an unknown query key with 422", async () => {
+      const response = await request(app).get(`${path}?extra=1`);
+
+      expect(response.status).toBe(422);
+      expect(mockGetPaymentIntentService).not.toHaveBeenCalled();
+    });
+
+    it("rejects a paymentIntentId over the 200-character cap with 422", async () => {
+      const response = await request(app).get(`/commerce/payments/${"a".repeat(201)}`);
+
+      expect(response.status).toBe(422);
+      expect(mockGetPaymentIntentService).not.toHaveBeenCalled();
+    });
+
+    it("maps FORBIDDEN to 403", async () => {
+      mockGetPaymentIntentService.mockResolvedValue({ success: false, error: { type: "FORBIDDEN" } });
+
+      const response = await request(app).get(path);
+
+      expect(response.status).toBe(403);
     });
   });
 
