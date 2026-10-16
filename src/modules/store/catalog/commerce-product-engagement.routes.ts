@@ -25,8 +25,7 @@ import * as commerceProductEngagementController from "#src/modules/store/catalog
  *
  * `/like` AND `/bookmark` ARE NOT SYNONYMS. A like moves a public counter and nothing
  * else; a bookmark is the buyer's wishlist and is the only kind
- * `GET /commerce/bookmarked-products` returns. `/like` was `/save` until migration 0120,
- * when the two stopped being the same fact.
+ * `GET /commerce/bookmarked-products` returns.
  *
  * Engagement is USER-scoped, so these need a session but NOT a commerce organization:
  * an organization only becomes usable after a staff verification decision, and putting
@@ -110,12 +109,8 @@ commerceProductEngagementRouter.post(
 /**
  * The caller's own bookmarked listings — their wishlist (A11).
  *
- * BOOKMARKS ONLY, AND THERE IS NO PARAMETER TO WIDEN IT. This was `/saved-products` with an
- * optional `?kind=` whose absence meant BOTH kinds, which is how a heart tap ended up filing a
- * product in someone's wishlist. Likes are a public counter and are never listed back to the
- * person who made them, so a `kind` that could only legally say `bookmarked` was a parameter
- * pretending to offer a choice. The query schema is `.strict()`, so a stale client still sending
- * `?kind=` gets a 422 rather than a quietly different list.
+ * BOOKMARKS ONLY, AND THERE IS NO PARAMETER TO WIDEN IT. The query schema is `.strict()`,
+ * so a client sending an unrecognised parameter gets a 422 rather than a silently ignored parameter.
  *
  * ITS OWN ROUTER, MOUNTED AT `/commerce` RATHER THAN `/store`, and the split is the same one this
  * file's header already makes for the writes. `/store` is the prefix a signed-out visitor browses;

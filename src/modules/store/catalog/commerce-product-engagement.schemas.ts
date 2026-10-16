@@ -48,14 +48,8 @@ export const ProductSlugParamsSchema = z
 /**
  * `GET /commerce/bookmarked-products` (A11).
  *
- * THERE IS NO `kind`, AND ITS ABSENCE IS THE POINT. This route was `/saved-products` with an
- * optional `kind` whose omission meant BOTH kinds — which is precisely how a heart tap ended up
- * filing a product in the buyer's wishlist. Since migration 0120 a like is a public counter that is
- * never listed back to the person who made it, so `bookmarked` is the only list there is.
- *
- * `.strict()` IS DOING WORK HERE. A client still sending `?kind=liked` gets a 422 naming the
- * unrecognised key, rather than a silently different list — a loud failure is the right answer to a
- * caller asking for something that no longer exists.
+ * `.strict()` IS DOING WORK HERE. A client sending an unrecognised query parameter
+ * gets a 422 naming the unrecognised key, rather than a silently ignored parameter.
  */
 export const ListBookmarkedProductsQuerySchema = z
   .object({

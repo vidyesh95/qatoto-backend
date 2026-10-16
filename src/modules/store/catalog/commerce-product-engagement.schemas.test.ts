@@ -105,9 +105,9 @@ describe("commerce-product-engagement.schemas", () => {
       expect(ListBookmarkedProductsQuerySchema.safeParse({ limit: 49 }).success).toBe(false);
     });
 
-    it("rejects unknown keys like kind (which was deprecated)", () => {
+    it("rejects unknown keys", () => {
       const result = ListBookmarkedProductsQuerySchema.safeParse({
-        kind: "liked",
+        unknownKey: "value",
       });
       expect(result.success).toBe(false);
     });
