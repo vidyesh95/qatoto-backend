@@ -1,3 +1,12 @@
+import {
+  type ScoreLadderRung,
+  assertLadderIsWellFormed,
+  assertNonNegativeIntegerInput,
+  assertSafeIntegerInput,
+  pointsForAtLeastLadder,
+  pointsForAtMostLadder,
+} from "#src/lib/score-ladder.js";
+
 /**
  * The Civic Pulse opportunity score: one 0..100 integer per problem cluster, recomputed by
  * the nightly `recompute-opportunity-scores` job and written into
@@ -55,180 +64,6 @@ export const OPPORTUNITY_SCORE_COMPONENT_BUDGETS = {
 
 /** The full-marks score. A cluster hitting the top rung of all five ladders lands here. */
 const OPPORTUNITY_SCORE_MAXIMUM_POINTS = 100;
-
-/**
- * One step of a ladder: a threshold and the points awarded to the first rung that matches.
- *
- * Deliberately not a formula. A rung is data, so a tuning change is a diff to a table that
- * the module-load checks re-validate, not an edit to arithmetic nobody re-derives.
- */
-interface ScoreLadderRung {
-  readonly threshold: number;
-  readonly points: number;
-}
-
-/**
- * Which comparison a ladder is scanned with. The two directions are NOT interchangeable and
- * a ladder declared for one is silently wrong under the other, which is why every ladder
- * below is passed through `assertLadderIsWellFormed` with its direction at module load.
- */
-type LadderDirection = "atLeastThreshold" | "atMostThreshold";
-
-/**
- * Validates a ladder's shape once, at module load.
- *
- * The trap this exists to catch: rungs are scanned in declaration order and the FIRST match
- * wins, so an "at least" ladder declared lowest-threshold-first would match its bottom rung
- * for every input above zero. That is a total-loss scoring bug that produces plausible small
- * numbers, no exception, and no type error — the ranking would simply be wrong forever.
- *
- * Checking `topRung.points === componentBudget` is the other half of the 0..100 guarantee:
- * it pins each ladder's ceiling to the budget table, so the five budgets summing to 100 is
- * enough to prove the total can never exceed 100.
- *
- * @throws if the ladder is empty, has a non-integer or non-positive rung, is not strictly
- *         ordered in both threshold and points, or does not top out at its budget. All are
- *         unrecoverable programmer errors (CLAUDE.md §3.3) and all fire at import time,
- *         where a broken table cannot reach a single request.
- */
-function assertLadderIsWellFormed(
-  ladderName: string,
-  ladder: readonly ScoreLadderRung[],
-  direction: LadderDirection,
-  componentBudget: number,
-): void {
-  const topRung = ladder.at(0);
-  if (topRung === undefined) {
-    throw new Error(`${ladderName}: ladder must have at least one rung`);
-  }
-  if (topRung.points !== componentBudget) {
-    throw new Error(
-      `${ladderName}: top rung awards ${topRung.points} but the component budget is ${componentBudget}`,
-    );
-  }
-
-  for (const rung of ladder) {
-    if (!Number.isSafeInteger(rung.threshold) || !Number.isSafeInteger(rung.points)) {
-      throw new Error(
-        `${ladderName}: rung {threshold: ${rung.threshold}, points: ${rung.points}} must be integral — no floats (§4c)`,
-      );
-    }
-    if (rung.points <= 0) {
-      throw new Error(
-        `${ladderName}: rung at threshold ${rung.threshold} awards ${rung.points}; the only zero is the terminal fall-through`,
-      );
-    }
-  }
-
-  let previousRung = topRung;
-  for (const currentRung of ladder.slice(1)) {
-    const thresholdsAreOrdered =
-      direction === "atLeastThreshold"
-        ? currentRung.threshold < previousRung.threshold
-        : currentRung.threshold > previousRung.threshold;
-    if (!thresholdsAreOrdered) {
-      throw new Error(
-        `${ladderName}: thresholds must be strictly ordered for a ${direction} scan, but ${previousRung.threshold} is followed by ${currentRung.threshold}`,
-      );
-    }
-    if (currentRung.points >= previousRung.points) {
-      throw new Error(
-        `${ladderName}: points must strictly decrease down the ladder, but ${previousRung.points} is followed by ${currentRung.points}`,
-      );
-    }
-    previousRung = currentRung;
-  }
-}
-
-/**
- * Scans a descending-threshold ladder and returns the first rung the value reaches.
- *
- * The `return 0` is not a fallback — it IS the terminal rung, and it is what makes the
- * function total: every value below the lowest threshold, including a negative one, scores
- * nothing rather than escaping the ladder's bound.
- */
-function pointsForAtLeastLadder(ladder: readonly ScoreLadderRung[], measuredValue: number): number {
-  for (const rung of ladder) {
-    if (measuredValue >= rung.threshold) {
-      return rung.points;
-    }
-  }
-  return 0;
-}
-
-/**
- * Scans an ascending-threshold ladder and returns the first rung the value fits under.
- *
- * The mirror image of `pointsForAtLeastLadder`, for the components where SMALL is good
- * (a fresh report, an unsolved problem). Same terminal `0`, same totality guarantee.
- */
-function pointsForAtMostLadder(ladder: readonly ScoreLadderRung[], measuredValue: number): number {
-  for (const rung of ladder) {
-    if (measuredValue <= rung.threshold) {
-      return rung.points;
-    }
-  }
-  return 0;
-}
-
-/**
- * Rejects any input that is not a safe integer.
- *
- * NaN is the specific hazard. Every comparison against NaN is false, so a NaN input would
- * fall through every rung of every ladder to the terminal `0` and be indistinguishable from
- * a legitimately dead cluster — a wrong score with no exception and no log line. A count
- * that arrived as NaN, Infinity, or `20.5` means the caller's SQL or date arithmetic is
- * broken upstream, which is exactly the physically-impossible-invariant case where
- * CLAUDE.md §3.3 permits a throw. It also enforces the module's float ban at the boundary.
- *
- * @throws if `measuredValue` is NaN, infinite, fractional, or beyond `Number.MAX_SAFE_INTEGER`.
- */
-function assertSafeIntegerInput(
-  functionName: string,
-  parameterName: string,
-  measuredValue: number,
-): void {
-  if (!Number.isSafeInteger(measuredValue)) {
-    throw new Error(
-      `${functionName}: ${parameterName} must be a safe integer, got ${measuredValue}`,
-    );
-  }
-}
-
-/**
- * Rejects any input that is not a NON-NEGATIVE safe integer.
- *
- * The stricter guard, for the one input where a negative value would FAIL OPEN.
- *
- * The three "at least" ladders are total over the whole integer line and the spec gives them
- * an explicit `else 0`, so a negative count there is already defined and already fails closed
- * — it scores nothing. `ageInDays` genuinely goes negative (clock skew, backfills) and is
- * deliberately clamped rather than rejected. `linkedProjectCount` is neither: the spec
- * enumerates 0 -> 10, 1 -> 6, 2 -> 3, >=3 -> 0 with NO `else` clause, so a negative count has
- * no spec'd value at all, and the `atMost` scan would read it as `<= 0` and award the full
- * 10-point scarcity budget. That is the only place in the module where nonsense INFLATES the
- * score, on a number §6 calls a ranking attack surface.
- *
- * A `COUNT(*)` cannot be negative, so reaching here means the caller's SQL is broken — the
- * physically-impossible invariant CLAUDE.md §3.3 licenses a throw for. Failing the batch
- * loudly beats silently promoting a cluster nobody is building against but that also has no
- * evidence behind it. This matches `projectScarcityPoints` in the sibling `demand-score.ts`,
- * which rejects a negative count for exactly this reason.
- *
- * @throws if `measuredValue` is negative, NaN, infinite, fractional, or beyond
- *         `Number.MAX_SAFE_INTEGER`.
- */
-function assertNonNegativeIntegerInput(
-  functionName: string,
-  parameterName: string,
-  measuredValue: number,
-): void {
-  if (!Number.isSafeInteger(measuredValue) || measuredValue < 0) {
-    throw new Error(
-      `${functionName}: ${parameterName} must be a non-negative safe integer, got ${measuredValue}`,
-    );
-  }
-}
 
 const DISTINCT_REPORTER_LADDER: readonly ScoreLadderRung[] = [
   { threshold: 500, points: 35 },
