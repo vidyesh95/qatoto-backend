@@ -37,11 +37,10 @@ export function divRoundHalfAwayFromZero(numerator: bigint, denominator: bigint)
     throw new Error("divRoundHalfAwayFromZero: denominator must not be zero");
   }
 
-  const quotient = numerator / denominator;
   const remainder = numerator % denominator;
 
   if (remainder === 0n) {
-    return quotient;
+    return numerator / denominator;
   }
 
   const absoluteRemainderDoubled = (remainder < 0n ? -remainder : remainder) * 2n;
@@ -49,7 +48,9 @@ export function divRoundHalfAwayFromZero(numerator: bigint, denominator: bigint)
   const resultSign = numerator < 0n !== denominator < 0n ? -1n : 1n;
 
   // >=, not >: an exact half rounds AWAY from zero, which is what Postgres does.
-  return absoluteRemainderDoubled >= absoluteDenominator ? quotient + resultSign : quotient;
+  return (
+    numerator / denominator + (absoluteRemainderDoubled >= absoluteDenominator ? resultSign : 0n)
+  );
 }
 
 interface ApportionmentSlot {
