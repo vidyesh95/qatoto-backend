@@ -511,21 +511,7 @@ export const auth = betterAuth({
     // header is present, and browsers never send one to these routes. `requireAuth`
     // needs no change — it calls auth.api.getSession(), which runs these hooks.
     //
-    // TODO(native): flip to `bearer({ requireSignature: true })` BEFORE the first
-    // mobile release. With the default (false) a RAW session token is accepted, which
-    // means the value stored in `session.token` is itself a working credential —
-    // anyone who can merely READ the database (a backup, a read replica, a logging
-    // pipeline) can replay a row and become that user. `true` accepts only the signed
-    // `<token>.<hmac>` form, which cannot be forged without BETTER_AUTH_SECRET.
-    // Flipping it AFTER mobile ships invalidates every token already in Keychain /
-    // EncryptedSharedPreferences and logs every mobile user out; today it is free.
-    //
-    // NOW A CONFIG FLAG rather than a comment (§11l.2 item 11): `BEARER_REQUIRE_SIGNATURE`
-    // defaults to false, which is exactly today's behaviour, and set to `true` it closes
-    // the replay hole above. The TODO stays because the DECISION is still owed — a flag
-    // nobody sets is the same as no flag — but the change is now a deploy rather than a
-    // patch.
-    bearer({ requireSignature: config.BEARER_REQUIRE_SIGNATURE }),
+    bearer({ requireSignature: true }),
     passkey({
       // WebAuthn relying-party identity. The ceremony runs in the user's browser
       // at FRONTEND_URL, so rpID/origin derive from there (NOT the API origin).
