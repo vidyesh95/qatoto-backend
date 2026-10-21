@@ -279,10 +279,10 @@ describe("commerce-product-engagement.routes", () => {
       expect(response.status).toBe(401);
     });
 
-    it("returns 422 on invalid query parameter (e.g. deprecated kind)", async () => {
+    it("returns 422 on invalid query parameter", async () => {
       signInAs({ id: "usr_buyer_1", email: "buyer@qatoto.test" });
 
-      const response = await request(app).get("/commerce/bookmarked-products").query({ kind: "liked" });
+      const response = await request(app).get("/commerce/bookmarked-products").query({ unknownParam: "value" });
 
       expect(response.status).toBe(422);
     });
