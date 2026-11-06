@@ -266,6 +266,27 @@ export const applicationCreateLimiter = createLimiter({
 });
 
 /**
+ * PUT /daily-log-reminders/me. The composer writes this after every submitted log and a person
+ * flips the switch by hand, so a low budget would only ever refuse somebody's own setting.
+ */
+export const dailyLogReminderPreferenceLimiter = createLimiter({
+  namespace: "dailyLogReminderPreference",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+/**
+ * POST /daily-log-reminders/off. Needs no session because it comes from an email, so it is reached
+ * by IP. A guess is an HMAC, which a limiter does not need to stop; this bounds the verification
+ * work.
+ */
+export const dailyLogReminderOffLimiter = createLimiter({
+  namespace: "dailyLogReminderOff",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
  * POST …/invites — an invite lands in someone else's notifications, so this is
  * outbound-to-a-third-party and is capped tighter than inbound applications.
  */

@@ -416,6 +416,7 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(e)",
       note: "Names who owns or founded a thing other people are still working on or buying from. The row outlives the account by design (rule R1).",
     },
+    "daily_log_reminder_preference.user_id": { kind: "delete_rows" },
     "notification.actor_user_id": { kind: "null_out" },
     "notification.recipient_user_id": { kind: "delete_rows" },
     "optimization_suggestion.decided_by_user_id": {

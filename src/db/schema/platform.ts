@@ -634,6 +634,9 @@ export const notificationKindEnum = pgEnum("notification_kind", [
   "support_case_opened",
   "support_case_replied",
   "support_case_decided",
+  // Sent by a job, so it has no actor. A nudge about something the person has not done yet, which
+  // is why it alone can be switched off: see `daily_log_reminder_preference`.
+  "daily_log_reminder",
 ]);
 
 /**

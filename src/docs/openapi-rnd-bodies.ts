@@ -72,6 +72,10 @@ import {
 } from "#src/modules/platform/support/support-cases.schemas.js";
 import { MarkNotificationsReadSchema } from "#src/modules/platform/notifications/notifications.schemas.js";
 import {
+  TurnOffDailyLogRemindersSchema,
+  UpdateDailyLogReminderSchema,
+} from "#src/modules/rnd/daily-log-reminders/daily-log-reminders.schemas.js";
+import {
   CountersignPlatformRoleSchema,
   ProposePlatformRoleSchema,
 } from "#src/modules/platform/roles/platform-roles.schemas.js";
@@ -320,6 +324,8 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   "post /discovery/problem-reports": { schema: CreateProblemReportSchema, required: true },
   "post /funding-rounds/{roundId}/pledges": { schema: CreatePledgeSchema, required: true },
   "post /notifications/read": { schema: MarkNotificationsReadSchema, required: true },
+  "post /daily-log-reminders/off": { schema: TurnOffDailyLogRemindersSchema, required: true },
+  "put /daily-log-reminders/me": { schema: UpdateDailyLogReminderSchema, required: true },
   "post /research-categories": { schema: CreateCategorySchema, required: true },
   "post /research-projects/": { schema: CreateProjectSchema, required: true },
   "post /research-projects/{projectSlug}/allocation-proposals/{proposalId}/dispute": {

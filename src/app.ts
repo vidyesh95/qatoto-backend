@@ -36,6 +36,7 @@ import supportCasesRouter from "#src/modules/platform/support/support-cases.rout
 import compensationRouter, {
   governanceRouter,
 } from "#src/modules/rnd/compensation/compensation.routes.js";
+import dailyLogRemindersRouter from "#src/modules/rnd/daily-log-reminders/daily-log-reminders.routes.js";
 import discoveryRouter from "#src/modules/rnd/discovery/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/modules/rnd/funding/funding.routes.js";
 import importIntelligenceRouter from "#src/modules/rnd/import-intelligence/import-intelligence.routes.js";
@@ -447,6 +448,9 @@ app.use("/", applicationInboxRouter);
 // is — an inbox belongs to a person, not to a project, and somebody arriving from an email
 // has not picked one. Caller-scoped in SQL on every route; there is no `?userId=`.
 app.use("/", notificationsRouter);
+// Daily log reminder settings. Root-mounted for the same reason: the setting belongs to a person,
+// and its off route is reached from an email with no project and no session.
+app.use("/", dailyLogRemindersRouter);
 // The platform moderation log (§11l.2). Root-mounted at /admin/audit-trail rather than
 // under /discovery/admin, because it spans taxonomy, the supplier directory, content
 // review and role grants — filing it under one would imply the others are not covered.

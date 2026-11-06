@@ -17,6 +17,7 @@ import discoveryRouter from "#src/modules/rnd/discovery/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/modules/rnd/funding/funding.routes.js";
 import pitchesRouter, { projectPitchRouter } from "#src/modules/rnd/pitches/pitches.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
+import dailyLogRemindersRouter from "#src/modules/rnd/daily-log-reminders/daily-log-reminders.routes.js";
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
 import platformFeedbackRouter from "#src/modules/platform/feedback/feedback.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
@@ -94,6 +95,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/", router: importIntelligenceRouter },
   { mountPath: "/", router: applicationInboxRouter },
   { mountPath: "/", router: notificationsRouter },
+  { mountPath: "/", router: dailyLogRemindersRouter },
   { mountPath: "/", router: platformAuditRouter },
   { mountPath: "/", router: platformRolesRouter },
   { mountPath: "/", router: platformFeedbackRouter },
@@ -137,6 +139,7 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   { prefix: "/admin/feedback", tag: "Site feedback" },
   { prefix: "/feedback", tag: "Site feedback" },
   { prefix: "/notifications", tag: "Notifications" },
+  { prefix: "/daily-log-reminders", tag: "Notifications" },
   // Longest prefix first, so the staff queue is tagged as moderation rather than as the
   // member-facing surface it sits inside.
   { prefix: "/support/admin", tag: "Support moderation" },
@@ -250,6 +253,8 @@ function tagFor(openApiPath: string): string {
 const PUBLICLY_RESOLVABLE = new Set([
   "get /integrations/{provider}/callback",
   "get /daily-logs/streak-leaderboard",
+  // Reached from an email with no session. The signed token in the body is the authorization.
+  "post /daily-log-reminders/off",
   // The home-page carousel. Bare on purpose — no requireAuth AND no attachOptionalUser,
   // because nothing about a slide depends on who is asking.
   "get /promotions/slides",

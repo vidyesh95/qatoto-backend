@@ -11,6 +11,7 @@ import {
   handleCloseCompensationPeriodTick,
   handleRecomputeCompensationDraftTick,
   handleRecomputeDailyLogStreaksTick,
+  handleSendDailyLogRemindersTick,
   handleRecomputeDemandSignalsTick,
   handleRecomputeBranchSignalsTick,
   handleRecomputeEquitySnapshotTick,
@@ -75,6 +76,7 @@ import { handleRecomputeTrendingSearches } from "#src/modules/home/feed/recomput
 import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
 import { handleCloseCompensationPeriod } from "#src/modules/rnd/compensation/close-compensation-period.js";
 import { handleRecomputeCompensationDraft } from "#src/modules/rnd/compensation/recompute-compensation-draft.js";
+import { handleSendDailyLogReminders } from "#src/modules/rnd/daily-log-reminders/send-daily-log-reminders.js";
 import { handleGeocodeAndClusterSubmission } from "#src/modules/rnd/discovery/geocode-and-cluster-submission.js";
 import { handleRecomputeDemandSignals } from "#src/modules/rnd/discovery/recompute-demand-signals.js";
 import { handleRecomputeFeasibilityReadouts } from "#src/modules/rnd/discovery/recompute-feasibility-readouts.js";
@@ -318,6 +320,16 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeDailyLogStreaks,
     workOptions,
     runJob(JOB_NAMES.recomputeDailyLogStreaks, handleRecomputeDailyLogStreaks),
+  );
+  await boss.work(
+    JOB_NAMES.sendDailyLogRemindersTick,
+    workOptions,
+    runJob(JOB_NAMES.sendDailyLogRemindersTick, handleSendDailyLogRemindersTick),
+  );
+  await boss.work(
+    JOB_NAMES.sendDailyLogReminders,
+    workOptions,
+    runJob(JOB_NAMES.sendDailyLogReminders, handleSendDailyLogReminders),
   );
 
   // --- §9. The four pipeline stages, then the two schedules that settle and apportion

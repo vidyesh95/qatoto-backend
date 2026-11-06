@@ -5,6 +5,7 @@ import { db } from "#src/db/index.js";
 import { notification, researchProject, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
+import { buildDailyLogReminderOffToken } from "#src/modules/rnd/daily-log-reminders/daily-log-reminder-token.js";
 
 /**
  * Notification delivery (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 1, §4e).
@@ -93,6 +94,7 @@ const SUBJECT_BY_KIND: Readonly<Record<(typeof notification.$inferSelect)["kind"
   support_case_opened: "Someone opened a support case",
   support_case_replied: "There is a reply on your support case",
   support_case_decided: "Your support case was reviewed",
+  daily_log_reminder: "Your daily log is waiting",
 };
 
 /**
@@ -166,6 +168,7 @@ export async function handleDeliverNotification(rawPayload: unknown): Promise<vo
       kind: notification.kind,
       emailStatus: notification.emailStatus,
       payloadJson: notification.payloadJson,
+      recipientUserId: notification.recipientUserId,
       recipientEmail: user.email,
       recipientName: user.name,
       projectName: researchProject.name,
@@ -206,17 +209,32 @@ export async function handleDeliverNotification(rawPayload: unknown): Promise<vo
   const projectSuffix = row.projectName === null ? "" : ` — ${row.projectName}`;
   const deepLink = deepLinkFor(config.FRONTEND_URL, row.kind, row.projectSlug, row.payloadJson);
 
+  // THE ONE KIND THAT CAN BE SWITCHED OFF, so it is the one kind carrying the link that does it. The
+  // project name stays out of its subject: a nudge repeats daily, and which project a person works
+  // on is not a fact for a lock screen.
+  const isDailyLogReminder = row.kind === "daily_log_reminder";
+  const reminderOffUrl = isDailyLogReminder
+    ? `${config.FRONTEND_URL}/daily-log-reminders/off?token=${encodeURIComponent(
+        buildDailyLogReminderOffToken(row.recipientUserId),
+      )}`
+    : null;
+
   const sent = await sendTransactionalEmail({
     toEmail: row.recipientEmail,
-    subject: `${subject}${projectSuffix}`,
+    subject: isDailyLogReminder ? subject : `${subject}${projectSuffix}`,
     // No amounts, no member names, no verdicts. The email is a doorbell; the app is the
     // door. That keeps personal data — and pay data especially (§7A.6, §11h) — out of mail
     // servers Qatoto does not control.
     htmlContent:
       `<p>Hello ${escapeHtml(row.recipientName)},</p>` +
       `<p>${escapeHtml(subject)}${escapeHtml(projectSuffix)}.</p>` +
-      `<p><a href="${deepLink}">Open Qatoto</a> to see it.</p>`,
-    textContent: `Hello ${row.recipientName},\n\n${subject}${projectSuffix}.\n\nOpen ${deepLink} to see it.\n`,
+      `<p><a href="${deepLink}">Open Qatoto</a> to see it.</p>` +
+      (reminderOffUrl === null
+        ? ""
+        : `<p><a href="${escapeHtml(reminderOffUrl)}">Turn off daily log reminders</a></p>`),
+    textContent:
+      `Hello ${row.recipientName},\n\n${subject}${projectSuffix}.\n\nOpen ${deepLink} to see it.\n` +
+      (reminderOffUrl === null ? "" : `\nTurn off daily log reminders: ${reminderOffUrl}\n`),
   });
 
   if (sent.success) {

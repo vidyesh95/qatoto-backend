@@ -109,6 +109,30 @@ export async function handleRefreshTalentProjectionsTick(
 }
 
 /**
+ * The daily log reminder tick. Quantized to the half hour, so a double cron fire collapses to one
+ * job. The job itself asks each person's zone whether it is their 7 pm.
+ */
+export async function handleSendDailyLogRemindersTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const now = readClock();
+  const hourStart = truncateToUtcHourStart(now);
+  const asOf = new Date(hourStart.getTime() + (now.getUTCMinutes() >= 30 ? 30 * 60 * 1_000 : 0));
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.sendDailyLogReminders,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.sendDailyLogReminders(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`send-daily-log-reminders-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
  * The streak decay's tick.
  *
  * Quantized to the UTC DAY even though each project's decay is evaluated in its OWN zone

@@ -44,6 +44,10 @@ export const JOB_NAMES = {
   analyzeDailyLog: "analyze-daily-log",
   recomputeDailyLogStreaksTick: "recompute-daily-log-streaks-tick",
   recomputeDailyLogStreaks: "recompute-daily-log-streaks",
+  // Twice an hour, not daily: 7 pm lands on a different UTC instant in every zone, and on a half
+  // hour in India.
+  sendDailyLogRemindersTick: "send-daily-log-reminders-tick",
+  sendDailyLogReminders: "send-daily-log-reminders",
   // §9's verification pipeline. Each handler enqueues its successor; a `failed` or
   // `flagged` step STILL enqueues finalize-verdict, because the pipeline must always
   // reach a verdict rather than stall silently (§9.7).
@@ -654,6 +658,29 @@ export const JOB_DEFINITIONS = {
       ...RECOMPUTE_RETRY,
       expireInSeconds: 1_800,
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeDailyLogStreaks),
+    },
+  },
+  [JOB_NAMES.sendDailyLogRemindersTick]: {
+    name: JOB_NAMES.sendDailyLogRemindersTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sendDailyLogRemindersTick),
+    },
+  },
+  [JOB_NAMES.sendDailyLogReminders]: {
+    name: JOB_NAMES.sendDailyLogReminders,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sendDailyLogReminders),
     },
   },
 
@@ -1709,6 +1736,9 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // After the other nightlies, so a slow recompute cannot delay the streak decay past
   // the hour a project card is first read in the earliest timezone.
   [JOB_NAMES.recomputeDailyLogStreaksTick]: "25 3 * * *",
+  // The schedule decides nothing about who is due. It only has to land inside every zone's 7 pm
+  // half hour, and the zones that matter here start on the hour or the half hour.
+  [JOB_NAMES.sendDailyLogRemindersTick]: "0,30 * * * *",
   // EVERY MINUTE (§9.8). The 24-hour window is a MINIMUM, never a maximum: a late sweep
   // leaves a window open longer, which is always the safe direction, and the sweep reads
   // persisted state rather than a timer — so a worker down six hours locks six hours of
@@ -2177,6 +2207,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.refreshTalentProjectionsTick]: TickPayloadSchema,
   [JOB_NAMES.refreshTalentProjections]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.analyzeDailyLog]: AnalyzeDailyLogPayloadSchema,
+  [JOB_NAMES.sendDailyLogRemindersTick]: TickPayloadSchema,
+  [JOB_NAMES.sendDailyLogReminders]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.recomputeDailyLogStreaksTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeDailyLogStreaks]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.groundArtifacts]: VerificationStagePayloadSchema,
@@ -2319,6 +2351,8 @@ export const idempotencyKeyFor = {
   // against a free-tier budget. Re-analysis after an override is an explicit re-enqueue
   // with its own key (§9), not a repeat of this one.
   analyzeDailyLog: (dailyLogId: string): string => `${JOB_NAMES.analyzeDailyLog}:${dailyLogId}`,
+  sendDailyLogReminders: (asOfIso: string): string =>
+    `${JOB_NAMES.sendDailyLogReminders}:${asOfIso}`,
   recomputeDailyLogStreaks: (asOfIso: string): string =>
     `${JOB_NAMES.recomputeDailyLogStreaks}:${asOfIso}`,
   // Keyed on the RUN, not the claim: a re-verification is a new run and must genuinely

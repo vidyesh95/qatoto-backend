@@ -9843,3 +9843,53 @@ export const comtradeSyncRunRelations = relations(comtradeSyncRun, ({ one }) => 
     references: [discoveryRegion.id],
   }),
 }));
+
+// ---------------------------------------------------------------------------
+// Daily log reminders.
+//
+// THIS TIME ZONE IS NOT `project_stats.project_time_zone`, AND THE TWO MUST NEVER MERGE. That
+// column is locked because it decides what a project's "day" is for streaks and equity, and a
+// client-settable day boundary is a client-settable input into a computation. This one decides
+// only when somebody's phone buzzes, so the browser may supply it. Nothing that reads it touches
+// money, effort or streaks.
+//
+// NO ROW MEANS THE DEFAULT: reminders on, at the fallback zone in `daily-log-reminder-schedule.ts`.
+// ---------------------------------------------------------------------------
+export const dailyLogReminderPreference = pgTable(
+  "daily_log_reminder_preference",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    isEnabled: boolean("is_enabled").default(true).notNull(),
+    // NULL until a browser reports one. Validated against `Intl` on the way in.
+    timeZone: text("time_zone"),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  () => [
+    check(
+      "daily_log_reminder_preference_time_zone_ck",
+      sql`time_zone IS NULL OR char_length(time_zone) BETWEEN 1 AND 64`,
+    ),
+  ],
+);
+
+/**
+ * One row per reminder sent. The primary key IS the "at most one a day per project" rule, so two
+ * overlapping runs cannot double-send, and the rows since a member's last log are the count of
+ * unanswered reminders that pauses them. `reminderDate` is the day in the member's own zone.
+ */
+export const dailyLogReminderSend = pgTable(
+  "daily_log_reminder_send",
+  {
+    projectMemberId: text("project_member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "cascade" }),
+    reminderDate: date("reminder_date", { mode: "string" }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.projectMemberId, table.reminderDate] })],
+);
