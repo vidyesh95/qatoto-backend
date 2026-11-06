@@ -9,6 +9,7 @@ import {
   projectOpenRole,
   projectStats,
   researchProject,
+  talentProfile,
   user,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
@@ -74,6 +75,7 @@ export interface ApplicationView {
   readonly status: (typeof projectApplication.$inferSelect)["status"];
   readonly applicantUserId: string;
   readonly applicantName: string;
+  readonly applicantHasPublishedTalentProfile: boolean;
   readonly applicantAvatarImageUrl: string | null;
   readonly openRoleId: string | null;
   readonly roleTitleSnapshot: string | null;
@@ -95,6 +97,13 @@ const APPLICATION_VIEW_COLUMNS = {
   applicantUserId: projectApplication.applicantUserId,
   applicantName: user.name,
   applicantAvatarImageUrl: user.image,
+  // The frontend links an applicant to their profile only when this is true, because an unpublished
+  // profile answers 404. It carries nothing a signed-in reader cannot already learn from that 404.
+  applicantHasPublishedTalentProfile: sql<boolean>`exists (
+    select 1 from ${talentProfile}
+    where ${talentProfile.userId} = ${projectApplication.applicantUserId}
+      and ${talentProfile.visibility} = 'published'
+  )`,
   openRoleId: projectApplication.openRoleId,
   roleTitleSnapshot: projectApplication.roleTitleSnapshot,
   shortPitch: projectApplication.shortPitch,
