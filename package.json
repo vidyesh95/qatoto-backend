@@ -153,11 +153,11 @@
     "gate": "pnpm check:specifiers && pnpm typecheck && pnpm fmt:check && pnpm lint; pnpm test"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1161.0",
-    "@aws-sdk/s3-request-presigner": "^3.1161.0",
-    "@better-auth/passkey": "^1.7.15",
+    "@aws-sdk/client-s3": "^3.1162.0",
+    "@aws-sdk/s3-request-presigner": "^3.1162.0",
+    "@better-auth/passkey": "^1.7.17",
     "@node-rs/argon2": "^2.2.2",
-    "better-auth": "^1.7.15",
+    "better-auth": "^1.7.17",
     "cloudinary": "^2.11.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
@@ -165,7 +165,7 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.4",
     "express": "^5.3.0",
-    "express-rate-limit": "^8.7.2",
+    "express-rate-limit": "^8.7.3",
     "helmet": "^8.3.0",
     "http-errors": "^2.0.1",
     "mdast-util-from-markdown": "^2.1.0",
@@ -192,17 +192,17 @@
     "@types/pg": "^8.23.1",
     "@types/supertest": "^6.0.3",
     "@types/swagger-ui-express": "^4.1.8",
-    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/coverage-v8": "^5.1.0",
     "drizzle-kit": "^0.31.11",
     "esbuild": "0.28.2",
-    "oxfmt": "^0.75.0",
-    "oxlint": "^1.90.0",
+    "oxfmt": "^0.76.0",
+    "oxlint": "^1.91.0",
     "oxlint-tsgolint": "^7.0.2005",
     "supertest": "^7.3.1",
     "tinybench": "^5.1.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=24.0.0"
