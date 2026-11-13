@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 // The controller imports its services, which pull in the db pool at module scope. Stub the
 // modules so the schemas can be parsed without a configured environment — nothing here

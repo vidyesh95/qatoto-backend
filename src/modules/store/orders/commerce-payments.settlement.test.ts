@@ -77,7 +77,6 @@ describe("A41 · a payment posts only what its rail permits", () => {
       }
     });
   }
-
 });
 
 describe("A41 · the direct_processor rail settles buyer to seller", () => {
@@ -157,7 +156,6 @@ describe("A41 · the frozen rail still posts what it always did", () => {
     expect(planned).not.toContain("seller_payable");
   });
 });
-
 
 describe("A41 · Unhandled rails", () => {
   for (const rail of UNPAYABLE_RAILS) {

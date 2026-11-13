@@ -6,7 +6,8 @@ vi.mock("#src/modules/auth/terms/terms-acceptance.service.js", () => ({
 }));
 
 vi.mock("#src/modules/rnd/projects/project-error-response.js", () => ({
-  respondValidationFailed: vi.fn<typeof import("#src/modules/rnd/projects/project-error-response.js").respondValidationFailed>(),
+  respondValidationFailed:
+    vi.fn<typeof import("#src/modules/rnd/projects/project-error-response.js").respondValidationFailed>(),
 }));
 
 const termsService = await import("#src/modules/auth/terms/terms-acceptance.service.js");
@@ -62,7 +63,7 @@ describe("acceptTerms", () => {
 
     expect(respondValidationFailedMock).toHaveBeenCalledExactlyOnceWith(
       response,
-      expect.anything() // The ZodError
+      expect.anything(), // The ZodError
     );
     expect(acceptCurrentTermsMock).not.toHaveBeenCalled();
   });

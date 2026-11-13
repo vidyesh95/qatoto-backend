@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+
 import { parseUserReferenceKey } from "./anonymization-manifest.js";
 import type { UserReferenceKey } from "./anonymization-manifest.js";
 
@@ -16,25 +17,23 @@ describe("parseUserReferenceKey", () => {
 
   it("should throw an error if there is no dot", () => {
     expect(() => parseUserReferenceKey("tablecolumn" as UserReferenceKey)).toThrowError(
-      "anonymization manifest: malformed key tablecolumn"
+      "anonymization manifest: malformed key tablecolumn",
     );
   });
 
   it("should throw an error if the dot is at the beginning", () => {
     expect(() => parseUserReferenceKey(".column" as UserReferenceKey)).toThrowError(
-      "anonymization manifest: malformed key .column"
+      "anonymization manifest: malformed key .column",
     );
   });
 
   it("should throw an error if the dot is at the end", () => {
     expect(() => parseUserReferenceKey("table." as UserReferenceKey)).toThrowError(
-      "anonymization manifest: malformed key table."
+      "anonymization manifest: malformed key table.",
     );
   });
 
   it("should throw an error for an empty string", () => {
-    expect(() => parseUserReferenceKey("" as UserReferenceKey)).toThrowError(
-      "anonymization manifest: malformed key "
-    );
+    expect(() => parseUserReferenceKey("" as UserReferenceKey)).toThrowError("anonymization manifest: malformed key ");
   });
 });

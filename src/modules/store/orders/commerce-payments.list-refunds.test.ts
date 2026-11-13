@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { stubServerEnvironment } from "#src/test-support/server-env.js";
 
 stubServerEnvironment();
 vi.mock("dotenv/config", () => ({}));
@@ -78,7 +78,7 @@ describe("listRefunds", () => {
           updatedAt: mockNow,
           settledAt: mockNow,
           receiptUrl: null,
-        }
+        },
       },
       {
         refund: {
@@ -91,8 +91,8 @@ describe("listRefunds", () => {
           updatedAt: mockNow,
           settledAt: mockNow,
           receiptUrl: null,
-        }
-      }
+        },
+      },
     ];
 
     limitMock.mockResolvedValue(mockRows);
@@ -122,8 +122,8 @@ describe("listRefunds", () => {
           updatedAt: mockNow,
           settledAt: mockNow,
           receiptUrl: null,
-        }
-      }
+        },
+      },
     ];
 
     limitMock.mockResolvedValue(mockRows);
