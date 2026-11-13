@@ -17,8 +17,9 @@ FROM deps AS build
 
 COPY scripts/emit-javascript.mjs ./scripts/emit-javascript.mjs
 COPY src ./src
-# Do not run `tsc` here. Hundreds of strict files peak well over 1 GB and the
-# Dokploy VPS SIGKILLs the process (exit 137). esbuild strips types file-by-file.
+# Do not run `tsc` here. Hundreds of strict files peak well over 1 GB and can
+# SIGKILL low-memory environments (exit 137). esbuild strips types file-by-file.
+# Production images are built on GitHub Actions runners (.github/workflows/deploy.yml).
 RUN node scripts/emit-javascript.mjs
 
 FROM base AS runner

@@ -1,0 +1,108 @@
+# Qatoto production stack on the Terraform-managed EC2 instance (infra/prod).
+#
+# NOT run from a checkout. .github/workflows/deploy.yml downloads this file, the
+# Caddyfile and remote-deploy.sh at the deployed commit SHA into /opt/qatoto, and
+# remote-deploy.sh renders /opt/qatoto/.env from SSM Parameter Store before `up`.
+#
+# Postgres is Aiven (Bangalore) and object storage is Backblaze B2 — neither runs here.
+# Deploy order: migrate (drizzle SQL + pg-boss queues) → api + worker → caddy.
+# If migrate fails, `up` aborts before api is recreated, so the previous api keeps serving.
+
+name: qatoto
+
+x-qatoto-environment: &qatoto-environment
+  NODE_ENV: production
+  TZ: UTC
+  PORT: "8000"
+  DATABASE_CA_CERT_PATH: /certs/ca.pem
+  # Connection budget against Aiven free (20 max_connections − 3 superuser-reserved − 1
+  # management agent = 16 usable). API 4 + worker (4 shared + 4 pg-boss) = 12, leaving
+  # room for one migrate or db:* script. Set here, not in SSM, so the budget is reviewed
+  # with the code — compose `environment` overrides the rendered .env. Every process
+  # prints its measured share at boot; check that line after a deploy.
+  DATABASE_POOL_MAX: "4"
+  WORKER_DATABASE_POOL_MAX: "4"
+
+x-qatoto-app: &qatoto-app
+  image: ghcr.io/vidyesh95/qatoto-backend:${IMAGE_TAG:?IMAGE_TAG is exported by remote-deploy.sh}
+  env_file:
+    - path: .env
+      required: true
+  volumes:
+    - ./certs/ca.pem:/certs/ca.pem:ro
+  init: true
+
+services:
+  migrate:
+    <<: *qatoto-app
+    # One-shot. No restart policy: a failing migration fails the deploy loudly instead
+    # of retrying against production.
+    restart: "no"
+    environment:
+      <<: *qatoto-environment
+      NODE_OPTIONS: --max-old-space-size=384
+    command: ["/migrate.sh"]
+
+  api:
+    <<: *qatoto-app
+    restart: unless-stopped
+    environment:
+      <<: *qatoto-environment
+      # t4g.small (2 GiB RAM + 2 GiB swap): comfortably fits api, worker, Caddy and OS in physical RAM.
+      NODE_OPTIONS: --max-old-space-size=512
+    command: ["node", "dist/index.js"]
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8000/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+
+  worker:
+    <<: *qatoto-app
+    restart: unless-stopped
+    environment:
+      <<: *qatoto-environment
+      NODE_OPTIONS: --max-old-space-size=384
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 35s
+
+  # TLS termination with automatic Let's Encrypt certificates (HTTP-01 on port 80).
+  # The only proxy in front of the app, which is what `trust proxy = 1` assumes.
+  caddy:
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      API_HOSTNAME: ${API_HOSTNAME:?API_HOSTNAME is exported by remote-deploy.sh}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  # Holds the issued certificates and ACME account. Losing it means re-issuing, and Let's
+  # Encrypt rate-limits repeated issuance for the same hostname.
+  caddy_data:
+  caddy_config:

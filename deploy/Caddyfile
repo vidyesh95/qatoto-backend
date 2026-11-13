@@ -1,0 +1,9 @@
+# Mounted into the `caddy` service of deploy/docker-compose.prod.yml.
+#
+# Caddy ignores any X-Forwarded-For the client sends (no trusted_proxies configured) and
+# sets it to the real peer address, so Express's `trust proxy = 1` reads an unspoofable
+# client IP for rate limiting.
+{$API_HOSTNAME} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}

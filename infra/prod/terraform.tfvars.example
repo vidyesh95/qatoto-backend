@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (gitignored) for LOCAL runs. CI sets the same values from
+# repository variables as TF_VAR_* environment variables.
+#
+# budget_alert_email is deliberately absent: the repository is public. Export it instead:
+#   export TF_VAR_budget_alert_email='you@example.com'
+
+instance_type      = "t4g.small" # AWS Graviton2 ARM (ap-south-1 free tier / trial)
+arch               = "arm64"     # arm64 for t4g.*
+cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
+api_hostname       = "api.qatoto.com"

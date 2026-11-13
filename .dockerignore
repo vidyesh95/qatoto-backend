@@ -28,3 +28,8 @@ SECURITY.md
 AGENTS.md
 CLAUDE.md
 LICENSE
+
+# Infrastructure and deploy tooling never ship inside the image.
+infra
+deploy
+.github

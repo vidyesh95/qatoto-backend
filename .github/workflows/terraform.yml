@@ -1,0 +1,98 @@
+name: Terraform
+
+# infra/prod only. infra/bootstrap is applied by hand, once (see infra/README.md).
+#
+# - Every pull request touching infra/: fmt + validate, no cloud credentials.
+# - Same-repo pull requests: also `terraform plan` with the read-only plan role.
+#   Fork pull requests never receive an OIDC token or secrets, so they stop at validate.
+# - Apply: Actions → Terraform → Run workflow on main. The job runs in the `infra`
+#   environment (required reviewer), which is the only OIDC subject the apply role trusts.
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+# Pull requests and applies use SEPARATE groups. In one shared group, a PR push queued
+# behind a running plan would cancel an apply still waiting for its reviewer (GitHub
+# cancels the older pending run). State itself is serialised by the S3 lock file.
+# A newer push to the same PR supersedes its older plan; applies never cancel each other.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('terraform-plan-{0}', github.event.pull_request.number) || 'terraform-prod-apply' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VAR_instance_type: ${{ vars.EC2_INSTANCE_TYPE || 't4g.small' }}
+  TF_VAR_arch: ${{ vars.DEPLOY_ARCH || 'arm64' }}
+  TF_VAR_api_hostname: ${{ vars.API_HOSTNAME }}
+  TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+
+jobs:
+  validate:
+    name: fmt + validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.15"
+      - run: terraform fmt -check -recursive infra
+      - run: terraform -chdir=infra/prod init -backend=false
+      - run: terraform -chdir=infra/prod validate
+      - run: terraform -chdir=infra/bootstrap init -backend=false
+      - run: terraform -chdir=infra/bootstrap validate
+
+  plan:
+    name: plan
+    needs: validate
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_READ }}
+      TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.15"
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TF_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: terraform -chdir=infra/prod init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+      - run: terraform -chdir=infra/prod plan -lock-timeout=2m
+
+  apply:
+    name: apply
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: infra
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_budget_alert_email: ${{ secrets.BUDGET_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.15"
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: terraform -chdir=infra/prod init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+      - run: terraform -chdir=infra/prod plan -lock-timeout=2m -out=tfplan
+      - run: terraform -chdir=infra/prod apply -lock-timeout=2m tfplan

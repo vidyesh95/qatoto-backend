@@ -1,0 +1,46 @@
+#!/bin/bash
+# First-boot provisioning for the Qatoto API instance (infra/prod/ec2.tf).
+# Runs ONCE, as root, via cloud-init. Changing this file does NOT touch a running
+# instance (ignore_changes = [user_data]); use `terraform apply -replace=aws_instance.api`.
+#
+# The application itself is NOT installed here — .github/workflows/deploy.yml ships the
+# compose file, Caddyfile and remote-deploy.sh on every deploy through SSM Run Command.
+set -euo pipefail
+
+dnf install -y docker jq
+
+# Rotate container logs so a chatty process cannot fill the 20 GB root volume.
+install -d -m 755 /etc/docker
+cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+JSON
+systemctl enable --now docker
+
+# AL2023 ships no compose plugin package. Install the release binary, checksum-verified.
+compose_asset="docker-compose-linux-${docker_compose_arch}"
+compose_download_dir="$(mktemp -d)"
+curl -fsSL --retry 5 -o "$compose_download_dir/$compose_asset" \
+  "https://github.com/docker/compose/releases/download/${docker_compose_version}/$compose_asset"
+curl -fsSL --retry 5 -o "$compose_download_dir/$compose_asset.sha256" \
+  "https://github.com/docker/compose/releases/download/${docker_compose_version}/$compose_asset.sha256"
+(cd "$compose_download_dir" && sha256sum --check --strict "$compose_asset.sha256")
+install -D -m 755 "$compose_download_dir/$compose_asset" /usr/local/lib/docker/cli-plugins/docker-compose
+rm -rf "$compose_download_dir"
+
+# 2 GiB swap gives generous headroom on top of the 2 GiB RAM on t4g.small.
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+echo 'vm.swappiness=10' > /etc/sysctl.d/90-qatoto-swap.conf
+sysctl --system
+
+# Deploy directory: compose project, rendered .env (mode 600) and the Aiven CA.
+install -d -m 700 /opt/qatoto
+install -d -m 755 /opt/qatoto/certs

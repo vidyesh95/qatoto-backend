@@ -14,3 +14,14 @@
 .vitest
 # `test:coverage` (v8 provider) writes here.
 /coverage
+
+# Terraform (infra/). The provider lock file IS committed; state, plans and real tfvars
+# are not — infra/prod state lives in S3, infra/bootstrap state is kept off-repo.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+*.tfvars
+!*.tfvars.example
+crash.log

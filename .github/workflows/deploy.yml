@@ -1,68 +1,163 @@
-name: Deploy to Dokploy
+name: Deploy
+
+# Build the image on GitHub's runners (the 1 GiB instance OOM-kills a build), push it to
+# GHCR, then tell the EC2 instance to pull and restart through SSM Run Command — no SSH
+# key exists and port 22 is closed. Infrastructure lives in infra/ (terraform.yml).
+#
+# Rollback: Actions → Deploy → Run workflow, with `image_sha` set to an earlier commit
+# whose image was already built. Nothing is rebuilt; the compose file and deploy script
+# are taken from that same commit.
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "infra/**"
+      - "**/*.md"
+      - ".github/workflows/terraform.yml"
+      - ".github/workflows/codspeed.yml"
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "Redeploy an already-built commit (full 40-character SHA). Leave empty to build and deploy the selected branch head."
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 permissions:
-  deployments: write
   contents: read
 
+env:
+  IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  build:
+    name: Build and push image
+    if: github.event_name == 'push' || inputs.image_sha == ''
+    # The image must match the instance CPU (repo variable DEPLOY_ARCH = arm64 | x86_64, defaults to arm64 for t4g).
+    # Both runner types are free for public repositories.
+    runs-on: ${{ vars.DEPLOY_ARCH == 'x86_64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Create GitHub Deployment
-        uses: chrnorm/deployment-action@v2
-        id: deployment
-        with:
-          token: "${{ github.token }}"
-          environment-url: "https://qatoto.com"
-          environment: production
+      - uses: actions/checkout@v7
 
-      - name: Trigger Dokploy Compose Deployment
-        id: dokploy_deploy
-        env:
-          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
-          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: ${{ vars.DEPLOY_ARCH == 'x86_64' && 'linux/amd64' || 'linux/arm64' }}
+          tags: |
+            ${{ env.IMAGE_REPOSITORY }}:sha-${{ github.sha }}
+            ${{ env.IMAGE_REPOSITORY }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to EC2
+    needs: build
+    # Runs after a successful build, or alone when a rollback skipped the build.
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    # The deploy role's trust policy accepts ONLY this environment's OIDC subject.
+    # The environment also gives GitHub's Deployments view its status and URL.
+    environment:
+      name: production
+      url: https://${{ vars.API_HOSTNAME }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DEPLOY_SHA: ${{ inputs.image_sha || github.sha }}
+      API_HOSTNAME: ${{ vars.API_HOSTNAME }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+    steps:
+      - name: Validate deploy inputs
         run: |
-          if [ -z "$DOKPLOY_COMPOSE_ID" ]; then
-            echo "Error: DOKPLOY_COMPOSE_ID secret is empty or not set."
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::image_sha must be a full 40-character commit SHA"; exit 1; }
+          [[ "$API_HOSTNAME" =~ ^[a-z0-9.-]+$ ]] || { echo "::error::repository variable API_HOSTNAME is unset or invalid"; exit 1; }
+          [[ "$EC2_INSTANCE_ID" =~ ^i-[0-9a-f]+$ ]] || { echo "::error::repository variable EC2_INSTANCE_ID is unset or invalid"; exit 1; }
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run remote-deploy.sh on the instance
+        run: |
+          set -euo pipefail
+          raw_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${DEPLOY_SHA}/deploy"
+
+          # The SSM agent accepts commands before first-boot user-data has finished, so wait
+          # for cloud-init BEFORE touching /opt/qatoto (it does not exist until then).
+          ssm_parameters="$(jq -cn \
+            --arg raw_base "$raw_base" \
+            --arg deploy_sha "$DEPLOY_SHA" \
+            --arg api_hostname "$API_HOSTNAME" \
+            '{
+              executionTimeout: ["900"],
+              commands: [
+                "set -eu",
+                "cloud-init status --wait > /dev/null",
+                "cd /opt/qatoto",
+                "curl -fsSL --retry 3 -o docker-compose.yml \($raw_base)/docker-compose.prod.yml",
+                "curl -fsSL --retry 3 -o Caddyfile \($raw_base)/Caddyfile",
+                "curl -fsSL --retry 3 -o remote-deploy.sh \($raw_base)/remote-deploy.sh",
+                "bash remote-deploy.sh \($deploy_sha) \($api_hostname)"
+              ]
+            }')"
+
+          command_id="$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${DEPLOY_SHA:0:12}" \
+            --timeout-seconds 120 \
+            --parameters "$ssm_parameters" \
+            --query Command.CommandId \
+            --output text)"
+          echo "SSM command: $command_id"
+
+          # `aws ssm wait command-executed` gives up after 100 s; a cold pull plus
+          # migrations can take longer, so poll for up to 15 minutes.
+          command_status="Pending"
+          for _ in $(seq 1 90); do
+            sleep 10
+            command_status="$(aws ssm get-command-invocation \
+              --command-id "$command_id" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)"
+            case "$command_status" in
+              Pending | InProgress | Delayed) continue ;;
+              *) break ;;
+            esac
+          done
+
+          aws ssm get-command-invocation \
+            --command-id "$command_id" \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --query '[StandardOutputContent, StandardErrorContent]' \
+            --output text || true
+
+          if [[ "$command_status" != "Success" ]]; then
+            echo "::error::remote deploy finished with status '$command_status'"
             exit 1
           fi
 
-          BASE_URL="${DOKPLOY_URL%/}"
-
-          RESPONSE=$(curl -s -S -w "\n%{http_code}" -X POST "${BASE_URL}/api/compose.deploy" \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: ${DOKPLOY_API_KEY}" \
-            -d "{\"composeId\": \"${DOKPLOY_COMPOSE_ID}\"}")
-
-          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-
-          echo "Status: $HTTP_STATUS"
-          echo "Response: $BODY"
-
-          if [ "$HTTP_STATUS" -ne 200 ] && [ "$HTTP_STATUS" -ne 201 ]; then
-            echo "Deployment failed with status $HTTP_STATUS"
-            exit 1
-          fi
-
-      - name: Update Deployment Status (Success)
-        if: success()
-        uses: chrnorm/deployment-status@v2
-        with:
-          token: "${{ github.token }}"
-          environment-url: "https://qatoto.com"
-          state: "success"
-          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
-
-      - name: Update Deployment Status (Failure)
-        if: failure()
-        uses: chrnorm/deployment-status@v2
-        with:
-          token: "${{ github.token }}"
-          state: "failure"
-          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+      - name: Check public health endpoint
+        run: curl -fsS --retry 10 --retry-delay 6 --retry-all-errors "https://${API_HOSTNAME}/health"
