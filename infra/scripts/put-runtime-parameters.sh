@@ -45,14 +45,24 @@ if [[ -n "$origin_certificate_file" ]] &&
   exit 1
 fi
 
+# The request JSON goes through a private temp file: AWS CLI v2 on macOS cannot read
+# --cli-input-json from file:///dev/stdin ("Invalid JSON received"), and argv would expose
+# the value in `ps`.
+umask 077
+request_directory="$(mktemp -d)"
+trap 'rm -rf "$request_directory"' EXIT
+
 put_secure_parameter() {
   local variable_name="$1"
   local variable_value="$2"
+  local request_file="$request_directory/request.json"
   jq -n \
     --arg name "$parameter_path/$variable_name" \
     --arg value "$variable_value" \
-    '{Name: $name, Value: $value, Type: "SecureString", Overwrite: true, Tier: "Standard"}' |
-    aws ssm put-parameter --cli-input-json file:///dev/stdin --output text --query Version > /dev/null
+    '{Name: $name, Value: $value, Type: "SecureString", Overwrite: true, Tier: "Standard"}' \
+    > "$request_file"
+  aws ssm put-parameter --cli-input-json "file://$request_file" --output text --query Version > /dev/null
+  rm -f "$request_file"
   echo "stored $parameter_path/$variable_name"
 }
 
