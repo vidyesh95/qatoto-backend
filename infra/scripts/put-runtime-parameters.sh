@@ -52,10 +52,29 @@ umask 077
 request_directory="$(mktemp -d)"
 trap 'rm -rf "$request_directory"' EXIT
 
+# Characters that survive copy-paste from web consoles but break URL and key parsing on the
+# instance, invisibly: zero-width space/non-joiner/joiner, word joiner, BOM, no-break space,
+# and the carriage return a CRLF file leaves at the end of every value.
+readonly invisible_characters=($'\xe2\x80\x8b' $'\xe2\x80\x8c' $'\xe2\x80\x8d' $'\xe2\x81\xa0' $'\xef\xbb\xbf' $'\xc2\xa0' $'\r')
+
+refuse_invisible_characters() {
+  local variable_name="$1"
+  local variable_value="$2"
+  local invisible_character
+  for invisible_character in "${invisible_characters[@]}"; do
+    if [[ "$variable_value" == *"$invisible_character"* ]]; then
+      echo "refused $variable_name: it contains an invisible character (zero-width space, BOM," >&2
+      echo "no-break space or CR). Re-type the value; nothing after it was uploaded." >&2
+      exit 1
+    fi
+  done
+}
+
 put_secure_parameter() {
   local variable_name="$1"
   local variable_value="$2"
   local request_file="$request_directory/request.json"
+  refuse_invisible_characters "$variable_name" "$variable_value"
   jq -n \
     --arg name "$parameter_path/$variable_name" \
     --arg value "$variable_value" \
