@@ -7,7 +7,7 @@
 # compose file, Caddyfile and remote-deploy.sh on every deploy through SSM Run Command.
 set -euo pipefail
 
-dnf install -y docker jq
+dnf install -y docker jq openssl
 
 # Rotate container logs so a chatty process cannot fill the 20 GB root volume.
 install -d -m 755 /etc/docker

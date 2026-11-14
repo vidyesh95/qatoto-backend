@@ -82,19 +82,23 @@ services:
         condition: service_completed_successfully
     stop_grace_period: 35s
 
-  # TLS termination with automatic Let's Encrypt certificates (HTTP-01 on port 80).
-  # The only proxy in front of the app, which is what `trust proxy = 1` assumes.
+  # TLS termination behind Cloudflare with the Cloudflare Origin CA certificate (see the
+  # Caddyfile). Caddy is the only hop that writes X-Forwarded-For, which is what Express's
+  # `trust proxy = 1` assumes. Port 80 only redirects to HTTPS; no UDP: Cloudflare reaches
+  # origins over TCP.
   caddy:
     image: caddy:2.11-alpine
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/udp"
     environment:
       API_HOSTNAME: ${API_HOSTNAME:?API_HOSTNAME is exported by remote-deploy.sh}
+      CLOUDFLARE_TRUSTED_PROXIES: ${CLOUDFLARE_TRUSTED_PROXIES:?CLOUDFLARE_TRUSTED_PROXIES is exported by remote-deploy.sh}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # origin.pem + origin-key.pem, rendered from Parameter Store by remote-deploy.sh.
+      - ./tls:/tls:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -102,7 +106,6 @@ services:
         condition: service_healthy
 
 volumes:
-  # Holds the issued certificates and ACME account. Losing it means re-issuing, and Let's
-  # Encrypt rate-limits repeated issuance for the same hostname.
+  # Caddy's runtime state only; the certificate lives in Parameter Store, not here.
   caddy_data:
   caddy_config:

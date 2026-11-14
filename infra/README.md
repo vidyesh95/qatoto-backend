@@ -7,10 +7,10 @@ AWS region to the **Aiven Postgres in Bangalore**.
 Browser ─► qatoto.com (Vercel) ── rewrite /api/auth/* ──┐
 Browser ─► api.qatoto.com (direct API_BASE_URL calls) ──┤
                                                         ▼
-       Cloudflare A record, DNS-only (grey cloud) → Elastic IP
+   Cloudflare, proxied (orange cloud): WAF + rate-limit rules
                                                         ▼
-  EC2 (Amazon Linux 2023, default VPC, ports 80/443 only — no SSH)
-    caddy :443 (Let's Encrypt) → api :8000      worker (pg-boss)
+  EC2 (Amazon Linux 2023, default VPC, 80/443 from Cloudflare only — no SSH)
+    caddy :443 (Cloudflare Origin CA) → api :8000      worker (pg-boss)
     migrate (one-shot per deploy: drizzle-kit migrate + jobs-install)
                                                         ▼
   Aiven Postgres (Bangalore)       Backblaze B2 us-east-1 (presigned URLs)
@@ -128,6 +128,20 @@ If Cloudflare already has an `api` record from the Dokploy days, the apply fails
 
 Then fill in `AWS_DEPLOY_ROLE_ARN` and `EC2_INSTANCE_ID` from `terraform output`.
 
+### 4a. Cloudflare dashboard (the Terraform token is DNS-only)
+
+The `api` record is **proxied**, and the security group admits only Cloudflare's IP ranges.
+In the Cloudflare dashboard, open qatoto.com:
+
+1. **SSL/TLS → Overview:** set the mode to **Full (strict)**. With "Flexible", Cloudflare
+   talks plain HTTP to the origin, Caddy redirects it to HTTPS, and the browser loops.
+2. **SSL/TLS → Origin Server → Create Certificate:** RSA, hostname `api.qatoto.com` only,
+   15 years, PEM. Save the certificate as `secure/cf-origin.pem` and the key as
+   `secure/cf-origin-key.pem` (`chmod 600`). The key is shown once. Step 5 uploads both.
+3. **SSL/TLS → Edge Certificates:** turn on **Always Use HTTPS** (optional: Caddy redirects
+   port 80 anyway).
+4. **Security:** see [Cloudflare rules for the API](#cloudflare-rules-for-the-api).
+
 **Confirm the budget alert:** AWS Budgets sends a subscription email. Click the link in it.
 
 ### 5. Production secrets → Parameter Store
@@ -153,12 +167,17 @@ the GitHub App, and `INTEGRATION_TOKEN_SECRET`.
 Leave these out: `DATABASE_POOL_MAX`, `WORKER_DATABASE_POOL_MAX`, `NODE_ENV`, `PORT`, `TZ` and
 `DATABASE_CA_CERT_PATH`. The compose file sets them.
 
-Then load the file, together with the Aiven CA certificate:
+Then load the file, together with the Aiven CA certificate and the Cloudflare origin
+certificate and key from step 4a:
 
 ```sh
-infra/scripts/put-runtime-parameters.sh ~/secure/qatoto-production.env ~/secure/aiven-ca.pem
-shred -u ~/secure/qatoto-production.env   # or keep it in a password manager, not on disk
+infra/scripts/put-runtime-parameters.sh secure/.env secure/aiven-ca.pem \
+  secure/cf-origin.pem secure/cf-origin-key.pem
 ```
+
+The PEM files become `DATABASE_CA_CERT`, `CLOUDFLARE_ORIGIN_CERT` and
+`CLOUDFLARE_ORIGIN_KEY`. The deploy writes them to files on the instance, never into `.env`.
+Keep the production `.env` and the origin key in a password manager rather than on disk.
 
 ### 6. Lock down Aiven
 
@@ -209,14 +228,41 @@ repository is already public, so the image reveals nothing new.
 
 - **Change a secret:** re-run `put-runtime-parameters.sh`, or run `aws ssm put-parameter
   --overwrite …`, then redeploy. The `.env` file is re-rendered on every deploy.
+- **Replace the origin certificate** (expires 2041; a deploy fails once it is within 30 days
+  of expiry): create a new one as in step 4a, run
+  `put-runtime-parameters.sh - "" secure/cf-origin.pem secure/cf-origin-key.pem`, redeploy,
+  then revoke the old one in the dashboard. Each deploy reloads Caddy.
+- **Cloudflare IP ranges:** the security group follows `data.cloudflare_ip_ranges` (a new
+  range appears as new rules in the next Terraform plan). Caddy's trusted proxies are
+  fetched from Cloudflare on every deploy.
 - **Infrastructure change:** open a PR touching `infra/` to get a plan, merge it, then Actions →
   Terraform → Run workflow and approve.
 - **New AMI or changed `user-data.sh.tftpl`:** run `terraform apply -replace=aws_instance.api`.
-  The Elastic IP and DNS stay put. The `caddy_data` volume is lost with the instance, so
-  Caddy re-issues the certificate. **The API is down until you finish these two steps:**
+  The Elastic IP and DNS stay put, and the origin certificate comes back from Parameter
+  Store on the first deploy. **The API is down until you finish these two steps:**
     1. Set the `EC2_INSTANCE_ID` repository variable to the new `instance_id` output. Until then,
        deploys target the terminated instance.
     2. Run Actions → Deploy → Run workflow. The new instance runs nothing until it is deployed.
+
+## Cloudflare rules for the API
+
+Proxying makes the zone's security settings apply to `api.qatoto.com`. The API is called by
+browsers with `fetch`, by Vercel's servers (the `/api/auth/*` rewrite), by Razorpay
+(`/webhooks/*`) and by the deploy workflow (`/health`). None of these can solve a challenge,
+so a challenge on them is an outage.
+
+- **Do not turn on Bot Fight Mode.** On the free plan it applies to the whole zone and
+  cannot exempt paths, so it breaks webhooks, sign-in through Vercel and `fetch` calls.
+- **Use WAF custom rules** (Security → WAF → Custom rules) to block what you never expect:
+  for example known-bad user agents, countries you do not serve, or `/wp-admin` style
+  probes. Scope each rule with `http.host eq "api.qatoto.com"`, and exclude
+  `starts_with(http.request.uri.path, "/webhooks/")` and `http.request.uri.path eq "/health"`.
+  Prefer **Block** or **Managed Challenge** only on paths that browsers open directly.
+- **Rate limiting rules** (Security → WAF → Rate limiting rules; one rule on the free plan):
+  a coarse per-IP ceiling on `api.qatoto.com` is a good use of it. The app's own per-route
+  limits still apply behind it and see the real visitor IP.
+- **Review rules left over from the Dokploy setup.** They start applying to `api` as soon as
+  the record is proxied.
 
 ## Free-tier guard rails already in the code
 

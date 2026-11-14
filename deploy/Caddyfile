@@ -1,9 +1,31 @@
 # Mounted into the `caddy` service of deploy/docker-compose.prod.yml.
 #
-# Caddy ignores any X-Forwarded-For the client sends (no trusted_proxies configured) and
-# sets it to the real peer address, so Express's `trust proxy = 1` reads an unspoofable
-# client IP for rate limiting.
+# Traffic path: visitor → Cloudflare (proxied record, infra/prod/dns.tf) → Caddy → api.
+#
+# CLIENT IP. Express runs with `trust proxy = 1`: it takes the LAST X-Forwarded-For entry,
+# the one Caddy writes. Caddy trusts CF-Connecting-IP only when the TCP peer is inside
+# Cloudflare's published ranges (CLOUDFLARE_TRUSTED_PROXIES, fetched by remote-deploy.sh on
+# every deploy), and then REPLACES X-Forwarded-For with that single address. From any
+# other peer, {client_ip} is the peer itself, so a forged header is never believed. The
+# security group (infra/prod/network.tf) already admits only Cloudflare; this is the
+# second lock, not the only one.
+#
+# TLS. Cloudflare Origin CA certificate (SSL/TLS mode "Full (strict)"), rendered by
+# remote-deploy.sh from Parameter Store into ./tls. No ACME: the certificate is only
+# trusted by Cloudflare's edge, which is the only client allowed to connect.
+{
+	servers {
+		trusted_proxies static {$CLOUDFLARE_TRUSTED_PROXIES}
+		client_ip_headers CF-Connecting-IP
+		# Cloudflare reaches origins over TCP only, so do not advertise HTTP/3.
+		protocols h1 h2
+	}
+}
+
 {$API_HOSTNAME} {
+	tls /tls/origin.pem /tls/origin-key.pem
 	encode zstd gzip
-	reverse_proxy api:8000
+	reverse_proxy api:8000 {
+		header_up X-Forwarded-For {client_ip}
+	}
 }
