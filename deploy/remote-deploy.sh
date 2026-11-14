@@ -126,9 +126,13 @@ if [[ "$(openssl x509 -in "$staged_tls_directory/origin.pem" -noout -pubkey)" !=
   echo "deploy: CLOUDFLARE_ORIGIN_KEY does not belong to CLOUDFLARE_ORIGIN_CERT" >&2
   exit 1
 fi
-rm -rf "$app_directory/tls"
-mv "$staged_tls_directory" "$app_directory/tls"
-# mktemp -d creates mode 700; Caddy runs as root in its container, so that is enough.
+# Replace the FILES, never the directory: compose bind-mounts ./tls into Caddy, and a
+# running container keeps the directory it was started with. Swapping the directory would
+# leave Caddy looking at a deleted, empty one. A rename within one filesystem is atomic.
+# Mode 700: Caddy runs as root in its container.
+install -d -m 700 "$app_directory/tls"
+mv -f "$staged_tls_directory/origin.pem" "$app_directory/tls/origin.pem"
+mv -f "$staged_tls_directory/origin-key.pem" "$app_directory/tls/origin-key.pem"
 
 # Caddy believes CF-Connecting-IP only from these peers (see the Caddyfile). Fetched each
 # deploy so a range Cloudflare adds is trusted after the next deploy; a failed or
@@ -187,6 +191,12 @@ fi
 # Retried because a Caddy container that `up` has just (re)started needs a moment before
 # its admin endpoint (localhost:2019) accepts the reload.
 readonly caddy_reload_attempts=30
+# Self-heal for a Caddy started while deploys still swapped the whole tls directory:
+# its mount is the deleted directory, and only a restart re-binds ./tls.
+if ! "${compose[@]}" exec -T caddy test -s /tls/origin.pem; then
+  echo "deploy: caddy's /tls mount is stale — restarting caddy to re-bind it"
+  "${compose[@]}" restart caddy
+fi
 for ((caddy_reload_attempt = 1; ; caddy_reload_attempt++)); do
   if caddy_reload_output="$("${compose[@]}" exec -T caddy \
     caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile --force 2>&1)"; then
