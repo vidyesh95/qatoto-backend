@@ -184,7 +184,21 @@ fi
 # compose recreates a container only when its own definition changes. A new Caddyfile or
 # certificate behind an unchanged bind mount would otherwise be ignored until a reboot.
 # Graceful: on a config error Caddy keeps the running config and this fails the deploy.
-"${compose[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile --force
+# Retried because a Caddy container that `up` has just (re)started needs a moment before
+# its admin endpoint (localhost:2019) accepts the reload.
+readonly caddy_reload_attempts=30
+for ((caddy_reload_attempt = 1; ; caddy_reload_attempt++)); do
+  if caddy_reload_output="$("${compose[@]}" exec -T caddy \
+    caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile --force 2>&1)"; then
+    break
+  fi
+  if ((caddy_reload_attempt >= caddy_reload_attempts)); then
+    echo "deploy: caddy reload failed after $caddy_reload_attempts attempts:" >&2
+    echo "$caddy_reload_output" >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 echo "$deploy_sha" > "$app_directory/DEPLOYED_SHA"
 docker image prune --all --force --filter "until=168h" > /dev/null
