@@ -104,7 +104,7 @@ Do this in **Settings → Secrets and variables → Actions**, and **Settings �
 | --------------------------- | ------------------- | ------------------------------------------------- |
 | `BUDGET_ALERT_EMAIL`        | repository          | your alert address                                |
 | `CLOUDFLARE_API_TOKEN_READ` | repository          | token with Zone → DNS → **Read**, qatoto.com only |
-| `CLOUDFLARE_API_TOKEN`      | environment `infra` | token with Zone → DNS → **Edit**, qatoto.com only |
+| `CLOUDFLARE_EDIT_TOKEN`     | environment `infra` | token with Zone → DNS → **Edit**, qatoto.com only |
 
 **Cleanup:** delete the old `DOKPLOY_URL`, `DOKPLOY_API_KEY` and `DOKPLOY_COMPOSE_ID` secrets.
 
