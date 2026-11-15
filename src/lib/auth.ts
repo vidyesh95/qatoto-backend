@@ -122,6 +122,11 @@ export const auth = betterAuth({
   // / iOS Universal Links (https, exact-origin matched) with the scheme as a fallback,
   // and mandate PKCE on the native side.
   trustedOrigins: [config.FRONTEND_URL, ...config.NATIVE_DEEP_LINK_SCHEMES],
+  // Where a failed Google/GitHub round trip lands when the flow carried no `errorCallbackURL` of
+  // its own (an expired or missing state, a hand-typed callback), and where Better Auth's built-in
+  // `/api/auth/error` page redirects. Better Auth appends `?error=<code>`; the frontend's sign-in
+  // page turns the code into a sentence. Without this the visitor ends on an API-host page.
+  onAPIError: { errorURL: `${config.FRONTEND_URL}/sign-in` },
   // changed below - since we're using origin instead of full url, it will match any subdomain
   advanced: {
     defaultCookieAttributes: {
