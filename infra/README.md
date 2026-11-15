@@ -4,7 +4,7 @@ One EC2 instance in **ap-south-1 (Mumbai)** running Docker Compose. Mumbai is th
 AWS region to the **Aiven Postgres in Bangalore**.
 
 ```
-Browser ─► qatoto.com (Vercel) ── rewrite /api/auth/* ──┐
+Browser ─► www.qatoto.com (Vercel) ─ rewrite /api/auth/*┐
 Browser ─► api.qatoto.com (direct API_BASE_URL calls) ──┤
                                                         ▼
    Cloudflare, proxied (orange cloud): WAF + rate-limit rules
@@ -154,7 +154,8 @@ of variables.
 - `DATABASE_URL`
 - `BETTER_AUTH_SECRET`
 - `BETTER_AUTH_URL`
-- `FRONTEND_URL=https://qatoto.com`
+- `FRONTEND_URL=https://www.qatoto.com` (the served host: `qatoto.com` 308s to `www`, and Better Auth trusts this exact origin for callbacks, CORS and passkeys)
+- `OAUTH_REDIRECT_ORIGIN=https://www.qatoto.com`, so Google/GitHub return through the frontend's `/api` rewrite, where the OAuth state cookie lives. Register `https://www.qatoto.com/api/auth/callback/google` and `/github` with the providers
 - `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
 - `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
 - `BREVO_API_KEY` (production sends OTP email)

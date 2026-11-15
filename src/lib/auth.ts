@@ -103,6 +103,10 @@ function escapeHtmlForEmail(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+// Must stay on a path the frontend's `/api/*` rewrite proxies when OAUTH_REDIRECT_ORIGIN is the
+// frontend (see src/config/index.ts). Identical to Better Auth's default when it is unset.
+const oauthRedirectOrigin = config.OAUTH_REDIRECT_ORIGIN ?? config.BETTER_AUTH_URL;
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg" }),
   secret: config.BETTER_AUTH_SECRET,
@@ -491,6 +495,7 @@ export const auth = betterAuth({
     google: {
       clientId: config.GOOGLE_CLIENT_ID,
       clientSecret: config.GOOGLE_CLIENT_SECRET,
+      redirectURI: `${oauthRedirectOrigin}/api/auth/callback/google`,
       prompt: "select_account",
       // Store the email lowercased so a brand-new user row is created with a
       // canonical address. citext already makes the linking lookup and UNIQUE
@@ -501,6 +506,7 @@ export const auth = betterAuth({
     github: {
       clientId: config.GITHUB_CLIENT_ID,
       clientSecret: config.GITHUB_CLIENT_SECRET,
+      redirectURI: `${oauthRedirectOrigin}/api/auth/callback/github`,
       prompt: "select_account",
       mapProfileToUser: (profile) => ({ email: profile.email?.toLowerCase() }),
     },

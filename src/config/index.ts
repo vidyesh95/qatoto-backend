@@ -31,6 +31,12 @@ const envSchema = z.object({
   // FRONTEND_URL: z.url(),
   BETTER_AUTH_URL: originUrl,
   FRONTEND_URL: originUrl,
+  // Origin that Google/GitHub send the browser back to (`<origin>/api/auth/callback/<id>`). Unset →
+  // BETTER_AUTH_URL, which is Better Auth's own default, so dev is unchanged. Production sets the
+  // frontend origin: sign-in starts through the frontend's `/api/*` rewrite, so the OAuth state
+  // cookie is host-only on THAT host, and a callback straight to the API host arrives without it
+  // (`state_mismatch`) and would set the session cookie where the frontend cannot see it.
+  OAUTH_REDIRECT_ORIGIN: originUrl.optional(),
   GOOGLE_CLIENT_ID: z.string().min(1),
   GOOGLE_CLIENT_SECRET: z.string().min(1),
   GITHUB_CLIENT_ID: z.string().min(1),
