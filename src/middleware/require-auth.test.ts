@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const getSessionMock = vi.fn();
+const getSessionMock = vi.fn<(...args: readonly unknown[]) => Promise<unknown>>();
 
 vi.mock("#src/lib/auth.js", () => ({
   auth: {
@@ -12,7 +12,7 @@ vi.mock("#src/lib/auth.js", () => ({
 }));
 
 vi.mock("better-auth/node", () => ({
-  fromNodeHeaders: vi.fn(),
+  fromNodeHeaders: vi.fn<(...args: readonly unknown[]) => unknown>(),
 }));
 
 const { requireAuth } = await import("#src/middleware/require-auth.js");

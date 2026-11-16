@@ -6,12 +6,12 @@ import { stubServerEnvironment } from "#src/test-support/server-env.js";
 stubServerEnvironment();
 vi.mock("dotenv/config", () => ({}));
 
-const limitMock = vi.fn<any>();
-const orderByMock = vi.fn(() => ({ limit: limitMock }));
-const whereMock = vi.fn(() => ({ orderBy: orderByMock }));
-const innerJoinMock = vi.fn(() => ({ where: whereMock }));
-const fromMock = vi.fn(() => ({ innerJoin: innerJoinMock }));
-const selectMock = vi.fn(() => ({ from: fromMock }));
+const limitMock = vi.fn<() => Promise<unknown[]>>();
+const orderByMock = vi.fn<() => { limit: typeof limitMock }>(() => ({ limit: limitMock }));
+const whereMock = vi.fn<() => { orderBy: typeof orderByMock }>(() => ({ orderBy: orderByMock }));
+const innerJoinMock = vi.fn<() => { where: typeof whereMock }>(() => ({ where: whereMock }));
+const fromMock = vi.fn<() => { innerJoin: typeof innerJoinMock }>(() => ({ innerJoin: innerJoinMock }));
+const selectMock = vi.fn<() => { from: typeof fromMock }>(() => ({ from: fromMock }));
 
 vi.mock("#src/db/index.js", () => {
   return {
@@ -39,20 +39,15 @@ describe("listRefunds", () => {
   it("should return successfully with no items", async () => {
     limitMock.mockResolvedValue([]);
     const result = await listRefunds(mockActor, {});
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.value.items).toEqual([]);
-      expect(result.value.page.hasMore).toBe(false);
-      expect(result.value.page.nextCursor).toBeNull();
-    }
+    expect(result).toMatchObject({
+      success: true,
+      value: { items: [], page: { hasMore: false, nextCursor: null } },
+    });
   });
 
   it("should return invalid cursor error", async () => {
     const result = await listRefunds(mockActor, { cursor: "invalid_cursor_string" });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.type).toBe("INVALID_CURSOR");
-    }
+    expect(result.success ? null : result.error.type).toBe("INVALID_CURSOR");
   });
 
   it("should parse valid cursor successfully", async () => {
@@ -99,13 +94,10 @@ describe("listRefunds", () => {
 
     const result = await listRefunds(mockActor, { limit: 1 });
 
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.value.items.length).toBe(1);
-      expect(result.value.items[0]!.id).toBe("r1");
-      expect(result.value.page.hasMore).toBe(true);
-      expect(result.value.page.nextCursor).not.toBeNull();
-    }
+    expect(result).toMatchObject({
+      success: true,
+      value: { items: [{ id: "r1" }], page: { hasMore: true, nextCursor: expect.any(String) } },
+    });
   });
 
   it("should not have more pages if limit is not exceeded", async () => {
@@ -130,13 +122,10 @@ describe("listRefunds", () => {
 
     const result = await listRefunds(mockActor, { limit: 1 });
 
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.value.items.length).toBe(1);
-      expect(result.value.items[0]!.id).toBe("r1");
-      expect(result.value.page.hasMore).toBe(false);
-      expect(result.value.page.nextCursor).toBeNull();
-    }
+    expect(result).toMatchObject({
+      success: true,
+      value: { items: [{ id: "r1" }], page: { hasMore: false, nextCursor: null } },
+    });
   });
 
   it("should filter by orderId", async () => {

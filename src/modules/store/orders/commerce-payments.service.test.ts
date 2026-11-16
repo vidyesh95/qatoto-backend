@@ -1,26 +1,24 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockResolveCommercePaymentProvider = vi.hoisted(() => vi.fn<any>());
+import { stubServerEnvironment } from "#src/test-support/server-env.js";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockDbUpdate = vi.hoisted(() => vi.fn<any>());
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockDbSet = vi.hoisted(() => vi.fn<any>());
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockDbWhere = vi.hoisted(() => vi.fn<any>());
+// `commerce-payments.service.js` parses config at import, so the environment is stubbed first and
+// the service is imported dynamically below — a static import is hoisted above this line.
+stubServerEnvironment();
+vi.mock("dotenv/config", () => ({}));
+
+const mockResolveCommercePaymentProvider = vi.hoisted(() => vi.fn<() => unknown>());
+
+const mockDbUpdate = vi.hoisted(() => vi.fn<(table: unknown) => unknown>());
+const mockDbSet = vi.hoisted(() => vi.fn<(values: unknown) => unknown>());
+const mockDbWhere = vi.hoisted(() => vi.fn<(condition: unknown) => Promise<unknown>>());
 const mockDbTransaction = vi.hoisted(() =>
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  vi.fn<any>(async (cb: any) =>
-    cb({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      select: vi.fn<any>().mockReturnThis(),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      from: vi.fn<any>().mockReturnThis(),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      where: vi.fn<any>().mockReturnThis(),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for: vi.fn<any>().mockResolvedValue([]),
+  vi.fn<(callback: (transaction: unknown) => Promise<unknown>) => Promise<unknown>>(async (callback) =>
+    callback({
+      select: vi.fn<() => unknown>().mockReturnThis(),
+      from: vi.fn<() => unknown>().mockReturnThis(),
+      where: vi.fn<() => unknown>().mockReturnThis(),
+      for: vi.fn<() => Promise<unknown[]>>().mockResolvedValue([]),
       update: mockDbUpdate,
     }),
   ),
@@ -51,8 +49,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
   const actual = await importOriginal<typeof import("drizzle-orm")>();
   return {
     ...actual,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    eq: vi.fn<any>(),
+    eq: vi.fn<(...args: readonly unknown[]) => unknown>(),
   };
 });
 
@@ -60,7 +57,7 @@ vi.mock("../storefront/commerce-payment-provider.adapter.js", () => ({
   resolveCommercePaymentProvider: mockResolveCommercePaymentProvider,
 }));
 
-import { processCommercePaymentOutboxRow } from "./commerce-payments.service.js";
+const { processCommercePaymentOutboxRow } = await import("#src/modules/store/orders/commerce-payments.service.js");
 
 describe("processCommercePaymentOutboxRow", () => {
   beforeEach(() => {
@@ -149,10 +146,8 @@ describe("processCommercePaymentOutboxRow", () => {
     mockResolveCommercePaymentProvider.mockReturnValue({
       success: true,
       value: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        createPaymentIntent: vi.fn<any>().mockRejectedValue(new Error("Provider failed intent")),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        createRefund: vi.fn<any>(),
+        createPaymentIntent: vi.fn<() => Promise<unknown>>().mockRejectedValue(new Error("Provider failed intent")),
+        createRefund: vi.fn<() => Promise<unknown>>(),
       },
     });
 
@@ -183,8 +178,7 @@ describe("processCommercePaymentOutboxRow", () => {
     mockResolveCommercePaymentProvider.mockReturnValue({
       success: true,
       value: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        createRefund: vi.fn<any>().mockRejectedValue(new Error("Provider failed refund")),
+        createRefund: vi.fn<() => Promise<unknown>>().mockRejectedValue(new Error("Provider failed refund")),
       },
     });
 
