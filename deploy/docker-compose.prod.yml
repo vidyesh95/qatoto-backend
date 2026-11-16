@@ -40,6 +40,7 @@ services:
     restart: "no"
     environment:
       <<: *qatoto-environment
+      PGAPPNAME: qatoto-migrate
       NODE_OPTIONS: --max-old-space-size=384
     command: ["/migrate.sh"]
 
@@ -49,6 +50,7 @@ services:
     environment:
       <<: *qatoto-environment
       # t4g.small (2 GiB RAM + 2 GiB swap): comfortably fits api, worker, Caddy and OS in physical RAM.
+      PGAPPNAME: qatoto-api
       NODE_OPTIONS: --max-old-space-size=512
     command: ["node", "dist/index.js"]
     expose:
@@ -75,6 +77,10 @@ services:
     restart: unless-stopped
     environment:
       <<: *qatoto-environment
+      PGAPPNAME: qatoto-worker
+      # One job at a time per interactive queue (background queues are always 1; see
+      # src/jobs/job-polling.ts). Halves the pollers on a 1 GB, 20-connection Aiven node.
+      WORKER_CONCURRENCY: "1"
       NODE_OPTIONS: --max-old-space-size=384
     command: ["node", "dist/worker.js"]
     depends_on:

@@ -5,6 +5,7 @@ import type { Job } from "pg-boss";
 import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, logConnectionBudget, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
+import { workOptionsForQueue } from "#src/jobs/job-polling.js";
 import {
   handleAnonymizeDueAccountsTick,
   handlePruneExpiredDataExportsTick,
@@ -165,7 +166,7 @@ if (process.env.TZ !== "UTC") {
  * competes with HTTP handlers for the same scarce connections — and on a server capped at
  * twenty TOTAL, that is how a background job takes down the request path.
  */
-const workerPool = createDedicatedPool(config.WORKER_DATABASE_POOL_MAX);
+const workerPool = createDedicatedPool(config.WORKER_DATABASE_POOL_MAX, "qatoto-worker-pgboss");
 
 workerPool.on("error", (error: unknown) => {
   console.error("Unexpected error on idle worker database client", error);
@@ -268,67 +269,65 @@ async function startWorker(): Promise<void> {
     );
   }
 
-  const workOptions = { batchSize: 1, localConcurrency: config.WORKER_CONCURRENCY } as const;
-
   await boss.work(
     JOB_NAMES.geocodeAndClusterSubmission,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.geocodeAndClusterSubmission, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.geocodeAndClusterSubmission, handleGeocodeAndClusterSubmission),
   );
   await boss.work(
     JOB_NAMES.recomputeOpportunityScoresTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeOpportunityScoresTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeOpportunityScoresTick, handleRecomputeOpportunityScoresTick),
   );
   await boss.work(
     JOB_NAMES.recomputeOpportunityScores,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeOpportunityScores, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeOpportunityScores, handleRecomputeOpportunityScores),
   );
   await boss.work(
     JOB_NAMES.recomputeDemandSignalsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeDemandSignalsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeDemandSignalsTick, handleRecomputeDemandSignalsTick),
   );
   await boss.work(
     JOB_NAMES.recomputeDemandSignals,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeDemandSignals, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeDemandSignals, handleRecomputeDemandSignals),
   );
   await boss.work(
     JOB_NAMES.refreshTalentProjectionsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.refreshTalentProjectionsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.refreshTalentProjectionsTick, handleRefreshTalentProjectionsTick),
   );
   await boss.work(
     JOB_NAMES.refreshTalentProjections,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.refreshTalentProjections, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.refreshTalentProjections, handleRefreshTalentProjections),
   );
 
   await boss.work(
     JOB_NAMES.analyzeDailyLog,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.analyzeDailyLog, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.analyzeDailyLog, handleAnalyzeDailyLog),
   );
   await boss.work(
     JOB_NAMES.recomputeDailyLogStreaksTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeDailyLogStreaksTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeDailyLogStreaksTick, handleRecomputeDailyLogStreaksTick),
   );
   await boss.work(
     JOB_NAMES.recomputeDailyLogStreaks,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeDailyLogStreaks, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeDailyLogStreaks, handleRecomputeDailyLogStreaks),
   );
   await boss.work(
     JOB_NAMES.sendDailyLogRemindersTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sendDailyLogRemindersTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sendDailyLogRemindersTick, handleSendDailyLogRemindersTick),
   );
   await boss.work(
     JOB_NAMES.sendDailyLogReminders,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sendDailyLogReminders, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sendDailyLogReminders, handleSendDailyLogReminders),
   );
 
@@ -336,42 +335,42 @@ async function startWorker(): Promise<void> {
   // --- what they produce. Bound in pipeline order so the sequence reads as the flow.
   await boss.work(
     JOB_NAMES.groundArtifacts,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.groundArtifacts, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.groundArtifacts, handleGroundArtifacts),
   );
   await boss.work(
     JOB_NAMES.analyzeSubstance,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.analyzeSubstance, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.analyzeSubstance, handleAnalyzeSubstance),
   );
   await boss.work(
     JOB_NAMES.analyzeTemporal,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.analyzeTemporal, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.analyzeTemporal, handleAnalyzeTemporal),
   );
   await boss.work(
     JOB_NAMES.finalizeVerdict,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.finalizeVerdict, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.finalizeVerdict, handleFinalizeVerdict),
   );
   await boss.work(
     JOB_NAMES.sweepDisputeWindowsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepDisputeWindowsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepDisputeWindowsTick, handleSweepDisputeWindowsTick),
   );
   await boss.work(
     JOB_NAMES.sweepDisputeWindows,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepDisputeWindows, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepDisputeWindows, handleSweepDisputeWindows),
   );
   await boss.work(
     JOB_NAMES.recomputeEquitySnapshotTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeEquitySnapshotTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeEquitySnapshotTick, handleRecomputeEquitySnapshotTick),
   );
   await boss.work(
     JOB_NAMES.recomputeEquitySnapshot,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeEquitySnapshot, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeEquitySnapshot, handleRecomputeEquitySnapshot),
   );
 
@@ -382,22 +381,22 @@ async function startWorker(): Promise<void> {
   // overlap flags from the statuses the signals job derives.
   await boss.work(
     JOB_NAMES.recomputeBranchSignalsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeBranchSignalsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeBranchSignalsTick, handleRecomputeBranchSignalsTick),
   );
   await boss.work(
     JOB_NAMES.recomputeBranchSignals,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeBranchSignals, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeBranchSignals, handleRecomputeBranchSignals),
   );
   await boss.work(
     JOB_NAMES.recomputeProgramStatsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeProgramStatsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeProgramStatsTick, handleRecomputeProgramStatsTick),
   );
   await boss.work(
     JOB_NAMES.recomputeProgramStats,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeProgramStats, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeProgramStats, handleRecomputeProgramStats),
   );
 
@@ -408,27 +407,30 @@ async function startWorker(): Promise<void> {
   // affinities. See SCHEDULED_JOB_CRONS.
   await boss.work(
     JOB_NAMES.recomputeVideoDurationsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeVideoDurationsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeVideoDurationsTick, handleRecomputeVideoDurationsTick),
   );
   await boss.work(
     JOB_NAMES.recomputeVideoDurations,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeVideoDurations, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeVideoDurations, handleRecomputeVideoDurations),
   );
   await boss.work(
     JOB_NAMES.recomputeVideoQualityScoresTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeVideoQualityScoresTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeVideoQualityScoresTick, handleRecomputeVideoQualityScoresTick),
   );
   await boss.work(
     JOB_NAMES.recomputeVideoQualityScores,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeVideoQualityScores, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeVideoQualityScores, handleRecomputeVideoQualityScores),
   );
   await boss.work(
     JOB_NAMES.recomputePlatformCategoryPopularityTick,
-    workOptions,
+    workOptionsForQueue(
+      JOB_NAMES.recomputePlatformCategoryPopularityTick,
+      config.WORKER_CONCURRENCY,
+    ),
     runJob(
       JOB_NAMES.recomputePlatformCategoryPopularityTick,
       handleRecomputePlatformCategoryPopularityTick,
@@ -436,7 +438,7 @@ async function startWorker(): Promise<void> {
   );
   await boss.work(
     JOB_NAMES.recomputePlatformCategoryPopularity,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputePlatformCategoryPopularity, config.WORKER_CONCURRENCY),
     runJob(
       JOB_NAMES.recomputePlatformCategoryPopularity,
       handleRecomputePlatformCategoryPopularity,
@@ -444,72 +446,72 @@ async function startWorker(): Promise<void> {
   );
   await boss.work(
     JOB_NAMES.recomputeUserAffinitiesTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeUserAffinitiesTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeUserAffinitiesTick, handleRecomputeUserAffinitiesTick),
   );
   await boss.work(
     JOB_NAMES.recomputeUserAffinities,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeUserAffinities, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeUserAffinities, handleRecomputeUserAffinities),
   );
   await boss.work(
     JOB_NAMES.rollupUserWatchActivityTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.rollupUserWatchActivityTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.rollupUserWatchActivityTick, handleRollupUserWatchActivityTick),
   );
   await boss.work(
     JOB_NAMES.rollupUserWatchActivity,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.rollupUserWatchActivity, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.rollupUserWatchActivity, handleRollupUserWatchActivity),
   );
   await boss.work(
     JOB_NAMES.recomputeTrendingVideosTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeTrendingVideosTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeTrendingVideosTick, handleRecomputeTrendingVideosTick),
   );
   await boss.work(
     JOB_NAMES.recomputeTrendingVideos,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeTrendingVideos, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeTrendingVideos, handleRecomputeTrendingVideos),
   );
   await boss.work(
     JOB_NAMES.recomputeTrendingSearchesTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeTrendingSearchesTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeTrendingSearchesTick, handleRecomputeTrendingSearchesTick),
   );
   await boss.work(
     JOB_NAMES.recomputeTrendingSearches,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeTrendingSearches, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeTrendingSearches, handleRecomputeTrendingSearches),
   );
   await boss.work(
     JOB_NAMES.recomputeProgramPostTrendingTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeProgramPostTrendingTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeProgramPostTrendingTick, handleRecomputeProgramPostTrendingTick),
   );
   await boss.work(
     JOB_NAMES.recomputeProgramPostTrending,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeProgramPostTrending, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeProgramPostTrending, handleRecomputeProgramPostTrending),
   );
   await boss.work(
     JOB_NAMES.revalidateYoutubeEmbedsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.revalidateYoutubeEmbedsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.revalidateYoutubeEmbedsTick, handleRevalidateYoutubeEmbedsTick),
   );
   await boss.work(
     JOB_NAMES.revalidateYoutubeEmbeds,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.revalidateYoutubeEmbeds, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.revalidateYoutubeEmbeds, handleRevalidateYoutubeEmbeds),
   );
   await boss.work(
     JOB_NAMES.pruneEngagementDataTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.pruneEngagementDataTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.pruneEngagementDataTick, handlePruneEngagementDataTick),
   );
   await boss.work(
     JOB_NAMES.pruneEngagementData,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.pruneEngagementData, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.pruneEngagementData, handlePruneEngagementData),
   );
 
@@ -518,32 +520,32 @@ async function startWorker(): Promise<void> {
   // trigger rejection cannot take the whole night's batch with it.
   await boss.work(
     JOB_NAMES.anonymizeDueAccountsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.anonymizeDueAccountsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.anonymizeDueAccountsTick, handleAnonymizeDueAccountsTick),
   );
   await boss.work(
     JOB_NAMES.anonymizeDueAccounts,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.anonymizeDueAccounts, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.anonymizeDueAccounts, handleAnonymizeDueAccounts),
   );
   await boss.work(
     JOB_NAMES.anonymizeAccount,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.anonymizeAccount, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.anonymizeAccount, handleAnonymizeAccount),
   );
   await boss.work(
     JOB_NAMES.assembleDataExport,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.assembleDataExport, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.assembleDataExport, handleAssembleDataExport),
   );
   await boss.work(
     JOB_NAMES.pruneExpiredDataExportsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.pruneExpiredDataExportsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.pruneExpiredDataExportsTick, handlePruneExpiredDataExportsTick),
   );
   await boss.work(
     JOB_NAMES.pruneExpiredDataExports,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.pruneExpiredDataExports, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.pruneExpiredDataExports, handlePruneExpiredDataExports),
   );
 
@@ -554,7 +556,7 @@ async function startWorker(): Promise<void> {
   // to sweep and no asOf to quantize.
   await boss.work(
     JOB_NAMES.verifyYoutubeVideo,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.verifyYoutubeVideo, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.verifyYoutubeVideo, handleVerifyYoutubeVideo),
   );
 
@@ -563,12 +565,12 @@ async function startWorker(): Promise<void> {
   // run's cutoff instant into the payload.
   await boss.work(
     JOB_NAMES.publishScheduledVideosTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.publishScheduledVideosTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.publishScheduledVideosTick, handlePublishScheduledVideosTick),
   );
   await boss.work(
     JOB_NAMES.publishScheduledVideos,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.publishScheduledVideos, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.publishScheduledVideos, handlePublishScheduledVideos),
   );
 
@@ -576,12 +578,12 @@ async function startWorker(): Promise<void> {
   // trade. See the handler for why `revalidate-youtube-embeds` cannot cover it.
   await boss.work(
     JOB_NAMES.resweepUnverifiedDailyLogsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.resweepUnverifiedDailyLogsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.resweepUnverifiedDailyLogsTick, handleResweepUnverifiedDailyLogsTick),
   );
   await boss.work(
     JOB_NAMES.resweepUnverifiedDailyLogs,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.resweepUnverifiedDailyLogs, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.resweepUnverifiedDailyLogs, handleResweepUnverifiedDailyLogs),
   );
 
@@ -589,26 +591,29 @@ async function startWorker(): Promise<void> {
   // mutations enqueue after commit so browse/search eligibility cannot drift silently.
   await boss.work(
     JOB_NAMES.refreshStoreSearchDocument,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.refreshStoreSearchDocument, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.refreshStoreSearchDocument, handleRefreshStoreSearchDocument),
   );
 
   // STORE Phase 3 — expire submitted quotes and open RFQs past their deadlines.
   await boss.work(
     JOB_NAMES.expireCommerceQuotesTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.expireCommerceQuotesTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.expireCommerceQuotesTick, handleExpireCommerceQuotesTick),
   );
   await boss.work(
     JOB_NAMES.expireCommerceQuotes,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.expireCommerceQuotes, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.expireCommerceQuotes, handleExpireCommerceQuotes),
   );
 
   // STORE Phase 4 — release expired checkout preparations and inventory holds.
   await boss.work(
     JOB_NAMES.releaseExpiredInventoryReservationsTick,
-    workOptions,
+    workOptionsForQueue(
+      JOB_NAMES.releaseExpiredInventoryReservationsTick,
+      config.WORKER_CONCURRENCY,
+    ),
     runJob(
       JOB_NAMES.releaseExpiredInventoryReservationsTick,
       handleReleaseExpiredInventoryReservationsTick,
@@ -616,7 +621,7 @@ async function startWorker(): Promise<void> {
   );
   await boss.work(
     JOB_NAMES.releaseExpiredInventoryReservations,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.releaseExpiredInventoryReservations, config.WORKER_CONCURRENCY),
     runJob(
       JOB_NAMES.releaseExpiredInventoryReservations,
       handleReleaseExpiredInventoryReservations,
@@ -626,17 +631,17 @@ async function startWorker(): Promise<void> {
   // STORE Phase 5 — payment outbox dispatch and reconciliation.
   await boss.work(
     JOB_NAMES.dispatchCommerceWebhookEvent,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.dispatchCommerceWebhookEvent, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.dispatchCommerceWebhookEvent, handleDispatchCommerceWebhookEvent),
   );
   await boss.work(
     JOB_NAMES.reconcileCommercePaymentsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.reconcileCommercePaymentsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.reconcileCommercePaymentsTick, handleReconcileCommercePaymentsTick),
   );
   await boss.work(
     JOB_NAMES.reconcileCommercePayments,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.reconcileCommercePayments, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.reconcileCommercePayments, handleReconcileCommercePayments),
   );
 
@@ -645,17 +650,17 @@ async function startWorker(): Promise<void> {
   // sessions whose next event never arrived.
   await boss.work(
     JOB_NAMES.dispatchConnectorCommand,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.dispatchConnectorCommand, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.dispatchConnectorCommand, handleDispatchConnectorCommand),
   );
   await boss.work(
     JOB_NAMES.reconcileConnectorStateTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.reconcileConnectorStateTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.reconcileConnectorStateTick, handleReconcileConnectorStateTick),
   );
   await boss.work(
     JOB_NAMES.reconcileConnectorState,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.reconcileConnectorState, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.reconcileConnectorState, handleReconcileConnectorState),
   );
 
@@ -663,17 +668,17 @@ async function startWorker(): Promise<void> {
   // catches an enqueue that was lost, which is allowed to happen so an upload never 500s.
   await boss.work(
     JOB_NAMES.scanEncryptedDocument,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.scanEncryptedDocument, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.scanEncryptedDocument, handleScanEncryptedDocument),
   );
   await boss.work(
     JOB_NAMES.sweepPendingDocumentScansTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepPendingDocumentScansTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepPendingDocumentScansTick, handleSweepPendingDocumentScansTick),
   );
   await boss.work(
     JOB_NAMES.sweepPendingDocumentScans,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepPendingDocumentScans, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepPendingDocumentScans, handleSweepPendingDocumentScans),
   );
 
@@ -681,24 +686,24 @@ async function startWorker(): Promise<void> {
   // showcase asset left with no row naming it.
   await boss.work(
     JOB_NAMES.sweepOrphanShowcaseImagesTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepOrphanShowcaseImagesTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepOrphanShowcaseImagesTick, handleSweepOrphanShowcaseImagesTick),
   );
   await boss.work(
     JOB_NAMES.sweepOrphanShowcaseImages,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepOrphanShowcaseImages, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepOrphanShowcaseImages, handleSweepOrphanShowcaseImages),
   );
 
   // Blueprints teardowns — the daily sweep of staged files no submission or saved draft claims.
   await boss.work(
     JOB_NAMES.sweepOrphanTeardownUploadsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepOrphanTeardownUploadsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepOrphanTeardownUploadsTick, handleSweepOrphanTeardownUploadsTick),
   );
   await boss.work(
     JOB_NAMES.sweepOrphanTeardownUploads,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepOrphanTeardownUploads, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepOrphanTeardownUploads, handleSweepOrphanTeardownUploads),
   );
 
@@ -706,12 +711,12 @@ async function startWorker(): Promise<void> {
   // claim was resolved.
   await boss.work(
     JOB_NAMES.sweepExpiredRightsClaimDetailsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepExpiredRightsClaimDetailsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepExpiredRightsClaimDetailsTick, handleSweepExpiredRightsClaimDetailsTick),
   );
   await boss.work(
     JOB_NAMES.sweepExpiredRightsClaimDetails,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepExpiredRightsClaimDetails, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepExpiredRightsClaimDetails, handleSweepExpiredRightsClaimDetails),
   );
 
@@ -719,12 +724,12 @@ async function startWorker(): Promise<void> {
   // asset left with no row naming it (including one an erasure's CDN delete failed on).
   await boss.work(
     JOB_NAMES.sweepOrphanProblemPhotosTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepOrphanProblemPhotosTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepOrphanProblemPhotosTick, handleSweepOrphanProblemPhotosTick),
   );
   await boss.work(
     JOB_NAMES.sweepOrphanProblemPhotos,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.sweepOrphanProblemPhotos, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.sweepOrphanProblemPhotos, handleSweepOrphanProblemPhotos),
   );
 
@@ -732,17 +737,17 @@ async function startWorker(): Promise<void> {
   // assessment, and the on-demand narrative the assessment enqueues for its top slice.
   await boss.work(
     JOB_NAMES.syncComtradeTradeFlowsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.syncComtradeTradeFlowsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.syncComtradeTradeFlowsTick, handleSyncComtradeTradeFlowsTick),
   );
   await boss.work(
     JOB_NAMES.syncComtradeTradeFlows,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.syncComtradeTradeFlows, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.syncComtradeTradeFlows, handleSyncComtradeTradeFlows),
   );
   await boss.work(
     JOB_NAMES.recomputeLocalizationAssessmentsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeLocalizationAssessmentsTick, config.WORKER_CONCURRENCY),
     runJob(
       JOB_NAMES.recomputeLocalizationAssessmentsTick,
       handleRecomputeLocalizationAssessmentsTick,
@@ -750,34 +755,34 @@ async function startWorker(): Promise<void> {
   );
   await boss.work(
     JOB_NAMES.recomputeLocalizationAssessments,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeLocalizationAssessments, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeLocalizationAssessments, handleRecomputeLocalizationAssessments),
   );
   await boss.work(
     JOB_NAMES.generateLocalizationNarrative,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.generateLocalizationNarrative, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.generateLocalizationNarrative, handleGenerateLocalizationNarrative),
   );
 
   // The feasibility readout: the weekly World Bank pull and the nightly three-pillar recompute.
   await boss.work(
     JOB_NAMES.syncWorldBankIndicatorsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.syncWorldBankIndicatorsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.syncWorldBankIndicatorsTick, handleSyncWorldBankIndicatorsTick),
   );
   await boss.work(
     JOB_NAMES.syncWorldBankIndicators,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.syncWorldBankIndicators, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.syncWorldBankIndicators, handleSyncWorldBankIndicators),
   );
   await boss.work(
     JOB_NAMES.recomputeFeasibilityReadoutsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeFeasibilityReadoutsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeFeasibilityReadoutsTick, handleRecomputeFeasibilityReadoutsTick),
   );
   await boss.work(
     JOB_NAMES.recomputeFeasibilityReadouts,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeFeasibilityReadouts, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeFeasibilityReadouts, handleRecomputeFeasibilityReadouts),
   );
 
@@ -785,12 +790,12 @@ async function startWorker(): Promise<void> {
   // Never overwrites a seller-declared or moderator-curated edge; see the job.
   await boss.work(
     JOB_NAMES.deriveProductRelationsTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.deriveProductRelationsTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.deriveProductRelationsTick, handleDeriveProductRelationsTick),
   );
   await boss.work(
     JOB_NAMES.deriveProductRelations,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.deriveProductRelations, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.deriveProductRelations, handleDeriveProductRelations),
   );
 
@@ -798,7 +803,7 @@ async function startWorker(): Promise<void> {
   // --- this list: 02:50 rollup, 03:00 category demand, and the hourly scoring run at :12.
   await boss.work(
     JOB_NAMES.rollupCommerceProductDailySignalTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.rollupCommerceProductDailySignalTick, config.WORKER_CONCURRENCY),
     runJob(
       JOB_NAMES.rollupCommerceProductDailySignalTick,
       handleRollupCommerceProductDailySignalTick,
@@ -806,12 +811,12 @@ async function startWorker(): Promise<void> {
   );
   await boss.work(
     JOB_NAMES.rollupCommerceProductDailySignal,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.rollupCommerceProductDailySignal, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.rollupCommerceProductDailySignal, handleRollupCommerceProductDailySignal),
   );
   await boss.work(
     JOB_NAMES.recomputeCommerceCategoryDemandTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeCommerceCategoryDemandTick, config.WORKER_CONCURRENCY),
     runJob(
       JOB_NAMES.recomputeCommerceCategoryDemandTick,
       handleRecomputeCommerceCategoryDemandTick,
@@ -819,12 +824,12 @@ async function startWorker(): Promise<void> {
   );
   await boss.work(
     JOB_NAMES.recomputeCommerceCategoryDemand,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeCommerceCategoryDemand, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeCommerceCategoryDemand, handleRecomputeCommerceCategoryDemand),
   );
   await boss.work(
     JOB_NAMES.recomputeCommerceProductTrendingTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeCommerceProductTrendingTick, config.WORKER_CONCURRENCY),
     runJob(
       JOB_NAMES.recomputeCommerceProductTrendingTick,
       handleRecomputeCommerceProductTrendingTick,
@@ -832,7 +837,7 @@ async function startWorker(): Promise<void> {
   );
   await boss.work(
     JOB_NAMES.recomputeCommerceProductTrending,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeCommerceProductTrending, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeCommerceProductTrending, handleRecomputeCommerceProductTrending),
   );
 
@@ -845,12 +850,12 @@ async function startWorker(): Promise<void> {
   // money is a licensing decision taken with counsel, not a code change.
   await boss.work(
     JOB_NAMES.recomputeInvestorConfidenceTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeInvestorConfidenceTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeInvestorConfidenceTick, handleRecomputeInvestorConfidenceTick),
   );
   await boss.work(
     JOB_NAMES.recomputeInvestorConfidence,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeInvestorConfidence, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeInvestorConfidence, handleRecomputeInvestorConfidence),
   );
 
@@ -867,22 +872,22 @@ async function startWorker(): Promise<void> {
   // writing an elapsed month's minutes into a period that should have stopped accruing.
   await boss.work(
     JOB_NAMES.closeCompensationPeriodTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.closeCompensationPeriodTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.closeCompensationPeriodTick, handleCloseCompensationPeriodTick),
   );
   await boss.work(
     JOB_NAMES.closeCompensationPeriod,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.closeCompensationPeriod, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.closeCompensationPeriod, handleCloseCompensationPeriod),
   );
   await boss.work(
     JOB_NAMES.recomputeCompensationDraftTick,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeCompensationDraftTick, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeCompensationDraftTick, handleRecomputeCompensationDraftTick),
   );
   await boss.work(
     JOB_NAMES.recomputeCompensationDraft,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.recomputeCompensationDraft, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.recomputeCompensationDraft, handleRecomputeCompensationDraft),
   );
 
@@ -890,7 +895,7 @@ async function startWorker(): Promise<void> {
   // --- transaction as the fact it announces, and this job carries only the email copy.
   await boss.work(
     JOB_NAMES.deliverNotification,
-    workOptions,
+    workOptionsForQueue(JOB_NAMES.deliverNotification, config.WORKER_CONCURRENCY),
     runJob(JOB_NAMES.deliverNotification, handleDeliverNotification),
   );
 
@@ -907,7 +912,7 @@ async function startWorker(): Promise<void> {
   // queues is an operator action, not a background one: `pnpm jobs:inspect-failures`.
   console.log(
     `Worker running [${config.NODE_ENV}] — ${Object.keys(JOB_NAMES).length} queues, ` +
-      `concurrency ${config.WORKER_CONCURRENCY}, pool ${config.WORKER_DATABASE_POOL_MAX}`,
+      `interactive concurrency ${config.WORKER_CONCURRENCY} (background 1, see src/jobs/job-polling.ts), pool ${config.WORKER_DATABASE_POOL_MAX}`,
   );
 
   // ⚠️ THE SUM, NOT `WORKER_DATABASE_POOL_MAX` ALONE. The line above reports the dedicated
