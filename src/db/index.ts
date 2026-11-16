@@ -122,6 +122,16 @@ const POOL_TUNING = {
   // Send TCP keepalives so dead connections are detected and dropped early
   // instead of failing on first reuse.
   keepAlive: true,
+  // Retire every connection after 30 minutes, busy or idle, so its Postgres backend exits.
+  //
+  // ⚠️ `idleTimeoutMillis` ALONE NEVER FIRES FOR THE WORKER. pg-boss polls more often than every
+  // 10 s, so the worker's connections are never idle long enough to be reaped, and they lived
+  // until the next deploy. Each backend keeps a private relcache/catcache for every relation it
+  // has touched (this schema has ~470 tables and ~1,850 indexes), and that cache only grows.
+  // Measured on prod Aiven (1 GB RAM) on 2026-11-16: memory usage climbed from ~72% to ~90%
+  // between deploys and dropped back exactly when the app's connections were recreated.
+  // Recycling caps that growth at the cost of one TLS handshake per connection every 30 min.
+  maxLifetimeSeconds: 1800,
 } as const;
 
 export const pool = new Pool({
@@ -137,9 +147,18 @@ export const pool = new Pool({
  * demand is steady and concurrent rather than request-shaped, and sharing the API's pool
  * makes a slow scoring job starve HTTP handlers. The caller owns the returned pool and
  * must `end()` it.
+ *
+ * `applicationName` labels the pool's sessions in `pg_stat_activity`, so a connection count on
+ * the server can be traced back to the pool that holds it. The shared `pool` above takes its
+ * label from `PGAPPNAME`, which deploy/docker-compose.prod.yml sets per service.
  */
-export function createDedicatedPool(maxConnections: number): Pool {
-  return new Pool({ connectionString, ...POOL_TUNING, max: maxConnections });
+export function createDedicatedPool(maxConnections: number, applicationName: string): Pool {
+  return new Pool({
+    connectionString,
+    ...POOL_TUNING,
+    max: maxConnections,
+    application_name: applicationName,
+  });
 }
 
 export const db = drizzle(pool, { schema });
